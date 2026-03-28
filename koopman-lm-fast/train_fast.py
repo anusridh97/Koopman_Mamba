@@ -1,38 +1,32 @@
+
 """
-train_fast.py -- Optimized training for Koopman LM and Mamba+Attention baselines.
+train_fast.py -- Optimized training for Koopman LM and baselines.
+
+Supports three model variants:
+  --model_type koopman     75% Mamba-2 + 25% SKA + Koopman MLP
+  --model_type mamba_attn  75% Mamba-2 + 25% Flash Attention + SwiGLU MLP
+  --model_type mamba_only  100% Mamba-2 + SwiGLU MLP (no global retrieval)
+
+All three use identical data, hyperparameters, seeds, and evaluation.
 
 Performance fixes over train.py:
   1. Pre-tokenized memmap data loading (no on-the-fly tokenization)
   2. Multi-worker DataLoader with pin_memory and prefetch
-  3. Targeted torch.compile on SKA modules (avoids Mamba kernel conflicts)
+  3. Targeted torch.compile on SKA/attention modules
   4. Fused AdamW optimizer
   5. Gradient checkpointing on Mamba layers
   6. loss.item() only at logging boundaries (no per-step GPU sync)
   7. No DeepSpeed for small models — plain DDP or single-GPU
   8. BF16 autocast (no GradScaler needed for BF16)
+  9. SKA optimizations — conditional Cholesky, 2 vs 6 power iterations
+  10. Flash Attention 2 — for the attention baseline via F.scaled_dot_product_attention
 
-Supports two model variants:
-  --model_type koopman    Mamba-2 + SKA + Koopman MLP (the main model)
-  --model_type mamba_attn Mamba-2 + causal attention + SwiGLU MLP (baseline)
+Usage (single GPU, one model per GPU):
+  CUDA_VISIBLE_DEVICES=0 python train_fast.py --model_type mamba_only  --output_dir ./mamba-only-180m-fast &
+  CUDA_VISIBLE_DEVICES=1 python train_fast.py --model_type mamba_attn  --output_dir ./mamba-attn-180m-fast &
+  CUDA_VISIBLE_DEVICES=2 python train_fast.py --model_type koopman     --output_dir ./koopman-180m-fast &
 
-Usage (single GPU, recommended for 180M):
-  python train_fast.py \
-      --data_dir ./tokenized_data \
-      --model_type koopman \
-      --max_seq_len 2048 \
-      --per_device_train_batch_size 64 \
-      --gradient_accumulation_steps 2 \
-      --max_steps 100000 \
-      --output_dir ./koopman-180m-fast
-
-Usage (2 GPU DDP):
-  torchrun --nproc_per_node=2 train_fast.py \
-      --data_dir ./tokenized_data \
-      --model_type koopman \
-      --ddp \
-      ...
-
-Usage (run both models sequentially):
+Or use the launch script:
   bash launch_fast.sh
 """
 
@@ -51,7 +45,10 @@ from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.config import config_180m, config_180m_gated, config_370m
 from koopman_lm.model import KoopmanLM, Mamba2Block, SKABlock
-from koopman_lm.baselines import build_mamba_attention
+from koopman_lm.baselines import (
+    build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
+    CausalAttentionBlock,
+)
 
 
 # ============================================================================
@@ -86,7 +83,6 @@ class MemmapPackedDataset(Dataset):
 
         # Conservative n_samples: subtract max possible offset (max_seq_len-1)
         # so that every sample can safely use any offset in [0, max_seq_len).
-        # This loses at most 1 sample compared to the tight bound.
         usable = self.n_tokens - (max_seq_len - 1)
         self.n_samples = max(1, (usable - 1) // max_seq_len)
 
@@ -101,7 +97,6 @@ class MemmapPackedDataset(Dataset):
     def __getitem__(self, idx):
         start = idx * self.max_seq_len + self._epoch_offset
         end = start + self.max_seq_len + 1
-        # Guaranteed safe: n_samples ensures end <= n_tokens for any offset
 
         chunk = self.data[start:end].astype(np.int64)
         input_ids = torch.from_numpy(chunk[:-1])
@@ -118,7 +113,7 @@ def enable_gradient_checkpointing(model):
     """
     Wrap Mamba2Block forward calls with gradient checkpointing.
     Trades ~30% more compute for ~60% less activation memory.
-    Works for both KoopmanLM and baseline models.
+    Works for all model types.
     """
     from koopman_lm.baselines import Mamba2Block as BaselineMamba2Block
 
@@ -142,7 +137,7 @@ def enable_gradient_checkpointing(model):
 # ============================================================================
 
 def build_model(args, tokenizer):
-    """Build either Koopman LM or Mamba+Attention baseline."""
+    """Build one of three model variants."""
 
     if args.model_size == "180m":
         cfg = config_180m()
@@ -156,8 +151,12 @@ def build_model(args, tokenizer):
     cfg.vocab_size = len(tokenizer)
     cfg.max_seq_len = args.max_seq_len
 
+    n_ska = len(cfg.ska_layer_indices)
+    n_mamba = cfg.n_layers - n_ska
+
     if args.model_type == "koopman":
         print(f"Building Koopman LM ({args.model_size})...")
+        print(f"  Layout: {n_mamba} Mamba-2 + {n_ska} SKA + Koopman MLP")
         model = KoopmanLM(cfg)
 
         from koopman_lm.ska_fast import patch_ska_module
@@ -169,11 +168,21 @@ def build_model(args, tokenizer):
 
     elif args.model_type == "mamba_attn":
         print(f"Building Mamba+Attention baseline ({args.model_size})...")
+        print(f"  Layout: {n_mamba} Mamba-2 + {n_ska} Flash Attention "
+              f"+ SwiGLU MLP")
         model = build_mamba_attention(cfg)
-        print("  Using Flash Attention 2 (built-in)")
+
+    elif args.model_type == "mamba_only":
+        print(f"Building Mamba-only baseline ({args.model_size})...")
+        print(f"  Layout: {cfg.n_layers} Mamba-2 + SwiGLU MLP "
+              f"(no global retrieval)")
+        model = build_mamba_only(cfg)
 
     else:
-        raise ValueError(f"Unknown model_type: {args.model_type}")
+        raise ValueError(
+            f"Unknown model_type: {args.model_type}. "
+            f"Choose from: koopman, mamba_attn, mamba_only"
+        )
 
     if args.gradient_checkpointing:
         print("  Enabling gradient checkpointing on Mamba layers...")
@@ -218,7 +227,7 @@ def train(args):
     # Save raw model reference BEFORE compile/DDP for clean checkpointing
     raw_model = model
 
-    # Targeted torch.compile: SKA modules with max-autotune only.
+    # Targeted torch.compile: SKA and attention modules with max-autotune.
     # Avoids CUDA graph conflicts with gradient-checkpointed Mamba layers.
     if args.compile:
         if is_main:
@@ -233,15 +242,12 @@ def train(args):
                 except Exception as e:
                     if is_main:
                         print(f"    SKA compile failed: {e}")
-            else:
-                from koopman_lm.baselines import CausalAttentionBlock
-                if isinstance(layer, CausalAttentionBlock):
-                    try:
-                        # Must update ModuleList entry, not just the loop var
-                        layers[i] = torch.compile(layer, mode="max-autotune")
-                        n_compiled += 1
-                    except Exception:
-                        pass
+            elif isinstance(layer, CausalAttentionBlock):
+                try:
+                    layers[i] = torch.compile(layer, mode="max-autotune")
+                    n_compiled += 1
+                except Exception:
+                    pass
         if is_main:
             print(f"    Compiled {n_compiled} modules")
 
@@ -298,12 +304,14 @@ def train(args):
         num_training_steps=args.max_steps,
     )
 
-    autocast_ctx = torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=args.bf16)
+    autocast_ctx = torch.amp.autocast(
+        'cuda', dtype=torch.bfloat16, enabled=args.bf16)
 
     if is_main and args.wandb_project:
         import wandb
         run_name = f"{args.model_type}-{args.model_size}"
-        wandb.init(project=args.wandb_project, name=run_name, config=vars(args))
+        wandb.init(project=args.wandb_project, name=run_name,
+                   config=vars(args))
 
     # ---- Training loop ----
     model.train()
@@ -381,7 +389,8 @@ def train(args):
                         import wandb
                         wandb.log({
                             "loss": avg_loss, "ppl": ppl, "lr": lr,
-                            "tokens_per_sec": tps, "tokens_seen": tokens_seen,
+                            "tokens_per_sec": tps,
+                            "tokens_seen": tokens_seen,
                         }, step=step)
 
                     running_loss = torch.tensor(0.0, device=device)
@@ -393,7 +402,8 @@ def train(args):
         epoch += 1
 
     if is_main:
-        _save_checkpoint(raw_model, cfg, tokenizer, step, args, dirname="final")
+        _save_checkpoint(raw_model, cfg, tokenizer, step, args,
+                         dirname="final")
         elapsed = time.time() - t_start
         print(f"\nTraining complete in {elapsed/3600:.1f}h")
         print(f"  Total tokens: {tokens_seen:,} ({tokens_seen/1e9:.2f}B)")
@@ -427,14 +437,16 @@ def parse_args():
     p = argparse.ArgumentParser()
 
     p.add_argument("--model_type", type=str, default="koopman",
-                   choices=["koopman", "mamba_attn"])
+                   choices=["koopman", "mamba_attn", "mamba_only"])
     p.add_argument("--model_size", type=str, default="180m",
                    choices=["180m", "180m_gated", "370m"])
 
     p.add_argument("--data_dir", type=str, default=None)
-    p.add_argument("--dataset_name", type=str, default="HuggingFaceFW/fineweb-edu")
+    p.add_argument("--dataset_name", type=str,
+                   default="HuggingFaceFW/fineweb-edu")
     p.add_argument("--dataset_subset", type=str, default="sample-10BT")
-    p.add_argument("--tokenizer", type=str, default="mistralai/Mistral-7B-v0.1")
+    p.add_argument("--tokenizer", type=str,
+                   default="mistralai/Mistral-7B-v0.1")
     p.add_argument("--max_seq_len", type=int, default=2048)
 
     p.add_argument("--per_device_train_batch_size", type=int, default=64)
@@ -449,7 +461,8 @@ def parse_args():
     p.add_argument("--no_bf16", action="store_false", dest="bf16")
     p.add_argument("--compile", action="store_true", default=True)
     p.add_argument("--no_compile", action="store_false", dest="compile")
-    p.add_argument("--gradient_checkpointing", action="store_true", default=True)
+    p.add_argument("--gradient_checkpointing", action="store_true",
+                   default=True)
     p.add_argument("--no_gradient_checkpointing", action="store_false",
                    dest="gradient_checkpointing")
     p.add_argument("--num_workers", type=int, default=4)
