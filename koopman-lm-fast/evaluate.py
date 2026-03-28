@@ -1,8 +1,14 @@
-"""
-evaluate.py -- Unified evaluation for Koopman LM and Mamba+Attention baselines.
 
-Loads model_type from checkpoint meta.pt so both models use the exact same
+"""
+evaluate.py -- Unified evaluation for all three model variants.
+
+Loads model_type from checkpoint meta.pt so all models use the exact same
 evaluation code, same seeds, same data, same metrics.
+
+Model types (auto-detected from checkpoint):
+  koopman     — Mamba-2 + SKA + Koopman MLP
+  mamba_attn  — Mamba-2 + Flash Attention + SwiGLU MLP
+  mamba_only  — Mamba-2 + SwiGLU MLP (no global retrieval)
 
 Evaluation modes:
   1. Held-out perplexity (WikiText-103 test, same as Mamba evals)
@@ -17,10 +23,10 @@ Usage:
   # Evaluate a single checkpoint (auto-detects model type)
   python evaluate.py --checkpoint ./koopman-180m-fast/final/model.pt
 
-  # Compare both models side-by-side
-  python evaluate.py \
-      --checkpoint ./koopman-180m-fast/final/model.pt \
-      --checkpoint2 ./mamba-attn-180m-fast/final/model.pt \
+  # Compare two models side-by-side
+  python evaluate.py \\
+      --checkpoint ./koopman-180m-fast/final/model.pt \\
+      --checkpoint2 ./mamba-attn-180m-fast/final/model.pt \\
       --output comparison_results.json
 """
 
@@ -37,11 +43,11 @@ from torch.utils.data import DataLoader, IterableDataset
 from transformers import AutoTokenizer
 from koopman_lm.config import config_180m, config_180m_gated, config_370m
 from koopman_lm.model import KoopmanLM
-from koopman_lm.baselines import build_mamba_attention
+from koopman_lm.baselines import build_mamba_attention, build_mamba_only
 
 
 # ============================================================================
-# Model loading (handles both model types)
+# Model loading (handles all model types)
 # ============================================================================
 
 def load_model(checkpoint, model_size="180m",
@@ -51,17 +57,14 @@ def load_model(checkpoint, model_size="180m",
     Load a model from checkpoint. Auto-detects model_type from meta.pt.
     Returns (model, cfg, tokenizer, model_type).
     """
-    # Try to load meta for auto-detection
     meta_path = checkpoint.replace("model.pt", "meta.pt")
     meta = {}
     if os.path.exists(meta_path):
         meta = torch.load(meta_path, map_location="cpu", weights_only=False)
 
-    # Auto-detect model type
     if model_type is None:
         model_type = meta.get("model_type", "koopman")
 
-    # Get config
     if "cfg" in meta:
         cfg = meta["cfg"]
     elif model_size == "180m":
@@ -78,9 +81,10 @@ def load_model(checkpoint, model_size="180m",
         tokenizer.pad_token = tokenizer.eos_token
     cfg.vocab_size = len(tokenizer)
 
-    # Build the right model type
     if model_type == "mamba_attn":
         model = build_mamba_attention(cfg)
+    elif model_type == "mamba_only":
+        model = build_mamba_only(cfg)
     else:
         model = KoopmanLM(cfg)
 
@@ -160,7 +164,6 @@ def eval_held_out_ppl(model, device, tokenizer, max_seq_len=2048,
 
 # ============================================================================
 # NIAH (Needle-In-A-Haystack)
-# All context_lens are validated to be multiples of 8
 # ============================================================================
 
 def _validate_context_lens(context_lens):
@@ -307,7 +310,7 @@ def _build_niah_single3(tokenizer, context_len, n_examples=200, seed=42):
 def _score_niah_parallel(model, tokenizer, device, examples, batch_size=4):
     """
     Score NIAH via parallel forward (teacher-forced next-token accuracy).
-    Works for BOTH model types (no recurrent wrapper needed).
+    Works for ALL model types (no recurrent wrapper needed).
     """
     model.eval()
     correct = 0
@@ -316,50 +319,79 @@ def _score_niah_parallel(model, tokenizer, device, examples, batch_size=4):
     with torch.no_grad():
         for i in range(0, len(examples), batch_size):
             batch_ex = examples[i:i+batch_size]
-            max_len = 0
-            all_ids = []
             target_strs = []
 
             for ex in batch_ex:
                 ids = tokenizer.encode(ex["prompt"], add_special_tokens=False)
-                all_ids.append(ids)
                 target_strs.append(ex["target"].strip())
-                max_len = max(max_len, len(ids))
 
-            # Pad and forward
-            for j, ids in enumerate(all_ids):
-                input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+                input_ids = torch.tensor(
+                    [ids], dtype=torch.long, device=device)
                 outputs = model(input_ids=input_ids)
                 logits = outputs["logits"]
 
-                # Check if the model predicts the target number
                 last_logits = logits[0, -1, :]
                 pred_token = last_logits.argmax().item()
                 pred_str = tokenizer.decode([pred_token]).strip()
 
-                if target_strs[j] in pred_str or pred_str in target_strs[j]:
+                t = target_strs[-1]
+                if t in pred_str or pred_str in t:
                     correct += 1
                 total += 1
 
     return correct / max(total, 1)
 
 
+def _score_niah_recurrent(model, tokenizer, device, examples):
+    """Score NIAH using O(1) recurrent generation (Koopman only)."""
+    from koopman_lm.recurrent import RecurrentKoopmanLM
+
+    wrapper = RecurrentKoopmanLM(model)
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for ex in examples:
+            ids = tokenizer.encode(ex["prompt"], add_special_tokens=False)
+            input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+            target_str = ex["target"].strip()
+
+            wrapper.reset()
+            logits = wrapper.prefill(input_ids)
+            next_logits = logits[:, -1, :]
+
+            new_token_ids = []
+            for _ in range(10):
+                next_token = next_logits.argmax(dim=-1, keepdim=True)
+                new_token_ids.append(next_token.item())
+                if next_token.item() == tokenizer.eos_token_id:
+                    break
+                step_logits = wrapper.step(next_token)
+                next_logits = step_logits[:, 0, :]
+
+            decoded = tokenizer.decode(
+                new_token_ids, skip_special_tokens=True)
+            if target_str in decoded:
+                correct += 1
+            total += 1
+
+    return correct / max(total, 1)
+
+
 def eval_niah(model, device, tokenizer, model_type="koopman",
               batch_size=4, n_examples=200, context_lens=None, seed=42):
-    """Run NIAH benchmarks. Works for both model types."""
+    """Run NIAH benchmarks. Works for all model types."""
     if context_lens is None:
         context_lens = [128, 256, 512, 1024, 2048, 4096]
 
-    # Validate alignment
     context_lens = _validate_context_lens(context_lens)
 
     print("\n" + "=" * 60)
     print(f"NIAH (Needle-In-A-Haystack) — model_type={model_type}")
     print("=" * 60)
 
-    # Use recurrent scoring for Koopman, parallel for attention baseline
+    # Use recurrent scoring for Koopman, parallel for everything else
     if model_type == "koopman":
-        from koopman_lm.recurrent import RecurrentKoopmanLM
         score_fn = lambda m, tok, dev, exs, bs: _score_niah_recurrent(
             m, tok, dev, exs)
     else:
@@ -393,41 +425,6 @@ def eval_niah(model, device, tokenizer, model_type="koopman",
         print()
 
     return all_results
-
-
-def _score_niah_recurrent(model, tokenizer, device, examples):
-    """Score NIAH using O(1) recurrent generation (Koopman only)."""
-    from koopman_lm.recurrent import RecurrentKoopmanLM
-
-    wrapper = RecurrentKoopmanLM(model)
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-        for ex in examples:
-            ids = tokenizer.encode(ex["prompt"], add_special_tokens=False)
-            input_ids = torch.tensor([ids], dtype=torch.long, device=device)
-            target_str = ex["target"].strip()
-
-            wrapper.reset()
-            logits = wrapper.prefill(input_ids)
-            next_logits = logits[:, -1, :]
-
-            new_token_ids = []
-            for _ in range(10):
-                next_token = next_logits.argmax(dim=-1, keepdim=True)
-                new_token_ids.append(next_token.item())
-                if next_token.item() == tokenizer.eos_token_id:
-                    break
-                step_logits = wrapper.step(next_token)
-                next_logits = step_logits[:, 0, :]
-
-            decoded = tokenizer.decode(new_token_ids, skip_special_tokens=True)
-            if target_str in decoded:
-                correct += 1
-            total += 1
-
-    return correct / max(total, 1)
 
 
 # ============================================================================
@@ -479,7 +476,6 @@ def compare_results(results1, results2, output_path=None):
     print(f"COMPARISON: {mt1} vs {mt2}")
     print(f"{'=' * 60}")
 
-    # PPL
     if "held_out_ppl" in results1 and "held_out_ppl" in results2:
         p1 = results1["held_out_ppl"]["ppl"]
         p2 = results2["held_out_ppl"]["ppl"]
@@ -488,14 +484,12 @@ def compare_results(results1, results2, output_path=None):
         print(f"    {mt2:20s}: {p2:.2f}")
         print(f"    {'delta':20s}: {p1 - p2:+.2f}")
 
-    # NIAH
     if "niah" in results1 and "niah" in results2:
         print(f"\n  NIAH accuracy:")
         for task in results1["niah"]:
             if task in results2["niah"]:
                 print(f"\n    {task}:")
                 for cl in sorted(results1["niah"][task]):
-                    cl_str = str(cl)
                     v1 = results1["niah"][task].get(cl, 0)
                     v2 = results2["niah"][task].get(cl, 0)
                     delta = v1 - v2
@@ -525,12 +519,9 @@ def parse_args():
                    choices=["all", "ppl", "niah"])
     p.add_argument("--max_seq_len", type=int, default=2048)
     p.add_argument("--batch_size", type=int, default=8)
-
-    # NIAH — all multiples of 8
     p.add_argument("--niah_context_lens", nargs="+", type=int,
                    default=[128, 256, 512, 1024, 2048, 4096])
     p.add_argument("--niah_n_examples", type=int, default=200)
-
     p.add_argument("--output", type=str, default=None)
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
