@@ -1,3 +1,4 @@
+
 """
 baselines.py -- Baseline model variants for ablation comparison.
 
@@ -18,6 +19,10 @@ import torch.nn.functional as F
 from koopman_lm.config import KoopmanLMConfig
 from koopman_lm.ska import SKAModule
 
+
+# ============================================================================
+# MLP variants
+# ============================================================================
 
 class SwiGLUMLP(nn.Module):
     def __init__(self, d, expand=2.667):
