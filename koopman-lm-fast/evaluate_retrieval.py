@@ -1,3 +1,4 @@
+
 """
 evaluate_retrieval.py -- Retrieval evaluation with zero-shot and fine-tuning.
 
@@ -13,6 +14,10 @@ This means the model learns to retrieve, not to memorize filler text.
 
 The fine-tuning and evaluation data are generated from DIFFERENT seeds
 to prevent data leakage.
+
+Tokenization note: context and query+answer are tokenized SEPARATELY
+then concatenated as token IDs. This avoids BPE cross-boundary merges
+that would shift the prefix mask boundary.
 
 Retrieval tasks:
   - NIAH-Single-1: single fact, exact query
@@ -117,6 +122,16 @@ def load_model(checkpoint, model_size="180m",
 
 # ============================================================================
 # Retrieval task data generators
+#
+# Each builder returns a list of dicts with:
+#   context_ids:  list[int]  -- token IDs for the context/haystack
+#   query_ids:    list[int]  -- token IDs for the query suffix
+#   target_ids:   list[int]  -- token IDs for the target answer
+#   target_str:   str        -- target answer as text (for scoring)
+#   depth:        float      -- needle insertion depth (0-1)
+#
+# By keeping context_ids and query_ids as separate token sequences,
+# we avoid BPE cross-boundary merges that would shift the prefix mask.
 # ============================================================================
 
 _FILLER_SENTENCES = [
@@ -153,10 +168,7 @@ _LAST_NAMES = [
 
 def _build_niah_examples(tokenizer, context_len, n_examples, seed,
                          use_distractors=False, paraphrase_query=False):
-    """
-    Unified NIAH builder. Returns list of dicts with:
-      prompt, target, query_start_idx (token index where query begins)
-    """
+    """Unified NIAH builder with BPE-safe separate tokenization."""
     rng = random.Random(seed)
     adjectives = ["regular", "normal", "common", "typical", "standard",
                   "ordinary", "usual", "general", "basic", "default"]
@@ -194,35 +206,31 @@ def _build_niah_examples(tokenizer, context_len, n_examples, seed,
         parts.insert(insert_pos, needle)
         context = " ".join(parts)
 
-        # Build full text and find where query starts
-        query_prefix = f"\n\nQuestion: {query}\nAnswer:"
-        full_text = context + query_prefix
-        target = f" {target_num}"
+        query_text = f"\n\nQuestion: {query}\nAnswer:"
+        target_text = f" {target_num}"
 
-        # Tokenize to find query boundary
+        # Tokenize context and query SEPARATELY to avoid BPE boundary merges
         context_ids = tokenizer.encode(context, add_special_tokens=False)
-        query_start_idx = len(context_ids)
+        query_ids = tokenizer.encode(query_text, add_special_tokens=False)
+        target_ids = tokenizer.encode(target_text, add_special_tokens=False)
 
         examples.append({
-            "full_text": full_text,
-            "target": target,
-            "query_start_idx": query_start_idx,
+            "context_ids": context_ids,
+            "query_ids": query_ids,
+            "target_ids": target_ids,
+            "target_str": target_text.strip(),
             "depth": insert_pos / len(parts),
         })
     return examples
 
 
 def _build_kv_retrieval(tokenizer, context_len, n_examples, seed):
-    """
-    Key-value retrieval: synthetic phonebook lookup.
-    Context contains N name-number pairs, query asks for one specific name.
-    """
+    """Key-value retrieval: synthetic phonebook lookup."""
     rng = random.Random(seed)
     examples = []
 
     for _ in range(n_examples):
-        # Determine how many KV pairs fit in the context budget
-        budget = context_len - 40  # reserve for query + filler
+        budget = context_len - 40
         pairs = []
         tok_count = 0
         used_names = set()
@@ -245,15 +253,12 @@ def _build_kv_retrieval(tokenizer, context_len, n_examples, seed):
         if len(pairs) < 2:
             continue
 
-        # Pick a random target pair
         target_idx = rng.randint(0, len(pairs) - 1)
         target_name, target_number, _ = pairs[target_idx]
 
-        # Shuffle entries and add some filler
         entries = [p[2] for p in pairs]
         rng.shuffle(entries)
 
-        # Intersperse with a few filler sentences
         parts = []
         for i, entry in enumerate(entries):
             parts.append(entry)
@@ -261,29 +266,25 @@ def _build_kv_retrieval(tokenizer, context_len, n_examples, seed):
                 parts.append(rng.choice(_FILLER_SENTENCES))
 
         context = " ".join(parts)
-        query_prefix = f"\n\nQuestion: What is {target_name}'s number?\nAnswer:"
-        full_text = context + query_prefix
-        target = f" {target_number}"
+        query_text = f"\n\nQuestion: What is {target_name}'s number?\nAnswer:"
+        target_text = f" {target_number}"
 
         context_ids = tokenizer.encode(context, add_special_tokens=False)
-        query_start_idx = len(context_ids)
+        query_ids = tokenizer.encode(query_text, add_special_tokens=False)
+        target_ids = tokenizer.encode(target_text, add_special_tokens=False)
 
         examples.append({
-            "full_text": full_text,
-            "target": target,
-            "query_start_idx": query_start_idx,
+            "context_ids": context_ids,
+            "query_ids": query_ids,
+            "target_ids": target_ids,
+            "target_str": target_text.strip(),
             "depth": target_idx / len(pairs),
         })
     return examples
 
 
 def _build_multi_hop(tokenizer, context_len, n_examples, seed):
-    """
-    Multi-hop retrieval: two facts must be composed.
-    Fact 1: "The capital of Zaronia is Velthaven."
-    Fact 2: "The mayor of Velthaven is Dr. Whitfield."
-    Query: "Who is the mayor of the capital of Zaronia?"
-    """
+    """Multi-hop retrieval: two facts must be composed."""
     rng = random.Random(seed)
 
     country_names = [
@@ -330,25 +331,25 @@ def _build_multi_hop(tokenizer, context_len, n_examples, seed):
         if len(parts) < 4:
             continue
 
-        # Insert facts at different positions (separated)
         pos1 = rng.randint(1, len(parts) // 3)
         parts.insert(pos1, fact1)
         pos2 = rng.randint(2 * len(parts) // 3, len(parts) - 1)
         parts.insert(pos2, fact2)
 
         context = " ".join(parts)
-        query_prefix = (f"\n\nQuestion: Who is the mayor of the capital "
-                        f"of {country}?\nAnswer:")
-        full_text = context + query_prefix
-        target = f" {person}"
+        query_text = (f"\n\nQuestion: Who is the mayor of the capital "
+                      f"of {country}?\nAnswer:")
+        target_text = f" {person}"
 
         context_ids = tokenizer.encode(context, add_special_tokens=False)
-        query_start_idx = len(context_ids)
+        query_ids = tokenizer.encode(query_text, add_special_tokens=False)
+        target_ids = tokenizer.encode(target_text, add_special_tokens=False)
 
         examples.append({
-            "full_text": full_text,
-            "target": target,
-            "query_start_idx": query_start_idx,
+            "context_ids": context_ids,
+            "query_ids": query_ids,
+            "target_ids": target_ids,
+            "target_str": target_text.strip(),
             "depth": 0.5,
         })
     return examples
@@ -385,6 +386,9 @@ class RetrievalFineTuneDataset(Dataset):
 
     The prefix mask ensures the model only learns to do retrieval
     (respond to queries), not to memorize the filler/haystack text.
+
+    Context and query are tokenized separately and concatenated as IDs
+    to avoid BPE cross-boundary merges that would shift the mask boundary.
     """
 
     def __init__(self, examples, tokenizer, max_seq_len):
@@ -393,20 +397,25 @@ class RetrievalFineTuneDataset(Dataset):
         self.samples = []
 
         for ex in examples:
-            full_text = ex["full_text"] + ex["target"]
-            all_ids = tokenizer.encode(full_text, add_special_tokens=False)
+            # Concatenate pre-tokenized segments (no BPE boundary issues)
+            context_ids = ex["context_ids"]
+            query_ids = ex["query_ids"]
+            target_ids = ex["target_ids"]
+            all_ids = context_ids + query_ids + target_ids
 
             if len(all_ids) > max_seq_len:
                 all_ids = all_ids[:max_seq_len]
 
-            query_start = ex["query_start_idx"]
+            # The boundary is exact because we tokenized separately
+            query_start = len(context_ids)
 
             input_ids = all_ids[:-1]
             labels = all_ids[1:]
 
             # Prefix mask: set labels to -100 for all positions BEFORE
             # the query. Only query + answer tokens contribute to loss.
-            # The -1 accounts for the shift between input_ids and labels.
+            # The -1 accounts for the shift between input_ids and labels:
+            # labels[query_start - 1] predicts the first query token.
             mask_end = max(0, query_start - 1)
             labels[:mask_end] = [-100] * mask_end
 
@@ -438,34 +447,50 @@ def _collate_retrieval(batch):
 
 
 # ============================================================================
-# Zero-shot evaluation (parallel forward, greedy decode)
+# Zero-shot evaluation (batched parallel forward, greedy decode)
 # ============================================================================
 
 @torch.no_grad()
 def eval_zero_shot(model, tokenizer, device, examples, batch_size=4):
     """
     Zero-shot retrieval accuracy via greedy next-token prediction.
-    Returns accuracy (fraction of examples where first predicted token
-    matches the target).
+    Properly batched with left-padding for variable-length prompts.
     """
     model.eval()
     correct = 0
     total = 0
+    pad_id = tokenizer.pad_token_id or 0
 
-    for ex in examples:
-        full_ids = tokenizer.encode(ex["full_text"], add_special_tokens=False)
-        input_ids = torch.tensor([full_ids], dtype=torch.long, device=device)
+    for i in range(0, len(examples), batch_size):
+        batch_ex = examples[i:i + batch_size]
+
+        all_ids = []
+        target_strs = []
+        for ex in batch_ex:
+            # Reconstruct full prompt from pre-tokenized segments
+            ids = ex["context_ids"] + ex["query_ids"]
+            all_ids.append(ids)
+            target_strs.append(ex["target_str"])
+
+        # Left-pad to align last token positions
+        max_len = max(len(ids) for ids in all_ids)
+        padded = []
+        for ids in all_ids:
+            pad_len = max_len - len(ids)
+            padded.append([pad_id] * pad_len + ids)
+
+        input_ids = torch.tensor(padded, dtype=torch.long, device=device)
         outputs = model(input_ids=input_ids)
         logits = outputs["logits"]
 
-        last_logits = logits[0, -1, :]
-        pred_token = last_logits.argmax().item()
-        pred_str = tokenizer.decode([pred_token]).strip()
-        target_str = ex["target"].strip()
-
-        if target_str in pred_str or pred_str in target_str:
-            correct += 1
-        total += 1
+        for j in range(len(batch_ex)):
+            last_logits = logits[j, -1, :]
+            pred_token = last_logits.argmax().item()
+            pred_str = tokenizer.decode([pred_token]).strip()
+            t = target_strs[j]
+            if t in pred_str or pred_str in t:
+                correct += 1
+            total += 1
 
     return correct / max(total, 1)
 
@@ -480,7 +505,6 @@ def finetune_model(model, train_dataset, device, args):
 
     Returns the fine-tuned model (a deep copy; original is not modified).
     """
-    # Deep copy so we don't modify the pretrained checkpoint
     ft_model = copy.deepcopy(model)
     ft_model.to(device)
     ft_model.train()
@@ -589,16 +613,15 @@ def evaluate_retrieval(checkpoint, args, device):
             zs_results[task_name] = {}
 
             for ctx_len in context_lens:
-                # Use eval seed for zero-shot
                 examples = builder(tokenizer, ctx_len, args.n_examples,
                                    seed=args.eval_seed)
-                acc = eval_zero_shot(model, tokenizer, device, examples)
+                acc = eval_zero_shot(model, tokenizer, device, examples,
+                                    batch_size=args.batch_size)
                 zs_results[task_name][ctx_len] = acc * 100.0
                 print(f"  {task_name} @ {ctx_len:>5d}: {acc * 100.0:6.1f}%")
 
         results["zero_shot"] = zs_results
 
-        # Print summary table
         _print_summary_table("Zero-shot", tasks, context_lens, zs_results)
 
     # ---- Fine-tuned evaluation ----
@@ -649,7 +672,8 @@ def evaluate_retrieval(checkpoint, args, device):
 
                 # Evaluate fine-tuned model
                 acc = eval_zero_shot(
-                    ft_model, tokenizer, device, eval_examples)
+                    ft_model, tokenizer, device, eval_examples,
+                    batch_size=args.batch_size)
                 ft_results[task_name][ctx_len] = acc * 100.0
                 print(f"    Result: {acc * 100.0:6.1f}%")
 
@@ -702,7 +726,6 @@ def compare_retrieval_results(all_results, output_path=None):
         print(f"COMPARISON: {regime_label}")
         print(f"{'=' * 70}")
 
-        # Collect all tasks and context lens
         all_tasks = set()
         all_cls = set()
         for rd in regime_data:
@@ -715,7 +738,6 @@ def compare_retrieval_results(all_results, output_path=None):
 
         for task in sorted(all_tasks):
             print(f"\n  {task}:")
-            # Header
             print(f"    {'ctx_len':>8s}", end="")
             for mn in model_names:
                 print(f"  {mn:>12s}", end="")
@@ -731,7 +753,6 @@ def compare_retrieval_results(all_results, output_path=None):
                     values.append(v)
                     print(f"  {v:11.1f}%", end="")
 
-                # Mark best
                 best_idx = max(range(len(values)), key=lambda i: values[i])
                 print(f"  {model_names[best_idx]:>8s}")
 
@@ -751,22 +772,18 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Retrieval evaluation with zero-shot and fine-tuning")
 
-    # Checkpoints (up to 3 for comparison)
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--checkpoint2", type=str, default=None)
     p.add_argument("--checkpoint3", type=str, default=None)
 
-    # Model config
     p.add_argument("--model_size", type=str, default="180m")
     p.add_argument("--tokenizer", type=str,
                    default="mistralai/Mistral-7B-v0.1")
     p.add_argument("--max_seq_len", type=int, default=2048)
 
-    # Evaluation mode
     p.add_argument("--mode", type=str, default="both",
                    choices=["zero_shot", "finetune", "both"])
 
-    # Tasks and context lengths
     p.add_argument("--tasks", nargs="+", type=str, default=None,
                    help="Tasks to evaluate (default: all)")
     p.add_argument("--context_lens", nargs="+", type=int,
@@ -774,23 +791,14 @@ def parse_args():
     p.add_argument("--n_examples", type=int, default=200,
                    help="Number of eval examples per task/context_len")
 
-    # Fine-tuning hyperparameters
-    p.add_argument("--ft_steps", type=int, default=500,
-                   help="Fine-tuning optimizer steps")
-    p.add_argument("--ft_lr", type=float, default=1e-4,
-                   help="Fine-tuning learning rate")
-    p.add_argument("--ft_batch_size", type=int, default=8,
-                   help="Fine-tuning batch size")
-    p.add_argument("--ft_n_train", type=int, default=1000,
-                   help="Number of fine-tuning training examples")
+    p.add_argument("--ft_steps", type=int, default=500)
+    p.add_argument("--ft_lr", type=float, default=1e-4)
+    p.add_argument("--ft_batch_size", type=int, default=8)
+    p.add_argument("--ft_n_train", type=int, default=1000)
 
-    # Seeds (different for train vs eval to prevent leakage)
-    p.add_argument("--train_seed", type=int, default=1337,
-                   help="Seed for generating fine-tuning training data")
-    p.add_argument("--eval_seed", type=int, default=42,
-                   help="Seed for generating evaluation data")
+    p.add_argument("--train_seed", type=int, default=1337)
+    p.add_argument("--eval_seed", type=int, default=42)
 
-    # Output
     p.add_argument("--output", type=str, default=None)
     p.add_argument("--batch_size", type=int, default=4)
 
