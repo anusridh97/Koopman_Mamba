@@ -48,6 +48,15 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     eos_id = tokenizer.eos_token_id
 
+    # Validate vocab fits in uint16 (max 65535). Token IDs are stored as
+    # uint16 for 2x memory savings over uint32. Mistral (32000), Llama (32000),
+    # and GPT-2 (50257) all fit. If you use a tokenizer with >65535 tokens,
+    # change the dtype to np.uint32 here and in MemmapPackedDataset.
+    assert len(tokenizer) <= 65535, (
+        f"Vocab size {len(tokenizer)} exceeds uint16 max (65535). "
+        f"Change dtype to np.uint32 in pretokenize.py and MemmapPackedDataset."
+    )
+
     print(f"Loading dataset: {args.dataset_name}/{args.dataset_subset}")
     ds = load_dataset(args.dataset_name, args.dataset_subset,
                       split="train", streaming=True)
