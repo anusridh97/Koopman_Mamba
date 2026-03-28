@@ -42,7 +42,7 @@ class KoopmanLMConfig:
 
     def __post_init__(self):
         if self.ska_layer_indices is None:
-            self.ska_layer_indices = [8, 16]
+            self.ska_layer_indices = [4, 8, 12, 16, 20, 23]
 
         # Validate tensor-core alignment
         assert self.d_model % 64 == 0, \
@@ -96,7 +96,35 @@ class KoopmanLMConfig:
         return total
 
 
+# ============================================================================
+# Layer index helpers
+# ============================================================================
+
+def _evenly_spaced_indices(n_layers, n_special):
+    """
+    Place n_special layers evenly across n_layers.
+    Returns sorted list of indices.
+
+    For 24 layers, 6 special -> [3, 7, 11, 15, 19, 23]  (every 4th, roughly)
+    """
+    if n_special == 0:
+        return []
+    if n_special >= n_layers:
+        return list(range(n_layers))
+    # Space them evenly, biased toward later layers (deeper = more retrieval)
+    step = n_layers / n_special
+    indices = [int(round((i + 1) * step)) - 1 for i in range(n_special)]
+    # Clamp and deduplicate
+    indices = sorted(set(min(idx, n_layers - 1) for idx in indices))
+    return indices
+
+
+# ============================================================================
+# 180M configs — ~25% of sequence layers are SKA/attention (6 of 24)
+# ============================================================================
+
 def config_180m():
+    """Koopman LM: 18 Mamba-2 + 6 SKA, 24 Koopman MLP."""
     return KoopmanLMConfig(
         d_model=768,
         n_layers=24,
@@ -104,7 +132,7 @@ def config_180m():
         d_state=128,
         ska_n_heads=12,
         ska_rank=48,
-        ska_layer_indices=[8, 16],
+        ska_layer_indices=_evenly_spaced_indices(24, 6),
         mlp_gated=False,
     )
 
@@ -116,6 +144,7 @@ def config_180m_gated():
 
 
 def config_370m():
+    """Koopman LM 370M: 21 Mamba-2 + 7 SKA, 28 Koopman MLP."""
     return KoopmanLMConfig(
         d_model=1024,
         n_layers=28,
@@ -123,6 +152,6 @@ def config_370m():
         d_state=128,
         ska_n_heads=16,
         ska_rank=64,
-        ska_layer_indices=[7, 14, 21],
+        ska_layer_indices=_evenly_spaced_indices(28, 7),
         mlp_gated=False,
     )
