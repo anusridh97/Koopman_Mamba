@@ -2,7 +2,7 @@
 ska_fast.py -- Drop-in performance patches for SKAModule (v4).
 
 Changes from original ska.py:
-  1. Einsums stay in BF16 — FP32 only for Cholesky/solve
+  1. Einsums stay in BF16 — FP32 only for Cholesky/solve AND normalization
   2. Conditional Cholesky — jittered fallback only on failing slices
   3. In-place symmetrization (no extra allocation)
   4. Per-layer cached spectral norm vector (warm-start, 1 iteration)
@@ -13,6 +13,12 @@ Checkpoint compatibility:
   The patched model uses a fused projection internally but saves/loads
   state dicts using the ORIGINAL key names (key_proj, query_proj, value_proj).
   This means checkpoints are fully compatible with unpatched KoopmanLM.
+
+Recurrent compatibility:
+  After patching, ska_module.key_proj / query_proj / value_proj are
+  available as read-only property accessors that slice into fused_proj.
+  This ensures RecurrentKoopmanLM._ska_prefill works correctly even
+  after patching.
 """
 
 import math
@@ -233,6 +239,34 @@ def _original_to_fused_state_dict(ska_module, state_dict, prefix,
 
 
 # ============================================================================
+# Recurrent-compatible projection accessors
+# ============================================================================
+
+class _FusedProjSlice(nn.Module):
+    """
+    Read-only view into a slice of fused_proj, mimicking nn.Linear.
+    Used so that RecurrentKoopmanLM can call ska.key_proj(x), etc.
+    after fused patching without duplicating parameters.
+    """
+    def __init__(self, fused_proj, start, end):
+        super().__init__()
+        self._fused_proj = fused_proj
+        self._start = start
+        self._end = end
+
+    @property
+    def weight(self):
+        return self._fused_proj.weight[self._start:self._end]
+
+    @property
+    def bias(self):
+        return None
+
+    def forward(self, x):
+        return F.linear(x, self._fused_proj.weight[self._start:self._end])
+
+
+# ============================================================================
 # Patch function
 # ============================================================================
 
@@ -242,6 +276,10 @@ def patch_ska_module(ska_module):
 
     Checkpoint-compatible: saves state dicts with original key names
     (key_proj, query_proj, value_proj) and loads them back correctly.
+
+    Recurrent-compatible: key_proj, query_proj, value_proj remain
+    accessible as thin slice views into fused_proj, so
+    RecurrentKoopmanLM._ska_prefill and ._ska_step work correctly.
     """
     import types
 
@@ -271,20 +309,25 @@ def patch_ska_module(ska_module):
 
     ska_module.fused_proj = fused_proj
 
-    # Remove old projections to avoid duplicate params / optimizer states
+    # Remove old projections from _modules to avoid duplicate params
     ska_module._modules.pop('key_proj')
     ska_module._modules.pop('query_proj')
     ska_module._modules.pop('value_proj')
 
+    # ---- Re-register as slice views for recurrent compatibility ----
+    # These are nn.Modules registered in _modules, so they appear as
+    # attributes but do NOT own parameters (they slice fused_proj).
+    ska_module.key_proj = _FusedProjSlice(fused_proj, 0, H * r)
+    ska_module.query_proj = _FusedProjSlice(fused_proj, H * r, 2 * H * r)
+    ska_module.value_proj = _FusedProjSlice(fused_proj, 2 * H * r, fused_dim)
+
     # ---- Register state_dict hooks for checkpoint compatibility ----
     # On save: split fused_proj -> key_proj + query_proj + value_proj
     # On load: fuse key_proj + query_proj + value_proj -> fused_proj
-    # Uses non-deprecated APIs (PyTorch 2.1+)
     try:
         ska_module.register_state_dict_post_hook(_fused_to_original_state_dict)
         ska_module.register_load_state_dict_pre_hook(_original_to_fused_state_dict)
     except AttributeError:
-        # Fallback for PyTorch < 2.1
         ska_module._register_state_dict_hook(_fused_to_original_state_dict)
         ska_module._register_load_state_dict_pre_hook(_original_to_fused_state_dict)
 
@@ -308,7 +351,7 @@ def patch_ska_module(ska_module):
             return _compute_chunk_stats_and_cholesky_fast(
                 z, zq, v, self.rank, self.H, self.P, CS, self.ridge_eps)
 
-    # ---- Override forward (no premature FP32 cast) ----
+    # ---- Override forward (FP32 for norm, BF16 for einsums) ----
     def forward_fast(self, hidden_states):
         B, T, _ = hidden_states.shape
         r = self.rank
@@ -320,11 +363,14 @@ def patch_ska_module(ska_module):
         zq = combined[:, :, H * r:2 * H * r].reshape(B, T, H, r)
         v = combined[:, :, 2 * H * r:].reshape(B, T, H, P)
 
-        # Normalization in native dtype (BF16) — not numerically sensitive
-        max_norm = z.norm(dim=-1, keepdim=True).max(
+        # Normalization in FP32 — norm computation is precision-sensitive
+        # (BF16 has only ~3 decimal digits; squaring r=48 elements can
+        # overflow or lose precision at 370M+ scale)
+        z_f32 = z.float()
+        max_norm = z_f32.norm(dim=-1, keepdim=True).max(
             dim=1, keepdim=True)[0].clamp(min=1e-6)
-        z = z / max_norm
-        zq = zq / max_norm
+        z = z_f32.div(max_norm).to(z.dtype)
+        zq = zq.float().div(max_norm).to(zq.dtype)
 
         # Chunk stats (BF16 einsums) + Cholesky (FP32)
         L_flat, M_flat, C_flat, zq_flat, shapes = self._get_chunk_stats(
