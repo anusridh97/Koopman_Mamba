@@ -1,10 +1,14 @@
 """
 baselines.py -- Baseline model variants for ablation comparison.
 
-Variant 1: Mamba-only + SwiGLU MLP (no global retrieval)
-Variant 2: Mamba + causal attention (Flash Attention 2) + SwiGLU MLP
-Variant 3: Mamba + SKA + SwiGLU MLP (isolates SKA contribution)
-Variant 4: Mamba + SKA + Koopman MLP (full method, in model.py)
+Three models, same parameter count, same data, same evaluation:
+
+  mamba_only   — All Mamba-2 + SwiGLU MLP (no global retrieval)
+  mamba_attn   — 75% Mamba-2 + 25% Flash Attention + SwiGLU MLP
+  koopman      — 75% Mamba-2 + 25% SKA + Koopman MLP  (in model.py)
+
+The attention indices mirror ska_layer_indices from the config so that
+both models have the same Mamba/non-Mamba split.
 """
 
 import math
@@ -28,6 +32,10 @@ class SwiGLUMLP(nn.Module):
         h = self.norm(x)
         return x + self.w3(F.silu(self.w1(h)) * self.w2(h))
 
+
+# ============================================================================
+# Sequence layer blocks
+# ============================================================================
 
 class CausalAttentionBlock(nn.Module):
     """
@@ -100,6 +108,10 @@ class Mamba2Block(nn.Module):
         return x + self.mamba(self.norm(x))
 
 
+# ============================================================================
+# Generic model builder
+# ============================================================================
+
 def _build_model(cfg, seq_layer_fn, mlp_fn):
     """Generic model builder shared by all variants."""
 
@@ -137,23 +149,47 @@ def _build_model(cfg, seq_layer_fn, mlp_fn):
 
         def param_summary(self):
             total = sum(p.numel() for p in self.parameters())
+            seq_types = {}
+            for layer in self.seq_layers:
+                name = type(layer).__name__
+                n = sum(p.numel() for p in layer.parameters())
+                seq_types[name] = seq_types.get(name, 0) + n
+            mlp_total = sum(
+                sum(p.numel() for p in m.parameters())
+                for m in self.mlp_layers
+            )
             print(f"Total parameters: {total:,}")
+            for name, count in sorted(seq_types.items()):
+                print(f"  {name}: {count:,} "
+                      f"({count/total*100:.1f}%)")
+            print(f"  MLP layers: {mlp_total:,} "
+                  f"({mlp_total/total*100:.1f}%)")
             return total
 
     return _Model()
 
 
+# ============================================================================
+# Model variants
+# ============================================================================
+
 def build_mamba_only(cfg: KoopmanLMConfig):
-    """Variant 1: all Mamba-2, no global retrieval. SwiGLU MLPs."""
+    """
+    Mamba-only baseline: ALL layers are Mamba-2, no global retrieval.
+    SwiGLU MLPs throughout. Ignores ska_layer_indices entirely.
+    """
     def seq_fn(c, i, is_ska):
-        return Mamba2Block(c)
+        return Mamba2Block(c)  # always Mamba, regardless of index
     def mlp_fn(c):
         return SwiGLUMLP(c.d_model, c.mlp_expand)
     return _build_model(cfg, seq_fn, mlp_fn)
 
 
 def build_mamba_attention(cfg: KoopmanLMConfig):
-    """Variant 2: Mamba-2 + Flash Attention + SwiGLU MLP."""
+    """
+    Mamba + Flash Attention baseline: 25% attention at the same layer
+    indices where Koopman LM places SKA. SwiGLU MLPs throughout.
+    """
     def seq_fn(c, i, is_ska):
         return CausalAttentionBlock(c) if is_ska else Mamba2Block(c)
     def mlp_fn(c):
@@ -162,7 +198,10 @@ def build_mamba_attention(cfg: KoopmanLMConfig):
 
 
 def build_mamba_ska_swiglu(cfg: KoopmanLMConfig):
-    """Variant 3: Mamba-2 + SKA + SwiGLU MLP."""
+    """
+    Ablation variant: Mamba-2 + SKA + SwiGLU MLP (isolates Koopman MLP
+    contribution by using SKA but with standard MLP).
+    """
     def seq_fn(c, i, is_ska):
         return SKABlock(c) if is_ska else Mamba2Block(c)
     def mlp_fn(c):
