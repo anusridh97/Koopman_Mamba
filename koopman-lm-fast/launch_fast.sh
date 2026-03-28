@@ -1,4 +1,3 @@
-
 #!/bin/bash
 set -euo pipefail
 
@@ -45,11 +44,6 @@ MODEL="${MODEL:-all}"
 GPU_MAMBA_ONLY="${GPU_MAMBA_ONLY:-0}"
 GPU_MAMBA_ATTN="${GPU_MAMBA_ATTN:-1}"
 GPU_KOOPMAN="${GPU_KOOPMAN:-2}"
-
-# Retrieval eval settings
-RETRIEVAL_EVAL="${RETRIEVAL_EVAL:-true}"
-FT_STEPS="${FT_STEPS:-500}"
-FT_LR="${FT_LR:-1e-4}"
 
 echo "============================================"
 echo "Koopman LM Training Setup"
@@ -180,7 +174,7 @@ else
     exit 1
 fi
 
-# ---- Step 3: Standard evaluation (PPL + NIAH) ----
+# ---- Step 3: Evaluate & compare (only when all 3 checkpoints exist) ----
 ALL_EXIST=true
 for DIR in "$MAMBA_ONLY_DIR" "$MAMBA_ATTN_DIR" "$KOOPMAN_DIR"; do
     if [ ! -f "${DIR}/final/model.pt" ]; then
@@ -190,10 +184,10 @@ done
 
 if [ "$ALL_EXIST" = true ]; then
     echo "============================================"
-    echo "Step 3: Evaluating all 3 models (PPL + NIAH)"
+    echo "Step 3: Evaluating all 3 models"
     echo "============================================"
 
-    # Pairwise comparisons
+    # Pairwise comparisons: Koopman vs each baseline
     python evaluate.py \
         --checkpoint "${KOOPMAN_DIR}/final/model.pt" \
         --checkpoint2 "${MAMBA_ATTN_DIR}/final/model.pt" \
@@ -219,37 +213,11 @@ if [ "$ALL_EXIST" = true ]; then
         --output mamba_attn_vs_mamba_only.json
 
     echo ""
-    echo "Standard eval results:"
+    echo "============================================"
+    echo "All done! Results:"
     echo "  koopman_vs_mamba_attn.json"
     echo "  koopman_vs_mamba_only.json"
     echo "  mamba_attn_vs_mamba_only.json"
-
-    # ---- Step 4: Retrieval evaluation (zero-shot + fine-tuning) ----
-    if [ "$RETRIEVAL_EVAL" = "true" ]; then
-        echo ""
-        echo "============================================"
-        echo "Step 4: Retrieval evaluation (zero-shot + fine-tuned)"
-        echo "============================================"
-
-        python evaluate_retrieval.py \
-            --checkpoint  "${KOOPMAN_DIR}/final/model.pt" \
-            --checkpoint2 "${MAMBA_ATTN_DIR}/final/model.pt" \
-            --checkpoint3 "${MAMBA_ONLY_DIR}/final/model.pt" \
-            --model_size "${MODEL_SIZE}" \
-            --max_seq_len "${SEQ_LEN}" \
-            --mode both \
-            --context_lens 256 512 1024 2048 \
-            --ft_steps "${FT_STEPS}" \
-            --ft_lr "${FT_LR}" \
-            --output retrieval_comparison.json
-
-        echo ""
-        echo "Retrieval eval results: retrieval_comparison.json"
-    fi
-
-    echo ""
-    echo "============================================"
-    echo "All done!"
     echo "============================================"
 
 elif [ "$MODEL" != "all" ]; then
@@ -271,19 +239,5 @@ elif [ "$MODEL" != "all" ]; then
             --max_seq_len "${SEQ_LEN}" \
             --niah_context_lens 128 256 512 1024 2048 4096 \
             --output "${MODEL}_results.json"
-
-        if [ "$RETRIEVAL_EVAL" = "true" ]; then
-            echo ""
-            echo "Step 4: Retrieval evaluation for ${MODEL}"
-            python evaluate_retrieval.py \
-                --checkpoint "${CKPT_DIR}/final/model.pt" \
-                --model_size "${MODEL_SIZE}" \
-                --max_seq_len "${SEQ_LEN}" \
-                --mode both \
-                --context_lens 256 512 1024 2048 \
-                --ft_steps "${FT_STEPS}" \
-                --ft_lr "${FT_LR}" \
-                --output "${MODEL}_retrieval_results.json"
-        fi
     fi
 fi
