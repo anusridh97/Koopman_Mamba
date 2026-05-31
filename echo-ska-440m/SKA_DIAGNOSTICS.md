@@ -50,7 +50,7 @@ metrics = ska_module.collect_diagnostics(hidden_states, max_batch=4)
 - `hidden_states` — `(B, T, d_model)` float tensor: the layer-normed input that
   feeds the SKA module (i.e. `block.norm(x)`).
 - `max_batch` — caps the batch used for the per-chunk eigen/operator work so the
-  cost is bounded regardless of training batch size (default 4).
+  cost is bounded regardless of training batch size (default 2).
 
 **Output** — a `dict` of GPU tensors (the caller does the CPU sync):
 
