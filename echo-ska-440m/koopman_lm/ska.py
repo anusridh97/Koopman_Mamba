@@ -76,23 +76,21 @@ def _power_spectral_filter(A_w, w_q, power_K=2):
 def _spectral_radius(A, n_iters=30):
     """Spectral radius (max |eigenvalue|) of a batch of square matrices.
 
-    Diagnostics-only. Tries torch.linalg.eigvals (exact); on backends where it
-    is unavailable (some CUDA builds without MAGMA), falls back to power
-    iteration, which converges to the dominant-eigenvalue magnitude. A is
-    (..., r, r); returns (...,).
+    Diagnostics-only, and SPEED-CRITICAL: torch.linalg.eigvals (the general
+    non-symmetric eig) is extremely slow when called on many small matrices and
+    dominated the diagnostic step cost. We instead use batched power iteration
+    (just matmuls -> fast on GPU): iterate v into the dominant invariant
+    subspace, then return ||A v|| for unit v. This is exact for a dominant real
+    eigenvalue, and for a complex-conjugate 2x2 block (which acts as rho *
+    rotation, norm-preserving) it also yields rho -- accurate enough for a
+    health metric. A is (..., r, r); returns (...,).
     """
-    try:
-        return torch.linalg.eigvals(A).abs().amax(dim=-1)
-    except Exception:
-        v = torch.randn(*A.shape[:-1], 1, device=A.device, dtype=A.dtype)
-        v = v / v.norm(dim=-2, keepdim=True).clamp(min=1e-8)
-        prev = None
-        for _ in range(n_iters):
-            Av = A @ v
-            nrm = Av.norm(dim=-2, keepdim=True).clamp(min=1e-12)
-            v = Av / nrm
-            prev = nrm
-        return prev.squeeze(-1).squeeze(-1)
+    v = torch.randn(*A.shape[:-1], 1, device=A.device, dtype=A.dtype)
+    v = v / v.norm(dim=-2, keepdim=True).clamp(min=1e-12)
+    for _ in range(n_iters):
+        v = A @ v
+        v = v / v.norm(dim=-2, keepdim=True).clamp(min=1e-12)
+    return (A @ v).norm(dim=-2).squeeze(-1)
 
 
 # ============================================================================
