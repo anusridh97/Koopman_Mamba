@@ -568,7 +568,8 @@ class SKAModule(nn.Module):
             L = torch.where((info > 0).view(-1, 1, 1), L_j, L)
 
         W = _whiten_M(L, Mf)                      # L^-1 M L^-T  (N,r,r)
-        alpha = _spec_w(W)                        # (N,1) detached spectral-norm scale
+        alpha = _spec_w(W, iters=12)              # (N,1) detached spectral-norm scale
+                                                  # iters=12 (diag-only; model's _spec_w default=20 untouched)
         A_eff = alpha.unsqueeze(-1) * W           # operator applied per filter step
 
         radius = _spectral_radius(A_eff)                               # (N,)
