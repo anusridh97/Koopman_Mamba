@@ -73,7 +73,7 @@ def _power_spectral_filter(A_w, w_q, power_K=2):
     return result
 
 
-def _spectral_radius(A, n_iters=30):
+def _spectral_radius(A, n_iters=12):
     """Spectral radius (max |eigenvalue|) of a batch of square matrices.
 
     Diagnostics-only, and SPEED-CRITICAL: torch.linalg.eigvals (the general
@@ -502,7 +502,7 @@ class SKAModule(nn.Module):
         return output
 
     @torch.no_grad()
-    def collect_diagnostics(self, hidden_states, max_batch=4):
+    def collect_diagnostics(self, hidden_states, max_batch=2):
         """Per-(batch, chunk, head) SKA health metrics, computed off the hot
         path but FAITHFUL to the operators the training forward applies.
 

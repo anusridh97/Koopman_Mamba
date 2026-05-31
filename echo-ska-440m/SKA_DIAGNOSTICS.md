@@ -17,7 +17,7 @@ dashboard smoke harness.
 | `koopman_lm/ska.py` | edited | `SKAModule.collect_diagnostics()` + `_spectral_radius()` helper |
 | `koopman_lm/diagnostics.py` | **new** | `SKAHealthMonitor`, `profile_overhead()` |
 | `koopman_lm/train_fast.py` | edited | wires the monitor into the training loop + CLI flags |
-| `koopman_lm/koopman_mlp.py` | **new** | ported a missing module so `koopman_lm.model` imports (consolidation fix) |
+| `koopman_lm/koopman_mlp.py` | **new** | added a missing module so `koopman_lm.model` imports (consolidation fix) |
 | `test_diagnostics.py` | **new** | CPU-only test suite (no GPU / mamba_ssm / wandb needed) |
 | `wandb_smoke.py` | **new** | populates a real wandb dashboard from a stand-in model |
 
@@ -25,20 +25,16 @@ dashboard smoke harness.
 
 ## The five health metrics
 
-All are computed from the **per-chunk, chunk-causal Koopman operators that the
+All are computed from the **prefix-mode, per-chunk Koopman operators that the
 training forward actually applies** (see "Faithfulness" below), not a proxy.
 
 | Metric | What it measures | Healthy range |
 |---|---|---|
-| **Spectral radius** of `A_eff` (per layer/head) | dominant `|eigenvalue|` of the spectrally-normalized whitened operator `A_eff = α·A_w`, where `A_w = L⁻¹ M L⁻ᵀ` and `α = 1/max(σ_max(A_w), 1)` (i.e. the operator the power filter actually applies). Identifies whether key→value bindings are persistent. | `[0.3, 0.95]`; `~0` = operator unlearned; `>1` = unstable |
+| **Spectral radius** of `A_w` (per layer/head) | dominant eigenvalue|in [0.3,0.95]; above 1.0 ⇒ instability|` of the whitened transition operator `A_eff = α·(L⁻¹ M L⁻ᵀ)`. Identifies whether key→value bindings are persistent. | `[0.3, 0.95]`; `~0` = operator unlearned; `>1` = unstable |
 | **λmin(G̃)** | smallest eigenvalue of the ridge-regularized Gram matrix; Cholesky conditioning. | comfortably above the ridge floor `ε`; pinned at `ε` ⇒ rank-deficient keys |
 | **Gap** `‖A_eff^K − A_eff‖ / ‖A_eff‖` | how much the power filter (squaring, K=2) reshapes the operator. | `< 0.5`; above ⇒ the filter dominates rather than confirms |
 | **Write-gate magnitude** | the LayerScale residual gate (`layerscale_gate`); how hard SKA is injected into the residual. Plot on a **log scale**; watch for monotonic growth. | grows off its `1e-4` init; flat ⇒ SKA effectively dead |
 | **Residual-norm contribution** `‖x_SKA‖ / ‖x_Mamba‖` | SKA's contribution to the residual stream relative to the Mamba layers. | within ~1 order of magnitude; orders smaller ⇒ not doing real work |
-
-Reading them together localizes the failure: healthy radius/λmin but a flat gate
-⇒ "good operator, model is ignoring it"; collapsing radius with λmin pinned at the
-ridge floor ⇒ "the operator never formed / Gram is rank-deficient."
 
 ---
 
@@ -60,7 +56,7 @@ metrics = ska_module.collect_diagnostics(hidden_states, max_batch=4)
 
 | key | shape | meaning |
 |---|---|---|
-| `spectral_radius` | `(B, nc, H)` | `max|eig(A_eff)|` per (batch, chunk, head) |
+| `spectral_radius` | `(B, nc, H)` | `max eig(A_eff)` per (batch, chunk, head) |
 | `lambda_min` | `(B, nc, H)` | smallest eig of `G̃` per instance |
 | `gap` | `(B, nc, H)` | `‖A_eff^K − A_eff‖ / ‖A_eff‖` per instance |
 | `n_chunks` | `int` | number of chunks (`nc`); chunk 0 has no history |
@@ -69,7 +65,7 @@ metrics = ska_module.collect_diagnostics(hidden_states, max_batch=4)
 | `outproj_norm` | scalar | `‖out_proj.weight‖_F` |
 | `ridge_eps` | scalar | the ridge floor, for the `λmin` ratio |
 
-Nothing is pre-reduced — the three operator metrics come back as the **full
+The three operator metrics come back as the **full
 `(B, nc, H)` distributions** so downstream code can aggregate per head, per chunk,
 or over the whole pool however it wants.
 
@@ -77,16 +73,7 @@ or over the whole pool however it wants.
 uses (β-gated, strictly-causal, exclusive-prefix sufficient statistics) and forms
 each chunk's operator exactly as `ska_core` does:
 `A_eff = α · (L⁻¹ M L⁻ᵀ)`, with `α = 1/max(σ_max, 1)`. So every operator measured
-is one a real query sees, at the model's true chunk granularity — not a
-non-causal whole-sequence summary.
-
-### `_spectral_radius(A, n_iters=30)` (module-level helper)
-
-Returns `max|eigenvalue|` per matrix via **batched power iteration** (just
-matmuls — fast on GPU). It replaced `torch.linalg.eigvals`, which is the general
-non-symmetric eig routine and was ~10× too slow on many small matrices (it
-dominated the diagnostic step time). Accurate enough for a health metric: exact
-for a dominant real eigenvalue or a complex-conjugate 2×2 block.
+is one a real query sees, at the model's chunk level.
 
 ---
 
@@ -252,26 +239,8 @@ Flags: `--steps`, `--log_every`, `--batch`, `--seq_len`, `--lr`, `--project`,
 `--online` (default offline), `--cuda`, `--seed`.
 
 **What it proves, and what it does NOT.** It confirms the scalar panels and
-histograms render and move over steps. It does **not** measure whether SKA "works":
-the backbone is a fake conv (not a real SSM) and the task is a trivial
-global-mean regression that needs no associative recall. Healthy-looking metrics
+histograms render and move over steps. Healthy-looking metrics
 here only mean the wiring is correct — they are not evidence of SKA capability.
-(Because the toy task feeds random Gaussian inputs, the SKA keys span the space
-and the Gram stays well-conditioned, so this harness cannot surface conditioning
-problems that structured retrieval tasks expose.)
-
----
-
-## How to view the wandb data without an account
-
-The runs log **offline** by default to `./wandb/offline-run-*`. To see the graphs:
-
-- **Free account** (fastest): `wandb login`, then `wandb sync wandb/offline-run-*`
-  from a node with internet → open the printed URL.
-- **No account**: run with `--no_wandb` and read the console `[ska-health]` lines,
-  or add a TensorBoard logger (not yet implemented) for account-free local graphs.
-
-Sync from a login node, not a compute node (compute nodes usually have no internet).
 
 ---
 
