@@ -35,6 +35,7 @@ from koopman_lm.baselines import (
     CausalAttentionBlock,
 )
 from koopman_lm.dataset_weighted import MemmapPackedDataset
+from koopman_lm.diagnostics import SKAHealthMonitor
 
 
 def enable_gradient_checkpointing(model):
@@ -128,6 +129,19 @@ def train(args):
                     pass
         if is_main: print(f"    Compiled {n_compiled} modules")
 
+    # SKA health instrumentation (Phase 1). Hooks live on the raw model's
+    # sequence blocks; cheap when inactive. Only meaningful for the koopman
+    # model (the only one with SKA layers).
+    monitor = None
+    if args.diag_enable and is_main and args.model_type == "koopman":
+        try:
+            monitor = SKAHealthMonitor(raw_model)
+            print(f"  SKA health monitor attached: {monitor.n_ska} SKA layers, "
+                  f"diag_every={args.diag_every}")
+        except Exception as e:
+            print(f"  SKA health monitor disabled: {e}")
+            monitor = None
+
     if is_ddp:
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], find_unused_parameters=False)
@@ -205,6 +219,32 @@ def train(args):
                         wandb.log({"loss": avg, "ppl": ppl, "lr": lr,
                                    "tokens_per_sec": tps}, step=step)
                     running_loss = torch.tensor(0.0, device=device); loss_count = 0
+
+                # ---- SKA health diagnostics (separate cheap fwd, amortized) ----
+                if monitor is not None and step % args.diag_every == 0:
+                    was_training = raw_model.training
+                    with torch.no_grad(), monitor.capture():
+                        raw_model(input_ids=ids)        # labels=None -> no loss
+                    if was_training:
+                        raw_model.train()
+                    health = monitor.collect()
+                    scal = {k: v for k, v in health.items()
+                            if isinstance(v, (int, float))}
+                    radii = [v for k, v in scal.items()
+                             if k.endswith("/spectral_radius_mean")]
+                    gates = [v for k, v in scal.items() if k.endswith("/gate_mag")]
+                    rad_avg = sum(radii) / len(radii) if radii else float("nan")
+                    gate_avg = sum(gates) / len(gates) if gates else float("nan")
+                    rr = scal.get("ska/residual_ratio", float("nan"))
+                    lmr = min((v for k, v in scal.items()
+                               if k.endswith("/lambda_min_over_ridge")), default=float("nan"))
+                    print(f"  [ska-health] step {step}: radius~{rad_avg:.3f} "
+                          f"gate~{gate_avg:.2e} resid_ratio~{rr:.2e} "
+                          f"lmin/ridge~{lmr:.2f}")
+                    if args.wandb_project:
+                        import wandb
+                        wandb.log(health, step=step)
+
                 if is_main and step > 0 and step % args.save_steps == 0:
                     _save_checkpoint(raw_model, cfg, tokenizer, step, args)
         epoch += 1
@@ -254,6 +294,13 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--ddp", action="store_true", default=False)
     p.add_argument("--logging_steps", type=int, default=10)
+    p.add_argument("--diag_enable", action="store_true", default=True,
+                   help="emit SKA health metrics (spectral radius, lambda_min, "
+                        "gap, write-gate, residual ratio) to console/wandb")
+    p.add_argument("--no_diag", action="store_false", dest="diag_enable")
+    p.add_argument("--diag_every", type=int, default=500,
+                   help="SKA health diagnostics cadence (steps). 100 for 50M, "
+                        "500 for 440M+.")
     p.add_argument("--save_steps", type=int, default=5000)
     p.add_argument("--output_dir", type=str, default="./koopman-440m-fast")
     p.add_argument("--wandb_project", type=str, default=None)

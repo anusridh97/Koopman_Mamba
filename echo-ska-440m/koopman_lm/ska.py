@@ -26,7 +26,7 @@ from contextlib import nullcontext
 #   ska_core  -- whitened L^{-1}M L^{-T} forward + custom O(K r^2) backward
 #                ("It Cancels"; Cholesky never differentiated)
 #   chunk_stats -- beta-gated, strictly-causal sufficient statistics
-from koopman_lm.ska_core_torch import ska_core
+from koopman_lm.ska_core_torch import ska_core, _whiten_M, _spec_w
 from koopman_lm.chunk_stats_torch import chunk_stats as _causal_chunk_stats
 
 # ============================================================================
@@ -71,6 +71,28 @@ def _power_spectral_filter(A_w, w_q, power_K=2):
     for _ in range(power_K):
         result = A_w @ result
     return result
+
+
+def _spectral_radius(A, n_iters=30):
+    """Spectral radius (max |eigenvalue|) of a batch of square matrices.
+
+    Diagnostics-only. Tries torch.linalg.eigvals (exact); on backends where it
+    is unavailable (some CUDA builds without MAGMA), falls back to power
+    iteration, which converges to the dominant-eigenvalue magnitude. A is
+    (..., r, r); returns (...,).
+    """
+    try:
+        return torch.linalg.eigvals(A).abs().amax(dim=-1)
+    except Exception:
+        v = torch.randn(*A.shape[:-1], 1, device=A.device, dtype=A.dtype)
+        v = v / v.norm(dim=-2, keepdim=True).clamp(min=1e-8)
+        prev = None
+        for _ in range(n_iters):
+            Av = A @ v
+            nrm = Av.norm(dim=-2, keepdim=True).clamp(min=1e-12)
+            v = Av / nrm
+            prev = nrm
+        return prev.squeeze(-1).squeeze(-1)
 
 
 # ============================================================================
@@ -480,6 +502,100 @@ class SKAModule(nn.Module):
         if self.layerscale_gate is not None:
             output = output * self.layerscale_gate
         return output
+
+    @torch.no_grad()
+    def collect_diagnostics(self, hidden_states, max_batch=4):
+        """Per-(batch, chunk, head) SKA health metrics, computed off the hot
+        path but FAITHFUL to the operators the training forward applies.
+
+        Fidelity: this reuses the SAME beta-gated, strictly-causal chunk
+        statistics the forward uses (`chunk_stats`) and forms each chunk's
+        operator exactly as `ska_core` does -- A_eff = alpha * (L^-1 M L^-T),
+        G/M being the EXCLUSIVE-prefix per-chunk sufficient statistics (Eqs.
+        7-10). So every operator measured here is one a real query sees, not a
+        non-causal whole-sequence summary.
+
+        NOTE: nothing is reduced here. The three operator metrics are returned
+        as full (B, n_chunks, H) tensors so downstream (plotting / wandb) can
+        decide how to aggregate -- per head, per chunk, or the whole pool.
+        Chunk 0 has an empty exclusive prefix (G=ridge I, M=0 -> zero operator);
+        it is kept (index 0) and excluded by the monitor's summaries by default.
+
+        Detached, fp32, no value readout. `max_batch` caps the batch used for
+        the per-chunk eigendecompositions so cost is bounded regardless of the
+        training batch size. Returns GPU tensors; caller does the CPU sync
+        (see diagnostics.SKAHealthMonitor).
+
+        Returns dict:
+          spectral_radius : (B, nc, H) max|eig(A_eff)| per instance.
+                            Healthy ~[0.3, 0.95]; ~0 = unlearned; >1 = unstable.
+          lambda_min      : (B, nc, H) smallest eig(G_tilde) per instance.
+                            Pinned at the ridge floor => rank-deficient keys.
+          gap             : (B, nc, H) ||A_eff^K - A_eff|| / ||A_eff||.
+                            >0.5 => the power filter dominates the operator.
+          n_chunks        : int, number of chunks (chunk 0 = no history).
+          gate_mag/beta_mean/outproj_norm/ridge_eps : scalars.
+        """
+        r, H, P = self.rank, self.H, self.P
+        ridge = float(self.ridge_eps)
+        K = int(self.power_K)
+        CS = self.chunk_size
+
+        x = hidden_states
+        if x.shape[0] > max_batch:
+            x = x[:max_batch]
+        B, T, _ = x.shape
+
+        z = self.key_proj(x).reshape(B, T, H, r).float()
+        zq = self.query_proj(x).reshape(B, T, H, r).float()
+        v = self.value_proj(x).reshape(B, T, H, P).float()
+        beta = torch.sigmoid(self.beta_proj(x).float())                # (B,T,H)
+
+        # Exact same normalization as forward(): per-token L2 on key/query,
+        # beta-gated write key.
+        z_n = z * torch.rsqrt((z * z).sum(-1, keepdim=True) + 1e-12)
+        zq_n = zq * torch.rsqrt((zq * zq).sum(-1, keepdim=True) + 1e-12)
+        zb_n = beta.unsqueeze(-1) * z_n
+
+        # SAME strictly-causal, beta-gated, exclusive-prefix chunk statistics
+        # the training forward consumes. Gf already carries ridge + jitter.
+        Gf, Mf, Cf, qf, shp = _causal_chunk_stats(z_n, zb_n, zq_n, v, ridge, CS)
+        Bc, nc, Hc = shp[0], shp[1], shp[2]
+
+        # Per-instance operator (N = B*nc*H), formed exactly like ska_core.
+        L, info = torch.linalg.cholesky_ex(Gf)
+        if (info > 0).any():
+            eye = torch.eye(r, device=Gf.device, dtype=Gf.dtype)
+            L_j, _ = torch.linalg.cholesky_ex(Gf + 1e-4 * eye)
+            L = torch.where((info > 0).view(-1, 1, 1), L_j, L)
+
+        W = _whiten_M(L, Mf)                      # L^-1 M L^-T  (N,r,r)
+        alpha = _spec_w(W)                        # (N,1) detached spectral-norm scale
+        A_eff = alpha.unsqueeze(-1) * W           # operator applied per filter step
+
+        radius = _spectral_radius(A_eff)                               # (N,)
+        lam = torch.linalg.eigvalsh(Gf).amin(dim=-1)                   # (N,)
+        A_K = torch.linalg.matrix_power(A_eff, K)
+        gap = (A_K - A_eff).norm(dim=(-2, -1)) / (A_eff.norm(dim=(-2, -1)) + 1e-12)
+
+        # (N,) -> (B, nc, H). No reduction: hand back the whole distribution.
+        radius = radius.view(Bc, nc, Hc)
+        lam = lam.view(Bc, nc, Hc)
+        gap = gap.view(Bc, nc, Hc)
+
+        gate = self.layerscale_gate
+        gate_mag = gate.abs().mean() if gate is not None else self.eta.abs().reshape(())
+
+        return {
+            'spectral_radius': radius.detach(),
+            'lambda_min': lam.detach(),
+            'gap': gap.detach(),
+            'n_chunks': int(nc),
+            'gate_mag': gate_mag.detach(),
+            'beta_mean': beta.mean().detach(),
+            'outproj_norm': self.out_proj.weight.detach().float().norm(),
+            'ridge_eps': torch.tensor(ridge, device=x.device),
+        }
 
     def extra_repr(self):
         parts = [
