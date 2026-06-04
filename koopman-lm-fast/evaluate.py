@@ -428,6 +428,136 @@ def eval_niah(model, device, tokenizer, model_type="koopman",
 
 
 # ============================================================================
+# Load-bearing eval (four-mode SKA-zeroing)
+# ============================================================================
+
+from contextlib import contextmanager
+
+@contextmanager
+def _zero_ska(model):
+    """Zero out SKA contributions for one forward pass.
+
+    Registers a forward hook on every SKABlock that returns the block's input
+    unchanged (i.e. strips the SKA residual delta). Mamba blocks are unaffected.
+    """
+    from koopman_lm.model import SKABlock
+    hooks = []
+    for layer in model.seq_layers:
+        if isinstance(layer, SKABlock):
+            hooks.append(layer.register_forward_hook(
+                lambda m, inp, out: inp[0]
+            ))
+    try:
+        yield
+    finally:
+        for h in hooks:
+            h.remove()
+
+
+@contextmanager
+def _zero_mamba(model):
+    """Zero out Mamba contributions for one forward pass.
+
+    Registers a forward hook on every non-SKABlock seq layer (i.e. Mamba2Block)
+    that returns the block's input unchanged.
+    """
+    from koopman_lm.model import SKABlock
+    hooks = []
+    for layer in model.seq_layers:
+        if not isinstance(layer, SKABlock):
+            hooks.append(layer.register_forward_hook(
+                lambda m, inp, out: inp[0]
+            ))
+    try:
+        yield
+    finally:
+        for h in hooks:
+            h.remove()
+
+
+def eval_load_bearing_ppl(model, device, tokenizer, max_seq_len=2048,
+                          batch_size=8):
+    """Run PPL in four modes to test whether SKA layers are load-bearing.
+
+    Modes:
+      full        — unmodified model
+      ska_zeroed  — SKA residual contributions zeroed, Mamba intact
+      mamba_zeroed — Mamba residual contributions zeroed, SKA intact
+      both_zeroed — both zeroed (random-walk baseline)
+
+    Returns a dict with keys ppl_full, ppl_ska_zeroed, ppl_mamba_zeroed,
+    ppl_both_zeroed, and ska_delta (= ppl_ska_zeroed - ppl_full).
+    """
+    print("\n" + "=" * 60)
+    print("Load-bearing eval (four-mode SKA-zeroing)")
+    print("=" * 60)
+
+    dataset = WikiTextDataset(tokenizer=tokenizer, max_len=max_seq_len)
+    loader = DataLoader(dataset, batch_size=batch_size)
+    # Materialise once so all four modes see the same batches.
+    batches = list(loader)
+
+    def _run_ppl(ctx_manager=None):
+        model.eval()
+        total_loss = 0.0
+        total_tokens = 0
+        with torch.no_grad():
+            for batch in batches:
+                input_ids = batch["input_ids"].to(device)
+                labels = batch["labels"].to(device)
+                if ctx_manager is not None:
+                    with ctx_manager(model):
+                        out = model(input_ids=input_ids, labels=labels)
+                else:
+                    out = model(input_ids=input_ids, labels=labels)
+                n = labels.numel()
+                total_loss += out["loss"].item() * n
+                total_tokens += n
+        avg = total_loss / max(total_tokens, 1)
+        return math.exp(min(avg, 20))
+
+    modes = [
+        ("full",         None),
+        ("ska_zeroed",   _zero_ska),
+        ("mamba_zeroed", _zero_mamba),
+        ("both_zeroed",  _BothZero),
+    ]
+
+    results = {}
+    for name, ctx in modes:
+        ppl = _run_ppl(ctx)
+        results[f"ppl_{name}"] = ppl
+        print(f"  {name:15s}: PPL = {ppl:.4f}")
+
+    ska_delta = results["ppl_ska_zeroed"] - results["ppl_full"]
+    mamba_delta = results["ppl_mamba_zeroed"] - results["ppl_full"]
+    results["ska_delta"] = ska_delta
+    results["mamba_delta"] = mamba_delta
+
+    print(f"\n  SKA delta   (zeroed - full): {ska_delta:+.4f}  "
+          f"{'[load-bearing]' if ska_delta > 0.5 else '[not load-bearing]'}")
+    print(f"  Mamba delta (zeroed - full): {mamba_delta:+.4f}")
+
+    return results
+
+
+class _BothZero:
+    """Context manager that zeroes both SKA and Mamba simultaneously."""
+    def __init__(self, model):
+        self._ska_ctx = _zero_ska(model)
+        self._mamba_ctx = _zero_mamba(model)
+
+    def __enter__(self):
+        self._ska_ctx.__enter__()
+        self._mamba_ctx.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        self._mamba_ctx.__exit__(*args)
+        self._ska_ctx.__exit__(*args)
+
+
+# ============================================================================
 # Evaluation orchestrator
 # ============================================================================
 
@@ -461,6 +591,12 @@ def evaluate_checkpoint(checkpoint, args, device):
             n_examples=args.niah_n_examples,
             context_lens=args.niah_context_lens,
             seed=args.seed)
+
+    if args.mode in ("all", "load_bearing"):
+        all_results["load_bearing"] = eval_load_bearing_ppl(
+            model, device, tokenizer,
+            max_seq_len=args.max_seq_len,
+            batch_size=args.batch_size)
 
     del model
     torch.cuda.empty_cache()
@@ -516,7 +652,7 @@ def parse_args():
     p.add_argument("--tokenizer", type=str,
                    default="mistralai/Mistral-7B-v0.1")
     p.add_argument("--mode", type=str, default="all",
-                   choices=["all", "ppl", "niah"])
+                   choices=["all", "ppl", "niah", "load_bearing"])
     p.add_argument("--max_seq_len", type=int, default=2048)
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--niah_context_lens", nargs="+", type=int,

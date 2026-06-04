@@ -244,9 +244,70 @@ here only mean the wiring is correct — they are not evidence of SKA capability
 
 ---
 
+---
+
+## Phase 1 Task 2 — Load-bearing eval (four-mode SKA-zeroing)
+
+### Overview
+
+Added a `load_bearing` eval mode to `koopman-lm-fast/evaluate.py` that answers whether SKA layers are actually contributing to the model's output. It runs PPL evaluation in four modes and reports the deltas:
+
+| Mode | Description |
+|---|---|
+| `full` | Unmodified model |
+| `ska_zeroed` | SKA residual contributions stripped, Mamba intact |
+| `mamba_zeroed` | Mamba residual contributions stripped, SKA intact |
+| `both_zeroed` | Both stripped (random-walk baseline) |
+
+The key signal is `ska_delta = ppl_ska_zeroed - ppl_full`. A delta near zero means SKA isn't load-bearing; above 0.5 PPL points is a strong positive signal.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `koopman-lm-fast/evaluate.py` | Added `_zero_ska()`, `_zero_mamba()`, `_BothZero` and `eval_load_bearing_ppl()`; wired into `evaluate_checkpoint()` and `--mode load_bearing` CLI |
+| `echo-ska-440m/test_diagnostics.py` | Added 7 load-bearing tests (section 5) |
+
+### Usage
+
+```bash
+python evaluate.py --checkpoint path/to/ckpt --mode load_bearing
+```
+
+Output in the returned JSON under `"load_bearing"`:
+```json
+{
+  "ppl_full": 12.34,
+  "ppl_ska_zeroed": 13.12,
+  "ppl_mamba_zeroed": 15.67,
+  "ppl_both_zeroed": 18.90,
+  "ska_delta": 0.78,
+  "mamba_delta": 3.33
+}
+```
+
+### How the zeroing works
+
+`_zero_ska(model)` and `_zero_mamba(model)` are `@contextmanager` functions that register PyTorch forward hooks on the relevant block type. Each hook returns `input[0]` instead of the computed output, stripping that component's residual delta without touching the other component. Hooks are removed on context exit — no model weights are modified.
+
+### Test suite — load-bearing section (`test_diagnostics.py`)
+
+Seven new tests, CPU-only, no GPU / `mamba_ssm` / wandb required:
+
+1. **zeroing SKA returns input** — with `_zero_ska_ctx` active, each `SKABlock` output equals its input (uses pre-hooks + post-hooks registered inside context to respect hook ordering).
+2. **zeroing Mamba returns input** — same for non-SKA blocks.
+3. **zeroing SKA is isolated** — when zeroing SKA, Mamba blocks still compute (output ≠ input).
+4. **zeroing Mamba is isolated** — when zeroing Mamba, SKA blocks still compute.
+5. **full mode matches baseline** — hooks are fully removed after context exit; zeroed ≠ full confirms SKA contributes.
+6. **four-mode losses** — all four CE loss values are finite/positive; each zeroing mode changes the loss relative to full.
+7. **known-delta synthetic** — with Mamba suppressed to near-zero and SKA gate set to 1.0, the output perturbation from zeroing SKA exceeds that from zeroing Mamba (uses L2 output distance, not loss, to avoid sign ambiguity with random weights).
+
+---
+
 ## Status
 
-- Instrumentation implemented and unit-tested on CPU (all 7 tests pass).
+- Phase 1 Task 1: Instrumentation implemented and unit-tested on CPU (all 7 tests pass).
+- Phase 1 Task 2: Load-bearing eval implemented and unit-tested on CPU (all 7 new tests pass, 14 total).
 - Dashboard smoke test confirms the logging pipeline renders in wandb.
 - The diagnostics reconstruct the real per-chunk operators faithfully, and the
   spectral-radius computation is fast enough (power iteration) for the <3% overhead

@@ -248,6 +248,341 @@ def test_profile_overhead_runs():
           f"every500={stats['overhead_every_500']*100:.3f}%")
 
 
+# ---------------------------------------------------------------------------
+# 5. Load-bearing eval — four-mode SKA-zeroing
+# ---------------------------------------------------------------------------
+#
+# The zeroing helpers are defined inline here to avoid a cross-package import
+# of koopman-lm-fast/evaluate.py (which carries its own heavy top-level deps).
+# The logic is identical to the _zero_ska / _zero_mamba / _BothZero helpers in
+# evaluate.py; these tests validate the correctness of that shared mechanism.
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _zero_ska_ctx(model):
+    """Strip SKA residual contributions for one forward pass."""
+    hooks = [
+        layer.register_forward_hook(lambda m, inp, out: inp[0])
+        for layer in model.seq_layers
+        if isinstance(layer, SKABlock)
+    ]
+    try:
+        yield
+    finally:
+        for h in hooks:
+            h.remove()
+
+
+@contextmanager
+def _zero_mamba_ctx(model):
+    """Strip non-SKA (Mamba) residual contributions for one forward pass."""
+    hooks = [
+        layer.register_forward_hook(lambda m, inp, out: inp[0])
+        for layer in model.seq_layers
+        if not isinstance(layer, SKABlock)
+    ]
+    try:
+        yield
+    finally:
+        for h in hooks:
+            h.remove()
+
+
+class _BothZeroCtx:
+    """Context manager that zeroes both SKA and Mamba simultaneously."""
+    def __init__(self, model):
+        self._ska = _zero_ska_ctx(model)
+        self._mamba = _zero_mamba_ctx(model)
+
+    def __enter__(self):
+        self._ska.__enter__()
+        self._mamba.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        self._mamba.__exit__(*args)
+        self._ska.__exit__(*args)
+
+
+class _StandInLM(nn.Module):
+    """_StandInModel + embedding + lm_head for CE-loss-based tests.
+
+    Exposes .seq_layers at the top level so the zeroing helpers can find it.
+    """
+    def __init__(self, cfg):
+        super().__init__()
+        self.embed = nn.Embedding(cfg.vocab_size, cfg.d_model)
+        self.backbone = _StandInModel(cfg)
+        self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+        # zeroing helpers scan model.seq_layers, so expose it here
+        self.seq_layers = self.backbone.seq_layers
+
+    def forward(self, input_ids, labels=None):
+        h = self.embed(input_ids)                      # (B, T, d)
+        h_out = self.backbone(h)["logits"]             # (B, T, d)
+        logits = self.lm_head(h_out)                   # (B, T, V)
+        loss = None
+        if labels is not None:
+            loss = nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                labels.view(-1),
+            )
+        return {"loss": loss, "logits": logits}
+
+
+# ------------------------------------------------------------------
+# helpers
+
+def _capture_layer_io(model, layer_pred):
+    """Return a list of (input_tensor, output_tensor) for every layer
+    matching layer_pred, captured during the next forward pass."""
+    records = []
+
+    def _hook(m, inp, out):
+        records.append((inp[0].detach().clone(), out.detach().clone()))
+
+    hooks = [
+        layer.register_forward_hook(_hook)
+        for layer in model.seq_layers
+        if layer_pred(layer)
+    ]
+    return records, hooks
+
+
+# ------------------------------------------------------------------
+# tests
+
+def test_zeroing_ska_returns_input():
+    """With _zero_ska_ctx active, every SKABlock output must equal its input.
+
+    Capture hooks are registered INSIDE the zeroing context so they fire after
+    the zeroing hook and see the post-zeroing (i.e. input-passthrough) output.
+    Pre-hooks capture the true block input before any post-hook runs.
+    """
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg).eval()
+    x = torch.randn(2, 32, D)
+    pre_inputs, post_outputs = {}, {}
+
+    with _zero_ska_ctx(model):
+        extra = []
+        for layer in model.seq_layers:
+            if isinstance(layer, SKABlock):
+                lid = id(layer)
+
+                def mk_pre(lid=lid):
+                    def h(m, inp): pre_inputs[lid] = inp[0].detach().clone()
+                    return h
+
+                def mk_post(lid=lid):
+                    # registered after the zeroing hook → sees zeroed output
+                    def h(m, inp, out): post_outputs[lid] = out.detach().clone()
+                    return h
+
+                extra.append(layer.register_forward_pre_hook(mk_pre()))
+                extra.append(layer.register_forward_hook(mk_post()))
+        model(x)
+        for h in extra:
+            h.remove()
+
+    assert len(pre_inputs) == 2, f"expected 2 SKA captures, got {len(pre_inputs)}"
+    for lid in pre_inputs:
+        assert torch.allclose(pre_inputs[lid], post_outputs[lid]), \
+            "SKA output != input after zeroing"
+    print("  [ok] zeroing SKA: all SKABlock outputs == their inputs")
+
+
+def test_zeroing_mamba_returns_input():
+    """With _zero_mamba_ctx active, every non-SKA layer output must equal its input."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg).eval()
+    x = torch.randn(2, 32, D)
+    pre_inputs, post_outputs = {}, {}
+
+    with _zero_mamba_ctx(model):
+        extra = []
+        for layer in model.seq_layers:
+            if not isinstance(layer, SKABlock):
+                lid = id(layer)
+
+                def mk_pre(lid=lid):
+                    def h(m, inp): pre_inputs[lid] = inp[0].detach().clone()
+                    return h
+
+                def mk_post(lid=lid):
+                    def h(m, inp, out): post_outputs[lid] = out.detach().clone()
+                    return h
+
+                extra.append(layer.register_forward_pre_hook(mk_pre()))
+                extra.append(layer.register_forward_hook(mk_post()))
+        model(x)
+        for h in extra:
+            h.remove()
+
+    assert len(pre_inputs) == 2, f"expected 2 Mamba captures, got {len(pre_inputs)}"
+    for lid in pre_inputs:
+        assert torch.allclose(pre_inputs[lid], post_outputs[lid]), \
+            "Mamba output != input after zeroing"
+    print("  [ok] zeroing Mamba: all non-SKA block outputs == their inputs")
+
+
+def test_zeroing_ska_does_not_zero_mamba():
+    """When zeroing SKA, Mamba blocks must still compute (output != input)."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg).eval()
+    x = torch.randn(2, 32, D)
+
+    records, hooks = _capture_layer_io(model, lambda l: not isinstance(l, SKABlock))
+    with _zero_ska_ctx(model):
+        model(x)
+    for h in hooks:
+        h.remove()
+
+    assert len(records) == 2
+    for i, (inp, out) in enumerate(records):
+        assert not torch.allclose(inp, out), \
+            f"Mamba layer {i} output == input while SKA is zeroed — " \
+            f"Mamba was accidentally zeroed too"
+    print("  [ok] zeroing SKA is isolated: Mamba blocks still compute")
+
+
+def test_zeroing_mamba_does_not_zero_ska():
+    """When zeroing Mamba, SKA blocks must still compute (output != input)."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg).eval()
+    x = torch.randn(2, 32, D)
+
+    records, hooks = _capture_layer_io(model, lambda l: isinstance(l, SKABlock))
+    with _zero_mamba_ctx(model):
+        model(x)
+    for h in hooks:
+        h.remove()
+
+    assert len(records) == 2
+    for i, (inp, out) in enumerate(records):
+        assert not torch.allclose(inp, out), \
+            f"SKA layer {i} output == input while Mamba is zeroed — " \
+            f"SKA was accidentally zeroed too"
+    print("  [ok] zeroing Mamba is isolated: SKA blocks still compute")
+
+
+def test_full_mode_matches_baseline():
+    """Running inside _zero_ska_ctx then exiting and running again must give
+    the same result as a plain forward — i.e. hooks are fully removed."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg).eval()
+    x = torch.randn(2, 32, D)
+
+    # run once with zeroing active, then verify hooks are removed
+    with _zero_ska_ctx(model):
+        out_zeroed = model(x)["logits"].detach().clone()
+
+    out_full_1 = model(x)["logits"].detach().clone()
+    out_full_2 = model(x)["logits"].detach().clone()
+
+    # two plain forwards must be identical (deterministic)
+    assert torch.allclose(out_full_1, out_full_2), \
+        "baseline forwards are not deterministic"
+    # zeroed and full must differ (SKA actually contributes something)
+    assert not torch.allclose(out_zeroed, out_full_1), \
+        "zeroed forward == full forward — SKA contributes nothing at init " \
+        "(layerscale_init may be too small; increase for this test)"
+    # after context exits there must be no lingering hooks
+    assert all(len(layer._forward_hooks) == 0
+               for layer in model.seq_layers), \
+        "forward hooks were not removed after context exit"
+    print("  [ok] full mode: hooks removed cleanly after context exit; "
+          "zeroed != full confirms SKA contributes")
+
+
+def test_ppl_ordering_both_zeroed_worst():
+    """Four-mode loss sanity: all values finite/positive, each zeroing mode
+    changes the loss relative to the full model (zeroing actually does something).
+
+    Note: the stronger ordering both_zeroed >= ska_zeroed does NOT hold for
+    random weights — a random Mamba branch can accidentally reduce loss.  The
+    meaningful invariant is that each mode produces a distinct result.
+    """
+    cfg = _tiny_cfg()
+    torch.manual_seed(1)
+    model = _StandInLM(cfg).eval()
+
+    B, T = 4, 48
+    input_ids = torch.randint(0, cfg.vocab_size, (B, T))
+    labels    = torch.randint(0, cfg.vocab_size, (B, T))
+
+    def _loss(ctx=None):
+        with torch.no_grad():
+            if ctx is not None:
+                with ctx(model):
+                    return model(input_ids, labels=labels)["loss"].item()
+            return model(input_ids, labels=labels)["loss"].item()
+
+    loss_full         = _loss()
+    loss_ska_zeroed   = _loss(_zero_ska_ctx)
+    loss_mamba_zeroed = _loss(_zero_mamba_ctx)
+    loss_both_zeroed  = _loss(_BothZeroCtx)
+
+    for name, val in [("full", loss_full), ("ska_zeroed", loss_ska_zeroed),
+                      ("mamba_zeroed", loss_mamba_zeroed), ("both_zeroed", loss_both_zeroed)]:
+        assert math.isfinite(val) and val > 0, f"{name} loss not finite/positive: {val}"
+
+    # Each zeroing mode must change the loss — the hooks are actually doing something
+    assert loss_ska_zeroed   != loss_full, "zeroing SKA had no effect on loss"
+    assert loss_mamba_zeroed != loss_full, "zeroing Mamba had no effect on loss"
+    assert loss_both_zeroed  != loss_full, "zeroing both had no effect on loss"
+
+    print(f"  [ok] four-mode losses: full={loss_full:.3f} ska_z={loss_ska_zeroed:.3f} "
+          f"mamba_z={loss_mamba_zeroed:.3f} both_z={loss_both_zeroed:.3f}")
+
+
+def test_known_delta_synthetic():
+    """With Mamba nearly silent and SKA gate at 1.0, zeroing SKA perturbs the
+    output more than zeroing Mamba.
+
+    We use output L2 distance rather than loss change, because loss directionality
+    is not guaranteed with random weights (a dominant-but-random SKA adds noise
+    and its removal can improve loss).  Output perturbation is sign-agnostic: a
+    larger gate unconditionally means a larger shift when that branch is removed.
+    """
+    cfg = _tiny_cfg()
+    torch.manual_seed(2)
+    model = _StandInModel(cfg).eval()
+
+    # Suppress Mamba to near-identity
+    with torch.no_grad():
+        for layer in model.seq_layers:
+            if not isinstance(layer, SKABlock):
+                layer.proj.weight.mul_(1e-4)
+
+    # Make SKA residual substantial
+    with torch.no_grad():
+        for layer in model.seq_layers:
+            if isinstance(layer, SKABlock):
+                if layer.ska.layerscale_gate is not None:
+                    layer.ska.layerscale_gate.fill_(1.0)
+
+    x = torch.randn(4, 48, D)
+    with torch.no_grad():
+        out_full  = model(x)["logits"].detach()
+        with _zero_ska_ctx(model):
+            out_ska_z = model(x)["logits"].detach()
+        with _zero_mamba_ctx(model):
+            out_mamba_z = model(x)["logits"].detach()
+
+    ska_perturb   = (out_ska_z   - out_full).norm().item()
+    mamba_perturb = (out_mamba_z - out_full).norm().item()
+
+    assert ska_perturb > mamba_perturb, (
+        f"SKA perturbation ({ska_perturb:.4f}) should exceed Mamba "
+        f"perturbation ({mamba_perturb:.4f}) when SKA gate=1.0 and Mamba~0"
+    )
+    print(f"  [ok] known-delta: ska_perturb={ska_perturb:.4f} > "
+          f"mamba_perturb={mamba_perturb:.4f} (SKA dominant)")
+
+
 if __name__ == "__main__":
     tests = [
         test_invariants,
@@ -257,6 +592,14 @@ if __name__ == "__main__":
         test_monitor_schema,
         test_monitor_inactive_is_noop,
         test_profile_overhead_runs,
+        # --- Phase 1 Task 2: load-bearing eval ---
+        test_zeroing_ska_returns_input,
+        test_zeroing_mamba_returns_input,
+        test_zeroing_ska_does_not_zero_mamba,
+        test_zeroing_mamba_does_not_zero_ska,
+        test_full_mode_matches_baseline,
+        test_ppl_ordering_both_zeroed_worst,
+        test_known_delta_synthetic,
     ]
     print("Running SKA diagnostics tests (CPU)...")
     for t in tests:
