@@ -230,6 +230,157 @@ class SKAHealthMonitor:
         return out
 
 
+class GradFlowMonitor:
+    """Backward hook-based gradient flow probe for SKA vs non-SKA branches.
+
+    Registers param.register_hook on the projection weights of SKA and non-SKA
+    (Mamba) seq blocks. Each hook fires once per backward per weight and costs
+    a single .norm() call -- cheap relative to the backward itself.
+
+    Two quantities are tracked per SKA layer:
+      - Gradient norms on key/query/value/out_proj weights, compared to the
+        gradient norms on non-SKA (Mamba) Linear weights.
+      - Approximate Jacobian rank: the number of singular values of the
+        key_proj gradient matrix that exceed `rank_sv_threshold * sigma_max`.
+        Falling toward 1 means the optimizer sees SKA as effectively rank-1;
+        full rank is healthier.
+
+    The central alarm metric is::
+
+        ska/grad_norm_ratio = mean(||grad_SKA||) / mean(||grad_Mamba||)
+
+    Values < 0.1 (SKA 10x+ weaker than Mamba) indicate SKA is not receiving
+    useful gradient signal and the per-group LR ratios likely need adjustment
+    (see train_ska_deepspeed.py).
+
+    Usage (same pattern as SKAHealthMonitor)::
+
+        monitor = GradFlowMonitor(raw_model)
+        ...
+        with monitor.capture():
+            model(**batch)["loss"].backward()
+        metrics = monitor.collect()
+        wandb.log(metrics, step=step)
+
+    Metrics emitted:
+      ska/grad_norm_ratio        -- mean||grad_SKA|| / mean||grad_Mamba||
+      ska/grad_norm_ska_mean     -- mean gradient norm across SKA layers
+      ska/grad_norm_mamba_mean   -- mean gradient norm across non-SKA layers
+      ska/LN/grad_norm           -- mean gradient norm for layer N
+      ska/LN/jacobian_rank       -- # SVs of key_proj gradient above threshold
+      ska/LN/jacobian_rank_frac  -- jacobian_rank / total singular values
+    """
+
+    def __init__(self, model, ska_cls=None, mamba_cls=None, prefix="ska",
+                 rank_sv_threshold=0.01):
+        self.ska_cls, self.mamba_cls = _resolve_block_classes(ska_cls, mamba_cls)
+        self.prefix = prefix
+        self.rank_sv_threshold = rank_sv_threshold
+        self.active = False
+        # layer_idx -> {"is_ska": bool, "norms": [], "key_grad": tensor|None}
+        self._buf = {}
+        self._hooks = []
+        self._register(model)
+
+    def _register(self, model):
+        layers = getattr(model, "seq_layers", None)
+        if layers is None:
+            raise ValueError("model has no .seq_layers; cannot attach GradFlowMonitor")
+        for idx, layer in enumerate(layers):
+            is_ska = isinstance(layer, self.ska_cls)
+            self._buf[idx] = {"is_ska": is_ska, "norms": [], "key_grad": None}
+            if is_ska:
+                ska = layer.ska
+                for attr in ("key_proj", "query_proj", "value_proj", "out_proj"):
+                    proj = getattr(ska, attr, None)
+                    if proj is not None and proj.weight.requires_grad:
+                        self._hooks.append(
+                            proj.weight.register_hook(
+                                self._make_hook(idx, capture_for_rank=(attr == "key_proj"))))
+            else:
+                for _, mod in layer.named_modules():
+                    if isinstance(mod, torch.nn.Linear) and mod.weight.requires_grad:
+                        self._hooks.append(
+                            mod.weight.register_hook(self._make_hook(idx, False)))
+
+    def _make_hook(self, idx, capture_for_rank):
+        def hook(grad):
+            if not self.active:
+                return
+            g = grad.detach().float()
+            self._buf[idx]["norms"].append(g.norm())
+            if capture_for_rank and self._buf[idx]["key_grad"] is None:
+                self._buf[idx]["key_grad"] = g.clone()
+        return hook
+
+    def remove(self):
+        for h in self._hooks:
+            h.remove()
+        self._hooks = []
+
+    @contextmanager
+    def capture(self):
+        """Activate the hooks for the duration of one forward+backward pass."""
+        for v in self._buf.values():
+            v["norms"] = []
+            v["key_grad"] = None
+        self.active = True
+        try:
+            yield self
+        finally:
+            self.active = False
+
+    def collect(self):
+        """Reduce buffered gradient records into a flat wandb-ready dict.
+
+        Returns {} if no backward was run since the last capture() call.
+        The SKA/Mamba split mirrors SKAHealthMonitor: layers that are neither
+        ska_cls nor mamba_cls are bucketed with non-SKA for the ratio.
+        """
+        if not any(v["norms"] for v in self._buf.values()):
+            return {}
+
+        p = self.prefix
+        out = {}
+        ska_means, mamba_means = [], []
+
+        for idx in sorted(self._buf):
+            rec = self._buf[idx]
+            if not rec["norms"]:
+                continue
+            mean_norm = torch.stack(rec["norms"]).mean()
+            out[f"{p}/L{idx}/grad_norm"] = float(mean_norm)
+
+            if rec["is_ska"]:
+                ska_means.append(mean_norm)
+                if rec["key_grad"] is not None:
+                    sv = torch.linalg.svdvals(rec["key_grad"])
+                    threshold = float(sv.max()) * self.rank_sv_threshold
+                    rank = int((sv > threshold).sum().item())
+                    out[f"{p}/L{idx}/jacobian_rank"] = rank
+                    out[f"{p}/L{idx}/jacobian_rank_frac"] = (
+                        rank / sv.shape[0] if sv.shape[0] > 0 else 0.0)
+            else:
+                mamba_means.append(mean_norm)
+
+        # Aggregate ratio metric
+        if ska_means:
+            ska_m = torch.stack(ska_means).mean()
+            out[f"{p}/grad_norm_ska_mean"] = float(ska_m)
+        if mamba_means:
+            mam_m = torch.stack(mamba_means).mean()
+            out[f"{p}/grad_norm_mamba_mean"] = float(mam_m)
+        if ska_means and mamba_means:
+            out[f"{p}/grad_norm_ratio"] = float(ska_m / (mam_m + 1e-12))
+
+        # Clear buffer
+        for v in self._buf.values():
+            v["norms"] = []
+            v["key_grad"] = None
+
+        return out
+
+
 def profile_overhead(model, batch_fn, monitor, n_warmup=2, n_iter=10, device="cpu"):
     """Measure the amortized cost of a diagnostic step vs a plain step.
 

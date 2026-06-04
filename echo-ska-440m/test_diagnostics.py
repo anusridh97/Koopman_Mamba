@@ -25,7 +25,7 @@ import torch.nn as nn
 from koopman_lm.config import KoopmanLMConfig
 from koopman_lm.ska import SKAModule
 from koopman_lm.model import SKABlock
-from koopman_lm.diagnostics import SKAHealthMonitor, profile_overhead
+from koopman_lm.diagnostics import SKAHealthMonitor, GradFlowMonitor, profile_overhead
 
 
 torch.manual_seed(0)
@@ -583,6 +583,158 @@ def test_known_delta_synthetic():
           f"mamba_perturb={mamba_perturb:.4f} (SKA dominant)")
 
 
+# ---------------------------------------------------------------------------
+# 6. Gradient-flow tracking (Phase 1, Task 3)
+# ---------------------------------------------------------------------------
+#
+# GradFlowMonitor registers param.register_hook on SKA projection weights and
+# non-SKA (Mamba) Linear weights. Tests verify:
+#   a. Schema -- keys present and finite after a real backward pass.
+#   b. No-backward noop -- collect() is empty without calling .backward().
+#   c. Frozen SKA -- ratio absent when SKA params have requires_grad=False.
+#   d. Both branches active -- ratio is finite and positive.
+#   e. Jacobian rank (unit) -- SVD rank logic on synthetic matrices.
+#   f. Jacobian rank (integration) -- rank from a real backward is in [1, max].
+
+from koopman_lm.diagnostics import GradFlowMonitor  # noqa: F811 (already imported above)
+
+
+def test_grad_flow_schema():
+    """After a backward pass, GradFlowMonitor emits the expected keys, all finite."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg)
+    monitor = GradFlowMonitor(model, ska_cls=SKABlock)
+    assert monitor._buf  # hooks registered
+
+    B, T = 2, 40
+    with monitor.capture():
+        out = model(torch.randn(B, T, D))
+        out["loss"].backward()
+    metrics = monitor.collect()
+
+    assert "ska/grad_norm_ratio" in metrics, "missing grad_norm_ratio"
+    assert "ska/grad_norm_ska_mean" in metrics
+    assert "ska/grad_norm_mamba_mean" in metrics
+    for idx in (1, 3):   # SKA layers in _tiny_cfg
+        k_norm = f"ska/L{idx}/grad_norm"
+        k_rank = f"ska/L{idx}/jacobian_rank"
+        k_frac = f"ska/L{idx}/jacobian_rank_frac"
+        assert k_norm in metrics, f"missing {k_norm}"
+        assert k_rank in metrics, f"missing {k_rank}"
+        assert k_frac in metrics, f"missing {k_frac}"
+        assert math.isfinite(metrics[k_norm]) and metrics[k_norm] > 0, k_norm
+        assert isinstance(metrics[k_rank], int) and metrics[k_rank] >= 1, k_rank
+        assert 0.0 < metrics[k_frac] <= 1.0, k_frac
+    print(f"  [ok] grad_flow schema: {len(metrics)} keys, "
+          f"ratio={metrics['ska/grad_norm_ratio']:.3e}")
+
+
+def test_grad_flow_no_backward():
+    """Without calling .backward(), collect() returns an empty dict."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg)
+    monitor = GradFlowMonitor(model, ska_cls=SKABlock)
+
+    with monitor.capture():
+        model(torch.randn(2, 16, D))   # forward only, no backward
+    assert monitor.collect() == {}, "no-backward should produce empty dict"
+    print("  [ok] grad_flow no-backward: collect() == {}")
+
+
+def test_grad_flow_frozen_ska():
+    """Freezing SKA weights means no gradient reaches them.
+    The ratio key must be absent (SKA has nothing to report), while Mamba
+    still accumulates gradient normally.
+    """
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg)
+    monitor = GradFlowMonitor(model, ska_cls=SKABlock)
+
+    # Freeze all four SKA projection weights AFTER hook registration.
+    # requires_grad=False at backward time means autograd never calls the hook.
+    for layer in model.seq_layers:
+        if isinstance(layer, SKABlock):
+            for attr in ("key_proj", "query_proj", "value_proj", "out_proj"):
+                getattr(layer.ska, attr).weight.requires_grad_(False)
+
+    with monitor.capture():
+        out = model(torch.randn(2, 40, D))
+        out["loss"].backward()
+    metrics = monitor.collect()
+
+    assert "ska/grad_norm_ratio" not in metrics, (
+        "ratio should be absent when SKA is frozen (no SKA gradients)")
+    assert "ska/grad_norm_mamba_mean" in metrics, "Mamba should still accumulate gradient"
+    assert metrics["ska/grad_norm_mamba_mean"] > 0, "Mamba gradient norm should be positive"
+    print(f"  [ok] grad_flow frozen SKA: ratio absent, "
+          f"mamba_mean={metrics['ska/grad_norm_mamba_mean']:.3e}")
+
+
+def test_grad_flow_active_both_branches():
+    """With both branches active (normal init), ratio is finite and positive."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg)
+    monitor = GradFlowMonitor(model, ska_cls=SKABlock)
+
+    with monitor.capture():
+        out = model(torch.randn(2, 40, D))
+        out["loss"].backward()
+    metrics = monitor.collect()
+
+    ratio = metrics["ska/grad_norm_ratio"]
+    assert math.isfinite(ratio) and ratio > 0, (
+        f"ratio should be finite and positive; got {ratio}")
+    print(f"  [ok] grad_flow active: ratio={ratio:.3e}")
+
+
+def test_jacobian_rank_unit():
+    """SVD rank logic in isolation: rank-1 outer product -> rank 1;
+    random full-rank matrix -> rank min(m, n).
+    """
+    threshold = 0.01   # matches GradFlowMonitor default
+
+    # Rank-1: outer product has exactly one non-zero singular value
+    u = torch.randn(H * R, 1)   # (64, 1)
+    v = torch.randn(1, D)       # (1, 64)
+    G_r1 = (u @ v).float()
+    sv = torch.linalg.svdvals(G_r1)
+    approx_rank = int((sv > sv.max() * threshold).sum().item())
+    assert approx_rank == 1, f"outer-product rank should be 1, got {approx_rank}"
+
+    # Full-rank random matrix: nearly all singular values are O(1).
+    # Allow up to 2 SVs below the 1%-of-max threshold due to statistical
+    # fluctuation at the tail of a square Gaussian random matrix.
+    G_full = torch.randn(H * R, D).float()
+    sv_full = torch.linalg.svdvals(G_full)
+    approx_rank_full = int((sv_full > sv_full.max() * threshold).sum().item())
+    expected = min(H * R, D)
+    assert approx_rank_full >= expected - 2, (
+        f"random matrix rank should be ~{expected}, got {approx_rank_full}")
+    print(f"  [ok] jacobian_rank unit: rank-1 -> 1, full-rank -> {approx_rank_full} (~{expected})")
+
+
+def test_jacobian_rank_integration():
+    """Rank captured from a real backward pass is in the valid range [1, min(rows, cols)]."""
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg)
+    monitor = GradFlowMonitor(model, ska_cls=SKABlock)
+
+    with monitor.capture():
+        out = model(torch.randn(2, 40, D))
+        out["loss"].backward()
+    metrics = monitor.collect()
+
+    max_rank = min(H * R, D)   # min(4*16, 64) = 64
+    for idx in (1, 3):
+        rank = metrics.get(f"ska/L{idx}/jacobian_rank")
+        assert rank is not None, f"missing jacobian_rank for L{idx}"
+        assert 1 <= rank <= max_rank, (
+            f"L{idx} rank {rank} outside [1, {max_rank}]")
+        frac = metrics[f"ska/L{idx}/jacobian_rank_frac"]
+        assert 0.0 < frac <= 1.0, f"rank_frac {frac} out of (0, 1]"
+    print(f"  [ok] jacobian_rank integration: ranks in [1, {max_rank}]")
+
+
 if __name__ == "__main__":
     tests = [
         test_invariants,
@@ -600,6 +752,13 @@ if __name__ == "__main__":
         test_full_mode_matches_baseline,
         test_ppl_ordering_both_zeroed_worst,
         test_known_delta_synthetic,
+        # --- Phase 1 Task 3: gradient-flow tracking ---
+        test_grad_flow_schema,
+        test_grad_flow_no_backward,
+        test_grad_flow_frozen_ska,
+        test_grad_flow_active_both_branches,
+        test_jacobian_rank_unit,
+        test_jacobian_rank_integration,
     ]
     print("Running SKA diagnostics tests (CPU)...")
     for t in tests:
