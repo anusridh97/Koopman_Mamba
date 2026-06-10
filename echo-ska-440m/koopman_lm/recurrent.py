@@ -10,10 +10,10 @@ the new training math exactly:
   * eta/gamma applied via the SKAModule's own resolved values (fixed 1.0 for
     440M), and the LayerScale gate applied on the output.
 
-State per SKA layer is O(r^2): {G, M, C_v, z_last}. This version re-Choleskys G
-each step (O(r^3)); it is CORRECT and consistent with training. The O(r^2)
-rank-1 cholupdate (NeurIPS "It Cancels") is a drop-in speed optimization for
-the GPU kernel pass -- see step() note.
+State per SKA layer is O(r^2): {G, M, C_v, z_last, L}. This version carries the
+Cholesky factor L of G and updates it with an O(r^2) rank-1 cholupdate per token
+(NeurIPS "It Cancels"), so there is no per-token re-Cholesky. The factor is
+seeded once from the prompt stats during prefill (the only O(r^3), paid once).
 
 Mamba-2 decode is unchanged (uses mamba_ssm's built-in step()).
 """
@@ -49,11 +49,13 @@ def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
 
 class SKAState:
     """Fixed-size recurrent state for one SKA layer (beta-gated)."""
-    __slots__ = ['G', 'M', 'C_v', 'z_last']
+    __slots__ = ['G', 'M', 'C_v', 'z_last', 'L']
 
     def __init__(self, B, H, r, P, device, dtype=torch.float32, ridge_eps=1e-3):
         eye = torch.eye(r, device=device, dtype=dtype)
         self.G = ridge_eps * eye.reshape(1, 1, r, r).expand(B, H, r, r).clone()
+        self.L = math.sqrt(ridge_eps) * eye.reshape(1, 1, r, r) \
+                     .expand(B, H, r, r).clone()      # carried Cholesky of G
         self.M = torch.zeros(B, H, r, r, device=device, dtype=dtype)
         self.C_v = torch.zeros(B, H, P, r, device=device, dtype=dtype)
         self.z_last = None    # (B,H,r) previous L2-normalized key (for boundary M)
@@ -136,6 +138,11 @@ class RecurrentKoopmanLM(nn.Module):
             st.M = torch.einsum('bhtr,bhts->bhrs', zbp[:, :, 1:], zp[:, :, :-1])
         st.C_v = torch.einsum('bhtp,bhtr->bhpr', vp, zbp)
         st.z_last = zp[:, :, -1]          # (B,H,r)
+        # seed the carried factor from the prompt stats (one O(r^3), total)
+        Gs = 0.5 * (st.G + st.G.transpose(-1, -2)).reshape(B * H, r, r)
+        Ls, info = torch.linalg.cholesky_ex(Gs)
+        Lj, _ = torch.linalg.cholesky_ex(Gs + 1e-4 * eye)
+        st.L = torch.where((info > 0).reshape(-1, 1, 1), Lj, Ls).reshape(B, H, r, r)
         # seed the short-conv cache with the last (K-1) normed inputs so the
         # first decode step's conv sees correct local history.
         if getattr(ska_block, 'short_conv', None) is not None:
@@ -292,8 +299,9 @@ class RecurrentKoopmanLM(nn.Module):
         Also applies the parallel short-conv path from a cached local history of
         normed inputs, so generation matches the trained SKABlock.forward.
 
-        Re-Choleskys G each step (O(r^3)). SPEED NOTE: carry L + rank-1
-        cholupdate by w = sqrt(beta) * z_n for O(r^2) ("It Cancels").
+        Reads the carried factor L (no per-token re-Cholesky), then writes token
+        t into the state and applies an O(r^2) rank-1 cholupdate to L by
+        w = sqrt(beta) * z_n ("It Cancels").
         """
         B = x.shape[0]
         ska = ska_block.ska
@@ -304,13 +312,9 @@ class RecurrentKoopmanLM(nn.Module):
         z_n, zb_n, zq_n, v = self._proj_norm(ska, h)
         z1 = z_n[:, 0]; zb1 = zb_n[:, 0]; zq1 = zq_n[:, 0]; v1 = v[:, 0]   # (B,H,*)
 
-        # --- READ FIRST: query the operator built from tokens < t ---
+        # --- READ FIRST: carried factor over tokens < t (no re-Cholesky) ---
         N = B * H
-        G = 0.5 * (st.G + st.G.transpose(-1, -2))
-        eye = torch.eye(r, device=x.device, dtype=torch.float32)
-        L, info = torch.linalg.cholesky_ex(G.reshape(N, r, r))
-        Lj, _ = torch.linalg.cholesky_ex(G.reshape(N, r, r) + 1e-4 * eye)
-        L = torch.where((info > 0).reshape(N, 1, 1), Lj, L)
+        L = st.L.reshape(N, r, r)
         y = _ska_apply_whitened(
             L, st.M.reshape(N, r, r), st.C_v.reshape(N, P, r),
             zq1.reshape(N, r, 1), ska.power_K, ska._resolve_gamma())
@@ -342,6 +346,12 @@ class RecurrentKoopmanLM(nn.Module):
             st.M = st.M + torch.einsum('bhr,bhs->bhrs', zb1, st.z_last)
         st.C_v = st.C_v + torch.einsum('bhp,bhr->bhpr', v1, zb1)
         st.z_last = z1
+        # rank-1 cholupdate of the carried factor: beta z z^T = w w^T with
+        # w = sqrt(beta) z. Since z1 is unit-norm, beta == ||zb1||.
+        from koopman_lm.factor_scan import rank1_chol_update_
+        beta1 = zb1.norm(dim=-1, keepdim=True)
+        w1 = beta1.clamp_min(1e-12).sqrt() * z1
+        rank1_chol_update_(st.L.reshape(N, r, r), w1.reshape(N, r))
         return out
 
     def _mamba_step(self, mamba_block, x, idx):
@@ -424,5 +434,5 @@ class RecurrentKoopmanLM(nn.Module):
         total += n_mamba * batch_size * (d_inner * cfg.d_conv + d_inner * cfg.d_state) * 4
         H, r, P = cfg.ska_n_heads, cfg.ska_rank, cfg.head_dim
         n_ska = len(cfg.ska_layer_indices)
-        total += n_ska * batch_size * H * (r * r + r * r + P * r + r) * 4
+        total += n_ska * batch_size * H * (r * r + r * r + P * r + r + r * r) * 4
         return total
