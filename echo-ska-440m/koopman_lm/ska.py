@@ -449,9 +449,19 @@ class SKAModule(nn.Module):
                 # within-chunk staleness; reuses the same verified ska_core.
                 # Cost: B*T*H solves instead of B*nchunks*H.
                 from koopman_lm.chunk_stats_exact_torch import exact_stats
+                from koopman_lm.factor_scan import all_prefix_chol, ska_core_given_L
                 Gf, Mf, Cf, qf, (Be, Te, He, Pe) = exact_stats(
                     z_n, zb_n, zq_n, v_f, self.ridge_eps)
-                Y = ska_core(Gf, Mf, Cf, qf, self.power_K)            # (N,P,1)
+                # factor scan over per-token update vectors (numerics-only):
+                # w_t = sqrt(beta_t) z_t  =>  w w^T = beta z z^T (the G increment)
+                w = beta_f.clamp_min(0).sqrt().unsqueeze(-1) * z_n     # (B,T,H,r)
+                w = w.permute(0, 2, 1, 3).reshape(Be * He, Te, r)
+                # exact_stats builds Gf = (ridge + 1e-4)*I + prefix; factor the
+                # SAME matrix so backward's L matches the saved Gf exactly.
+                Lf = all_prefix_chol(w, self.ridge_eps + 1e-4, downsweep='qr')
+                Lf = Lf.reshape(Be, He, Te, r, r).permute(0, 2, 1, 3, 4) \
+                       .reshape(Be * Te * He, r, r)
+                Y = ska_core_given_L(Gf, Mf, Cf, qf, Lf, self.power_K)  # (N,P,1)
                 gamma_apply = self._resolve_gamma()
                 if isinstance(gamma_apply, float):
                     if gamma_apply != 1.0:
