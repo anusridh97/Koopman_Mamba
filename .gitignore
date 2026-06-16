@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editable-install / packaging artifacts
+*.so
+
+# OS
+.DS_Store
+
+# Data / checkpoints / runs (large, not source)
+*.bin
+*.pt
+*.safetensors
+wandb/
+tok_*/
+*-output/
+koopman-*-fast/
+results*.json
