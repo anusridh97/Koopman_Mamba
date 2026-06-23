@@ -23,9 +23,9 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
       - name: Import sanity (package must import CPU-only)
-        run: python -c "import koopman_lm, eval_harness; print(list(koopman_lm.CONFIG_FACTORIES))"
+        run: python -c "import koopman_lm; import koopman_lm.evaluation.harness; print(list(koopman_lm.CONFIG_FACTORIES))"
       - name: Correctness suite (CPU subset, < 2 min)
-        run: pytest -m "correctness and not gpu" -q
+        run: pytest code-tests/ -m "correctness and not gpu" -q
 
   # GPU job: full-model parity + bf16 kernels + e2e smoke test.
   # Requires a self-hosted CUDA runner with mamba_ssm/causal-conv1d installed;

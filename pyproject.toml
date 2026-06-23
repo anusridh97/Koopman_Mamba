@@ -19,6 +19,7 @@ dependencies = [
     "datasets>=2.18",       # HF datasets for pretokenize + BABILong eval
     "safetensors",
     "wandb",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -35,13 +36,13 @@ dev = [
 ]
 
 [project.scripts]
-koopman-train = "koopman_lm.train_fast:main"
+koopman-train = "koopman_lm.training.train:main"
 
 [tool.setuptools.packages.find]
 include = ["koopman_lm", "koopman_lm.*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["code-tests"]
 markers = [
     "correctness: numerical correctness gate (runs in CI before any training commit)",
     "gpu: requires a CUDA device (mamba_ssm backbone / bf16 kernels); auto-skipped on CPU",

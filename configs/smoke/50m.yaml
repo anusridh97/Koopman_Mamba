@@ -1,0 +1,22 @@
+# Echo/SKA paper Section 3.4 — 50M model exact spec:
+# d=448, N=16, 4 SKA layers at {3,7,11,15}, r=56, H=7, S=64, d_state=64
+# Production SKA policy: eta=gamma=1 fixed, LayerScale, short-conv ON
+d_model: 448
+n_layers: 16
+vocab_size: 32000
+d_state: 64
+ska_n_heads: 7
+ska_rank: 56
+ska_chunk_size: 64
+ska_layer_indices: [3, 7, 11, 15]
+mlp_gated: false
+ska_eta_learnable: false
+ska_eta_value: 1.0
+ska_gamma_learnable: false
+ska_gamma_value: 1.0
+ska_gamma_clamp: null
+ska_layerscale: true
+ska_layerscale_init: 0.0001
+ska_out_proj_std: 0.02
+ska_short_conv: true
+ska_short_conv_kernel: 4

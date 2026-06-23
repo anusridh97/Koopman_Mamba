@@ -1,0 +1,8 @@
+d_model: 768
+n_layers: 24
+vocab_size: 32000
+d_state: 128
+ska_n_heads: 12
+ska_rank: 48
+ska_layer_indices: [3, 7, 11, 15, 19, 23]
+mlp_gated: false
