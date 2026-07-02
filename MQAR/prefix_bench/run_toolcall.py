@@ -29,11 +29,13 @@ from prefix_bench.train_eval import train_and_eval, evaluate
 
 # (label, kind, ska_mode, attn_mode)
 CONDITIONS = [
-    ("mamba",         "mamba", "none",   "causal"),
-    ("attn/causal",   "attn",  "none",   "causal"),
-    ("attn/prefixLM", "attn",  "none",   "prefix_lm"),
-    ("ska/prefix",    "ska",   "prefix", "causal"),
-    ("ska/causal",    "ska",   "causal", "causal"),
+    ("mamba",         "mamba", "none",    "causal"),
+    ("attn/causal",   "attn",  "none",    "causal"),
+    ("attn/prefixLM", "attn",  "none",    "prefix_lm"),
+    ("attn/segment",  "attn",  "none",    "segment"),
+    ("ska/prefix",    "ska",   "prefix",  "causal"),
+    ("ska/causal",    "ska",   "causal",  "causal"),
+    ("ska/release",   "ska",   "release", "causal"),
 ]
 
 
@@ -57,6 +59,10 @@ def main():
     ap.add_argument("--num-keys", dest="num_keys", type=int, default=16)
     ap.add_argument("--num-query", dest="num_query", type=int, default=8)
     ap.add_argument("--overwrite-prob", dest="overwrite_prob", type=float, default=0.4)
+    ap.add_argument("--release-group-size", dest="release_group_size", type=int, default=64,
+                    help="tokens per CSP release group in the trace (ska/release, "
+                         "attn/segment). Note: ska/release gathers a per-token operator "
+                         "(O(T*r^2) memory) -- keep the eval context / batch modest.")
     ap.add_argument("--vocab-size", type=int, default=512)
     ap.add_argument("--d-model", dest="d_model", type=int, default=128)
     ap.add_argument("--n-layers", dest="n_layers", type=int, default=4)
@@ -83,7 +89,8 @@ def main():
     def sample_fn(bs):
         return make_toolcall_batch(
             bs, args.train_context, args.num_keys, args.num_query,
-            vocab_size=args.vocab_size, overwrite_prob=args.overwrite_prob, device="cpu")
+            vocab_size=args.vocab_size, overwrite_prob=args.overwrite_prob,
+            release_group_size=args.release_group_size, device="cpu")
 
     # Fixed held-out eval batches, one per evaluation context length.
     eval_batches = {}
@@ -92,7 +99,7 @@ def main():
         eval_batches[ctx] = make_toolcall_batch(
             args.eval_batch, ctx, args.num_keys, args.num_query,
             vocab_size=args.vocab_size, overwrite_prob=args.overwrite_prob,
-            device="cpu", generator=g)
+            release_group_size=args.release_group_size, device="cpu", generator=g)
 
     print(f"train_context={args.train_context} num_keys={args.num_keys} "
           f"num_query={args.num_query} overwrite_prob={args.overwrite_prob}")
