@@ -272,6 +272,80 @@ class SKABlock(nn.Module):
         y = self._retrieve(G, M, Cv, zq_perm)               # (B, H, P, T)
         return y.permute(0, 3, 1, 2)                        # (B, T, H, P)
 
+    def _segment_causal(self, z_f, zq_f, v_f, grp):
+        """
+        Causal Structured Prefixing scan (csp.py): one operator per release group,
+        fit from strictly-earlier groups, applied to that group's query tokens.
+
+        grp: (B, T) long, non-decreasing per row. Generalizes _causal (fixed chunks)
+        to arbitrary release-time groups (turns, semantic segments, per-token=fully
+        causal). Memory is O(T * r^2) for the per-token operator gather; for very long
+        contexts prefer few, coarse groups.
+        """
+        B, T, H, r = z_f.shape
+        P = v_f.shape[-1]
+        G = int(grp.max().item()) + 1
+        eye = torch.eye(r, device=z_f.device, dtype=z_f.dtype)
+
+        # Per-token outer products.
+        sG = torch.einsum('bthr,bths->bthrs', z_f, z_f)          # (B,T,H,r,r)
+        sC = torch.einsum('bthp,bthr->bthpr', v_f, z_f)          # (B,T,H,P,r)
+        sM = torch.einsum('bthr,bths->bthrs', z_f[:, 1:], z_f[:, :-1])  # (B,T-1,H,r,r)
+
+        # Sum per release group (scatter-add on the group axis).
+        def seg_sum(src, last_dims, gidx):
+            L = src.shape[1]
+            out = src.new_zeros(B, G, H, *last_dims)
+            idx = gidx[:, :L, None, None, None].expand(B, L, H, *last_dims)
+            return out.scatter_add_(1, idx, src)
+
+        segG = seg_sum(sG, (r, r), grp)
+        segC = seg_sum(sC, (P, r), grp)
+        segM = seg_sum(sM, (r, r), grp[:, 1:])   # lag term released with the later token
+
+        # Exclusive prefix-sum over groups: operator for group g uses groups < g.
+        def excl(seg):
+            cum = torch.cumsum(seg, dim=1)
+            out = torch.zeros_like(cum)
+            out[:, 1:] = cum[:, :-1]
+            return out
+
+        Gg = excl(segG) + self.ridge * eye
+        Mg = excl(segM)
+        Cg = excl(segC)
+
+        # Operators are per-group; queries are per-token, so we build the group
+        # operators explicitly and gather each token's operator by its group id.
+        BGH = B * G * H
+        evecs, inv = self._eig_inv(Gg.reshape(BGH, r, r))
+        Mf = Mg.reshape(BGH, r, r)
+        A_raw = self._right_solve(evecs, inv, Mf)                # (BGH,r,r)
+        B_v = self._right_solve(evecs, inv, Cg.reshape(BGH, P, r))
+        MGinvMt = A_raw @ Mf.transpose(-1, -2)
+        num = MGinvMt.diagonal(dim1=-2, dim2=-1).sum(-1)
+        den = Gg.reshape(BGH, r, r).diagonal(dim1=-2, dim2=-1).sum(-1).clamp(min=1e-6)
+        rho = (num / den).clamp(0.0, 1.0)
+        A_w = self._spectral_norm(A_raw) * torch.clamp(self.ssn_gamma, min=1.0, max=1.5)
+
+        A_w = A_w.reshape(B, G, H, r, r)
+        B_v = B_v.reshape(B, G, H, P, r)
+        rho = rho.reshape(B, G, H, 1, 1)
+
+        def gather_g(x5, last_dims):
+            idx = grp[:, :, None, None, None].expand(B, T, H, *last_dims)
+            return torch.gather(x5, 1, idx)
+
+        A_w_t = gather_g(A_w, (r, r))                            # (B,T,H,r,r)
+        B_v_t = gather_g(B_v, (P, r))                            # (B,T,H,P,r)
+        rho_t = gather_g(rho, (1, 1))                            # (B,T,H,1,1)
+
+        zq_col = zq_f.unsqueeze(-1)                              # (B,T,H,r,1)
+        Aq = zq_col
+        for _ in range(self.power_K):
+            Aq = A_w_t @ Aq
+        q_eff = ((1.0 - rho_t) * zq_col + rho_t * Aq) if self.use_rho_gate else Aq
+        return (B_v_t @ q_eff).squeeze(-1)                       # (B,T,H,P)
+
     def _causal(self, z_f, zq_f, v_f):
         """Chunk-causal exclusive prefix-sum path (no boundary given)."""
         B, T, H, r = z_f.shape
@@ -346,10 +420,13 @@ class SKABlock(nn.Module):
             z = z / max_norm
             zq = zq / max_norm
 
-            if w is None:
-                y_hat = self._causal(z, zq, v)
-            else:
+            release_grp = None if ctx is None else ctx.get("release_grp")
+            if w is not None:
                 y_hat = self._global(z, zq, v, w)
+            elif release_grp is not None:
+                y_hat = self._segment_causal(z, zq, v, release_grp)
+            else:
+                y_hat = self._causal(z, zq, v)
 
         y_hat = self.eta * y_hat.to(x.dtype)
         return x + self.out_proj(y_hat.reshape(B, T, H * P))
@@ -403,11 +480,13 @@ class HybridLM(nn.Module):
         if tie_embeddings:
             self.head.weight = self.embed.weight
 
-    def forward(self, x, prefix_weights=None, attn_bias=None, seg_ids=None):
+    def forward(self, x, prefix_weights=None, attn_bias=None, seg_ids=None,
+                release_grp=None):
         h = self.embed(x)
         if self.seg_embed is not None and seg_ids is not None:
             h = h + self.seg_embed(seg_ids)
-        ctx = {"prefix_weights": prefix_weights, "attn_bias": attn_bias}
+        ctx = {"prefix_weights": prefix_weights, "attn_bias": attn_bias,
+               "release_grp": release_grp}
         for seq, mlp in zip(self.seq_layers, self.mlp_layers):
             h = seq(h, ctx)
             h = mlp(h, ctx)

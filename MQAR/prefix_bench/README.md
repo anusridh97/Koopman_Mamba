@@ -118,6 +118,59 @@ What to look for: `ska/prefix` flat across context length (constant-memory
 sufficient statistics); attention degrading beyond its training length and paying
 quadratic compute; pure Mamba collapsing (memory cliff).
 
+## Causal Structured Prefixing (`csp.py`) — generalizing the chunk-causal mask
+
+The fixed chunk-causal SKA mask is a special case of a single rule:
+
+> **A token may use any structured object that was computable before that token.**
+
+Each item `α` (a raw token, or a *record*: a turn, a chunk summary, an entity table,
+a tool result, an SKA sufficient-statistic block, a learned memory slot) has a
+**release time** `ρ_α`, and may condition target token `x_t` only if `ρ_α < t`.
+Equivalently the mask over the combined `[raw ⊕ records]` stream is
+`A_{t,j} = 1[ρ_j < t]`. Raw tokens have `ρ(x_i)=i`; a record produced after chunk `c`
+(ending at `b_c`) has `ρ(r)=b_c`.
+
+In code this is a per-token **release group** `grp[t]` (non-decreasing in `t`): items
+in group `g` are released at the end of `g`; a token in group `g` uses groups strictly
+earlier than `g`, plus (for attention) causal context within its own group. The
+current fixed chunk-causal mask is `grp = arange(T)//chunk_size`; per-token release
+`grp = arange(T)` is fully causal; turn-aligned `grp` gives multi-span prefix-LM.
+
+New modes wired through `train_eval.build_conditioning`:
+
+| kind | mode        | effect |
+|------|-------------|--------|
+| ska  | `release`   | SKA fits **one operator per release group** from strictly-earlier groups (`SKABlock._segment_causal`) — generalizes fixed chunks to semantic segments/turns. |
+| attn | `segment`   | attention gets `segment_causal_bias(grp)` — earlier (closed) groups fully visible, causal within the group. |
+
+The two concrete instantiations:
+
+- **Method 1 — chat / stopped-prefix** (`chat_data.py`, `run_chat.py`): records are
+  released at turn boundaries; loss on assistant spans only. SKA accumulates
+  `G, M, C_v` over the prefix (earlier turns) and decodes — the paper's prefix mode,
+  multi-span. This matches chat SFT / agent inference shape.
+
+  ```bash
+  python -m prefix_bench.run_chat --device cuda --steps 4000 \
+      --n-rounds 4 --kv-per-round 6 --q-per-round 4 --num-keys 24
+  ```
+
+  Key comparison: `ska/release` and `attn/segment` (both handed the turn structure)
+  vs `ska/causal` (fixed chunks that cut across turns) and `attn/causal`.
+
+- **Method 2 — timestamped structured-prefix LM**: records released at chunk
+  boundaries during an ordinary document, loss on all tokens. The `release`/`segment`
+  plumbing is identical — any generator can emit `meta["release_grp"]` (and, for
+  heterogeneous records, append record slots to the stream with their own release
+  times via `csp.release_attn_bias`). The unified SKA statistics are
+  `G_t = εI + Σ_{ρ_α<t} z_α z_αᵀ`, `C_{v,t} = Σ_{ρ_α<t} v_α z_αᵀ`,
+  `M_t = Σ_{ρ_β<ρ_α<t} z_α z_βᵀ`.
+
+Efficiency note: `_segment_causal` solves one operator per group and gathers it per
+token (`O(T·r²)` memory for the gather). Use few, coarse groups for very long
+contexts; the number of groups sets the number of `O(r³)` solves.
+
 ## Notes
 
 - Self-contained: no `mamba_ssm`, no Triton. `SimpleMamba2` is a sequential-scan
