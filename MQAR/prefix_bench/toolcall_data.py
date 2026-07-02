@@ -56,6 +56,7 @@ def make_toolcall_batch(
     num_query: int,
     vocab_size: int = 8192,
     overwrite_prob: float = 0.4,
+    release_group_size: int = 64,
     device: str = "cpu",
     generator: Optional[torch.Generator] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
@@ -69,9 +70,15 @@ def make_toolcall_batch(
         num_keys:       distinct keys bound in the trace.
         num_query:      number of GET queries after SEP (<= num_keys).
         overwrite_prob: probability a key is SET more than once (tests recency).
+        release_group_size: tokens per Causal-Structured-Prefixing release group in
+                        the trace region (meta["release_grp"]). The query region is a
+                        single final group so every query sees the whole trace. Set
+                        small for finer causal granularity, large (>= context_len) to
+                        make the trace a single prefix group.
 
     Returns (x, y, loss_mask, prefix_mask, seg_ids, meta) with the same shapes and
-    semantics as mqar_data.make_mqar_batch.
+    semantics as mqar_data.make_mqar_batch. meta["release_grp"] is a (B, T) tensor of
+    release-group ids for the ska_mode="release" / attn_mode="segment" paths.
     """
     if num_query > num_keys:
         raise ValueError(f"num_query={num_query} > num_keys={num_keys}")
@@ -182,6 +189,16 @@ def make_toolcall_batch(
     seg_ids = torch.ones(B, T, dtype=torch.long, device=dev)
     seg_ids[:, : sep_pos + 1] = 0
 
+    # Release groups (CSP): trace positions [0, sep_pos] grouped into blocks of
+    # release_group_size tokens; the whole query region is one strictly-later group so
+    # every query reads from all trace groups.
+    grp = torch.zeros(T, dtype=torch.long, device=dev)
+    ctx_pos = torch.arange(sep_pos + 1, device=dev)
+    grp[: sep_pos + 1] = ctx_pos // max(1, release_group_size)
+    max_ctx_grp = int(grp[: sep_pos + 1].max().item())
+    grp[query_start:] = max_ctx_grp + 1
+    release_grp = grp.unsqueeze(0).expand(B, T).contiguous()
+
     meta = {
         "query_start": query_start,
         "sep_pos": sep_pos,
@@ -189,6 +206,8 @@ def make_toolcall_batch(
         "seq_len": T,
         "num_keys": num_keys,
         "num_query": num_query,
+        "release_grp": release_grp,
+        "n_release_groups": max_ctx_grp + 2,
     }
     return x, y, loss_mask, prefix_mask, seg_ids, meta
 
@@ -205,7 +224,15 @@ def _self_test():
     assert torch.equal((seg == 0).float(), pm)
     # answers are valid value tokens (>= KEY_BASE + num_keys)
     assert (y[lm.bool()] >= KEY_BASE + meta["num_keys"]).all()
-    print("toolcall_data self-test passed:", meta)
+    # release groups: non-decreasing, and every query is in a strictly-later group
+    # than every trace position (so queries see the whole trace).
+    grp = meta["release_grp"]
+    assert grp.shape == (B, T)
+    assert (grp[:, 1:] - grp[:, :-1] >= 0).all()
+    q0 = meta["query_start"]
+    assert (grp[:, q0:].min() > grp[:, :q0].max()).item()
+    print("toolcall_data self-test passed:",
+          {k: meta[k] for k in ("seq_len", "context_len", "n_release_groups")})
 
 
 if __name__ == "__main__":
