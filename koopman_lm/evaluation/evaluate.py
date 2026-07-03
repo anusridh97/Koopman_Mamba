@@ -73,7 +73,16 @@ def load_model(checkpoint, model_size="180m",
     else:
         cfg = build_config(model_size)
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    # The tokenizer that actually produced this checkpoint's vocab is saved
+    # alongside it by train.py's tokenizer.save_pretrained(ckpt_dir) -- load
+    # THAT rather than tokenizer_name, whose default differs from train.py's
+    # own CLI default. Both are 32k-vocab, so a mismatch would silently
+    # mismap every token id to the wrong embedding instead of erroring.
+    ckpt_dir = os.path.dirname(checkpoint)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     cfg = dataclasses.replace(cfg, vocab_size=len(tokenizer))   # frozen: use replace
@@ -134,6 +143,54 @@ def eval_held_out_ppl(model, device, tokenizer, max_seq_len=2048,
 
     dataset = WikiTextDataset(tokenizer=tokenizer, max_len=max_seq_len)
     loader = DataLoader(dataset, batch_size=batch_size)
+
+    model.eval()
+    total_loss = 0.0
+    total_tokens = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+            outputs = model(input_ids=input_ids, labels=labels)
+            loss = outputs["loss"]
+            n_tokens = labels.numel()
+            total_loss += loss.item() * n_tokens
+            total_tokens += n_tokens
+
+    avg_loss = total_loss / max(total_tokens, 1)
+    ppl = math.exp(min(avg_loss, 20))
+
+    print(f"  Tokens: {total_tokens:,}")
+    print(f"  Loss:   {avg_loss:.4f}")
+    print(f"  PPL:    {ppl:.2f}")
+
+    return {"loss": avg_loss, "ppl": ppl, "n_tokens": total_tokens}
+
+
+# ============================================================================
+# Held-out perplexity (FineWeb-Edu val shard)
+#
+# Table 4's caption labels its perplexity column "FineWeb-Edu perplexity"
+# while the paper's body text calls the same column "WikiText-103
+# perplexity" -- an unresolved contradiction in the paper itself. Rather than
+# guess which one Table 4 actually means, we compute both and report them
+# separately, clearly labeled.
+# ============================================================================
+
+def eval_fineweb_ppl(model, device, held_out_data_dir, max_seq_len=2048,
+                     batch_size=8):
+    """Held-out perplexity on a disjoint FineWeb-Edu shard (see
+    koopman_lm.training.data.pretokenize's --skip_docs for how to produce a
+    val shard that doesn't overlap the training corpus)."""
+    from koopman_lm.training.data.dataset import MemmapPackedDataset
+
+    print("\n" + "=" * 60)
+    print("Held-out perplexity (FineWeb-Edu)")
+    print("=" * 60)
+
+    dataset = MemmapPackedDataset(held_out_data_dir, max_seq_len, seed=0)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     model.eval()
     total_loss = 0.0
@@ -450,6 +507,14 @@ def evaluate_checkpoint(checkpoint, args, device):
             max_seq_len=args.max_seq_len,
             batch_size=args.batch_size)
 
+    # Only run under "all" if a held-out shard was actually given -- "all"
+    # shouldn't error out for callers who haven't set up a FineWeb val shard.
+    if args.mode == "fineweb_ppl" or (args.mode == "all" and args.held_out_data_dir):
+        all_results["fineweb_ppl"] = eval_fineweb_ppl(
+            model, device, args.held_out_data_dir,
+            max_seq_len=args.max_seq_len,
+            batch_size=args.batch_size)
+
     if args.mode in ("all", "niah"):
         all_results["niah"] = eval_niah(
             model, device, tokenizer,
@@ -476,7 +541,15 @@ def compare_results(results1, results2, output_path=None):
     if "held_out_ppl" in results1 and "held_out_ppl" in results2:
         p1 = results1["held_out_ppl"]["ppl"]
         p2 = results2["held_out_ppl"]["ppl"]
-        print(f"\n  Held-out PPL:")
+        print(f"\n  Held-out PPL (WikiText-103):")
+        print(f"    {mt1:20s}: {p1:.2f}")
+        print(f"    {mt2:20s}: {p2:.2f}")
+        print(f"    {'delta':20s}: {p1 - p2:+.2f}")
+
+    if "fineweb_ppl" in results1 and "fineweb_ppl" in results2:
+        p1 = results1["fineweb_ppl"]["ppl"]
+        p2 = results2["fineweb_ppl"]["ppl"]
+        print(f"\n  Held-out PPL (FineWeb-Edu):")
         print(f"    {mt1:20s}: {p1:.2f}")
         print(f"    {mt2:20s}: {p2:.2f}")
         print(f"    {'delta':20s}: {p1 - p2:+.2f}")
@@ -513,7 +586,11 @@ def parse_args():
     p.add_argument("--tokenizer", type=str,
                    default="mistralai/Mistral-7B-v0.1")
     p.add_argument("--mode", type=str, default="all",
-                   choices=["all", "ppl", "niah"])
+                   choices=["all", "ppl", "fineweb_ppl", "niah"])
+    p.add_argument("--held_out_data_dir", type=str, default=None,
+                   help="disjoint FineWeb-Edu val shard dir (from "
+                        "pretokenize.py --skip_docs), required for "
+                        "--mode fineweb_ppl")
     p.add_argument("--max_seq_len", type=int, default=2048)
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--niah_context_lens", nargs="+", type=int,
@@ -526,6 +603,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.mode == "fineweb_ppl" and not args.held_out_data_dir:
+        raise SystemExit("--mode fineweb_ppl requires --held_out_data_dir")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.seed)
     random.seed(args.seed)

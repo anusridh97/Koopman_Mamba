@@ -14,7 +14,7 @@ import pytest
 
 pytestmark = [pytest.mark.correctness, pytest.mark.jax]
 
-_REF = os.path.join(os.path.dirname(__file__), "..", "reference", "echo_jax.py")
+_REF = os.path.join(os.path.dirname(__file__), "..", "archive", "reference", "echo_jax.py")
 
 _REFERENCE_TESTS = [
     "test_backward",

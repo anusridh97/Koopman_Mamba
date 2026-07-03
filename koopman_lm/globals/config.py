@@ -174,14 +174,17 @@ def _evenly_spaced_indices(n_layers, n_special):
 _CONFIGS_ROOT = Path(__file__).parent.parent.parent / "configs"
 
 CONFIG_REGISTRY = {
-    "50m":        "smoke/50m.yaml",
-    "180m":       "training/180m.yaml",
-    "180m_gated": "training/180m_gated.yaml",
-    "370m":       "training/370m.yaml",
-    "440m":       "training/440m.yaml",
-    "880m":       "training/880m.yaml",
-    "1p5b":       "training/1p5b.yaml",
-    "3b":         "training/3b.yaml",
+    # Paper sub-million experiments (Table 2 / Table 3)
+    "1m":         "1m.yaml",
+    # Production scales
+    "50m":        "50m.yaml",
+    "180m":       "180m.yaml",
+    "180m_gated": "180m_gated.yaml",
+    "370m":       "370m.yaml",
+    "440m":       "440m.yaml",
+    "880m":       "880m.yaml",
+    "1p5b":       "1p5b.yaml",
+    "3b":         "3b.yaml",
 }
 
 

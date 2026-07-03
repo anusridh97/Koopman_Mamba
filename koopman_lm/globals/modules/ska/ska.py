@@ -73,6 +73,17 @@ def _power_spectral_filter(A_w, w_q, power_K=2):
     return result
 
 
+def _squash(raw, lo, hi):
+    """Smooth bound to (lo, hi) via sigmoid -- matches echo_jax.py's _squash."""
+    return lo + (hi - lo) * torch.sigmoid(raw)
+
+
+def _raw_init(val, lo, hi):
+    """Inverse of _squash: raw value s.t. _squash(raw, lo, hi) == val."""
+    s = (val - lo) / (hi - lo)
+    return math.log(s / (1.0 - s))
+
+
 # ============================================================================
 # Shared: batched statistics + cumsum + cholesky (STANDARD strategy)
 # ============================================================================
@@ -305,8 +316,9 @@ class SKAModule(nn.Module):
                  ridge_eps=1e-3, scale=1.5, power_K=2, chunk_size=64,
                  backend='auto', chunk_strategy='standard',
                  overlap_fraction=0.5, decay_alpha=0.95,
-                 eta_learnable=False, eta_value=1.0,
+                 eta_learnable=False, eta_value=1.0, eta_bounds=None,
                  gamma_learnable=False, gamma_value=1.0, gamma_clamp=None,
+                 gamma_bounds=None,
                  layerscale=True, layerscale_init=1e-4, out_proj_std=0.02,
                  exact_intrachunk=False):
         super().__init__()
@@ -371,29 +383,60 @@ class SKAModule(nn.Module):
         else:
             self.register_parameter('layerscale_gate', None)
 
-        # eta: fixed constant (buffer) by default; optionally learnable
-        if eta_learnable:
+        # eta: three regimes.
+        #   squash (echo_jax.py parity): learnable raw param, smoothly bounded to
+        #     eta_bounds via sigmoid, matching the JAX reference's _squash/_raw_init
+        #     (eta in [1.4, 1.7], init 1.5) instead of an unconstrained parameter
+        #     that can drift arbitrarily.
+        #   learnable (unconstrained): plain nn.Parameter, no bound.
+        #   fixed: buffer, constant.
+        self.eta_bounds = eta_bounds
+        if eta_bounds is not None:
+            lo, hi = eta_bounds
+            self.eta_raw = nn.Parameter(torch.tensor(_raw_init(eta_value, lo, hi)))
+        elif eta_learnable:
             self.eta = nn.Parameter(torch.tensor(float(eta_value)))
         else:
             self.register_buffer('eta', torch.tensor(float(eta_value)))
 
-        # gamma: two regimes.
-        #   baseline: learnable nn.Parameter, clamped to gamma_clamp in forward.
+        # gamma: three regimes.
+        #   squash (echo_jax.py parity): learnable raw param, smoothly bounded to
+        #     gamma_bounds via sigmoid (gamma in [0.5, 1.5], init 0.7) -- matches
+        #     the JAX reference exactly, including that gamma can start BELOW 1.0
+        #     (a damped operator), not just restore variance from spectral norm.
+        #   baseline: learnable nn.Parameter, hard-clamped to gamma_clamp in forward.
         #   440M:     fixed buffer (no clamp). _gamma_const set for the fast
         #             python-float branch that skips the multiply when ==1.0.
+        self.gamma_bounds = gamma_bounds
         self.gamma_learnable = gamma_learnable
         self.gamma_clamp = gamma_clamp
-        if gamma_learnable:
+        if gamma_bounds is not None:
+            lo, hi = gamma_bounds
+            self.ssn_gamma = nn.Parameter(torch.tensor(_raw_init(gamma_value, lo, hi)))
+            self._gamma_const = None
+        elif gamma_learnable:
             self.ssn_gamma = nn.Parameter(torch.tensor(float(gamma_value)))
             self._gamma_const = None        # resolved per-forward (clamped)
         else:
             self.register_buffer('ssn_gamma', torch.tensor(float(gamma_value)))
             self._gamma_const = float(gamma_value)
 
+    def _resolve_eta(self):
+        """Return the eta to apply this forward (squashed tensor, unconstrained
+        tensor, or fixed buffer, depending on construction regime)."""
+        if self.eta_bounds is not None:
+            lo, hi = self.eta_bounds
+            return _squash(self.eta_raw, lo, hi)
+        return self.eta
+
     def _resolve_gamma(self):
         """Return the gamma to apply this forward.
+        Squash regime -> smoothly bounded tensor (echo_jax.py parity).
         Fixed regime -> python float (enables the skip-when-1.0 fast path).
         Learnable regime -> clamped tensor (keeps grad), as in the baseline."""
+        if self.gamma_bounds is not None:
+            lo, hi = self.gamma_bounds
+            return _squash(self.ssn_gamma, lo, hi)
         if not self.gamma_learnable:
             return self._gamma_const
         if self.gamma_clamp is not None:
@@ -485,18 +528,23 @@ class SKAModule(nn.Module):
                 Y = Y.reshape(Bc, nc * CS, Hc, Pc)[:, :Tt]            # (B,T,H,P)
                 y_hat = Y
 
-        y_hat = self.eta * y_hat.to(hidden_states.dtype)
+        y_hat = self._resolve_eta() * y_hat.to(hidden_states.dtype)
         output = self.out_proj(y_hat.reshape(B, T, H * P))
         if self.layerscale_gate is not None:
             output = output * self.layerscale_gate
         return output
 
     def extra_repr(self):
+        with torch.no_grad():
+            eta_val = float(self._resolve_eta())
+            gamma_val = self._resolve_gamma()
+            gamma_val = gamma_val if isinstance(gamma_val, float) else float(gamma_val)
         parts = [
             f'd_model={self.d_model}', f'n_heads={self.H}', f'rank={self.rank}',
             f'chunk_size={self.chunk_size}', f'backend={self.backend}',
             f'chunk_strategy={self.chunk_strategy}',
-            f'eta={float(self.eta)}', f'gamma_learnable={self.gamma_learnable}',
+            f'eta={eta_val:.4f}', f'gamma={gamma_val:.4f}',
+            f'eta_bounds={self.eta_bounds}', f'gamma_bounds={self.gamma_bounds}',
             f'layerscale={self.layerscale}',
         ]
         if self.chunk_strategy == 'overlap':

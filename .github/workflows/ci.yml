@@ -23,7 +23,7 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
       - name: Import sanity (package must import CPU-only)
-        run: python -c "import koopman_lm; import koopman_lm.evaluation.harness; print(list(koopman_lm.CONFIG_FACTORIES))"
+        run: python -c "import koopman_lm; import koopman_lm.experiments.table2; import koopman_lm.experiments.mqar_finetune; print(list(koopman_lm.CONFIG_FACTORIES))"
       - name: Correctness suite (CPU subset, < 2 min)
         run: pytest code-tests/ -m "correctness and not gpu" -q
 

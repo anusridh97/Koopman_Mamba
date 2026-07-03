@@ -38,8 +38,12 @@ WEIGHT_DTYPE = np.uint8
 
 def _interleave_quota(mix, chunk_tokens):
     """Given fractional mix, return how many tokens to pull from each source
-    per round-robin cycle (integers summing ~chunk_tokens)."""
-    return {k: max(1, int(round(v * chunk_tokens))) for k, v in mix.items()}
+    per round-robin cycle (integers summing ~chunk_tokens). A source with
+    weight exactly 0 gets quota 0 (not the max(1, ...) floor) so a pure
+    single-source mix (e.g. --mix 1.0 0.0 0.0) doesn't still pull a whole
+    document from the zero-weighted sources every shard."""
+    return {k: (max(1, int(round(v * chunk_tokens))) if v > 0 else 0)
+            for k, v in mix.items()}
 
 
 def _scrolls_format(ex, subset):
@@ -107,6 +111,11 @@ def main():
     p.add_argument("--max_tokens", type=int, default=None)
     p.add_argument("--shard_size", type=int, default=50_000_000)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--skip_docs", type=int, default=0,
+                   help="skip this many FineWeb-Edu source documents before "
+                        "shuffling (use to carve out a val shard disjoint "
+                        "from a train run: skip past train's "
+                        "fineweb_docs_consumed + a safety margin)")
     a = p.parse_args()
 
     if a.smoke:
@@ -134,9 +143,17 @@ def main():
     mix = {"fineweb": a.mix[0], "pg19": a.mix[1], "scrolls": a.mix[2]}
     quota = _interleave_quota(mix, a.shard_size)
 
-    # streaming iterators
-    fw = iter(load_dataset(a.fineweb, name=a.fineweb_subset, split="train",
-                           streaming=True).shuffle(seed=a.seed, buffer_size=10000))
+    # streaming iterators. .skip() must precede .shuffle() (shuffle only
+    # locally reorders a rolling window, so it does not by itself make two
+    # differently-seeded runs draw disjoint documents from the ~10B-token
+    # source -- skip_docs carves out a val shard past everything a prior
+    # train run consumed).
+    fw_stream = load_dataset(a.fineweb, name=a.fineweb_subset, split="train",
+                             streaming=True)
+    if a.skip_docs:
+        fw_stream = fw_stream.skip(a.skip_docs)
+    fw = iter(fw_stream.shuffle(seed=a.seed, buffer_size=10000))
+    fw_docs_consumed = 0
     pg = iter(load_dataset(a.pg19, split="train", streaming=True)
               .shuffle(seed=a.seed, buffer_size=1000))
     # SCROLLS: chain the chosen subsets
@@ -152,10 +169,12 @@ def main():
     sc = iter(scrolls_stream())
 
     def pull_fineweb(n):
+        nonlocal fw_docs_consumed
         toks, w = [], []
         while len(toks) < n:
             try: ex = next(fw)
             except StopIteration: break
+            fw_docs_consumed += 1
             ids = tok(ex.get("text", ""), add_special_tokens=False)["input_ids"]
             ids.append(eos); toks += ids; w += [1] * len(ids)
         return toks, w
@@ -193,6 +212,8 @@ def main():
         while True:
             shard_toks, shard_w = [], []
             for src, qn in quota.items():
+                if qn == 0:
+                    continue
                 t, w = pullers[src](qn)
                 shard_toks += t; shard_w += w
             if not shard_toks:
@@ -216,6 +237,7 @@ def main():
         "n_tokens": total, "vocab_size": len(tok), "tokenizer": a.tokenizer,
         "dtype": "uint16", "weight_dtype": "uint8", "recall_weight": a.recall_weight,
         "mix": mix, "scrolls_subsets": a.scrolls_subsets,
+        "skip_docs": a.skip_docs, "fineweb_docs_consumed": fw_docs_consumed,
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)

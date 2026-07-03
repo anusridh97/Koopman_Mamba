@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "koopman_lm"
 version = "0.5.0"
-description = "Echo / SKA: Spectral Koopman Attention language model + Koopman MLP. Unified package for the 50M-3B scaling effort (Phase 0 platform)."
+description = "Echo / SKA: Spectral Koopman Attention language model + Koopman MLP. Table 2/3 mixed-objective and Section 5.2 MQAR fine-tuning experiments."
 requires-python = ">=3.10"
 # Core deps are CUDA-free so `pip install -e .` works on a CPU box (import succeeds;
 # building the Mamba2 backbone needs the optional [cuda] extra). Grounded in the
@@ -15,8 +15,8 @@ dependencies = [
     # build. Install torch FIRST for your platform, then `pip install -e .`.
     "torch>=2.1",
     "numpy>=1.24",
-    "transformers>=4.40",   # AutoTokenizer (Llama-2 / Mistral)
-    "datasets>=2.18",       # HF datasets for pretokenize + BABILong eval
+    "transformers>=4.40,<5.0",   # AutoTokenizer (Llama-2 / Mistral)
+    "datasets>=2.18",            # HF datasets for pretokenize + BABILong eval
     "safetensors",
     "wandb",
     "pyyaml>=6.0",
@@ -31,11 +31,19 @@ cuda = [
     "causal-conv1d>=1.4.0",
     "triton>=2.2",
 ]
+# lm-evaluation-harness pulls a heavy transitive tree (sacrebleu, evaluate,
+# sqlitedict, ...) not needed for training or the CPU import-sanity check --
+# kept as its own extra rather than folded into [dev].
+lmharness = [
+    "lm-eval>=0.4.4,<0.5",
+]
 dev = [
     "pytest>=7.0",
 ]
 
 [project.scripts]
+koopman-table2 = "koopman_lm.experiments.table2:main"
+koopman-mqar-finetune = "koopman_lm.experiments.mqar_finetune:main"
 koopman-train = "koopman_lm.training.train:main"
 
 [tool.setuptools.packages.find]

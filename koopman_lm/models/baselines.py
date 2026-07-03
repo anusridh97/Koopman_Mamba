@@ -2,14 +2,13 @@
 """
 baselines.py -- Baseline model variants for ablation comparison.
 
-Three models, same parameter count, same data, same evaluation:
-
+  transformer  — Pure causal Transformer, all attention layers + SwiGLU MLP
   mamba_only   — All Mamba-2 + SwiGLU MLP (no global retrieval)
   mamba_attn   — 75% Mamba-2 + 25% Flash Attention + SwiGLU MLP
   koopman      — 75% Mamba-2 + 25% SKA + Koopman MLP  (in model.py)
 
-The attention indices mirror ska_layer_indices from the config so that
-both models have the same Mamba/non-Mamba split.
+The attention/SKA indices mirror ska_layer_indices from the config so that
+mamba_attn and koopman have the same Mamba/non-Mamba split.
 """
 
 import math
@@ -61,7 +60,25 @@ class SKABlock(nn.Module):
             power_K=cfg.ska_power_K,
             chunk_size=cfg.ska_chunk_size,
             backend=cfg.ska_backend,
+            # echo_jax.py parity (the cited "verified parity" reference): eta and
+            # gamma are BOTH learnable, smoothly squashed to bounded ranges via
+            # sigmoid, not fixed/unconstrained. Sec 6.1: "a learned scalar gamma
+            # in [1.0, 1.5]" describes the effect qualitatively, but the actual
+            # reference implementation clamps gamma to [0.5, 1.5] starting BELOW
+            # 1.0 (init 0.7, a damped operator) and eta to [1.4, 1.7] (init 1.5)
+            # -- previously eta was an unconstrained parameter (could drift to
+            # any value) and gamma was fixed at exactly 1.0 (not learnable at
+            # all), neither of which matches the reference.
+            eta_learnable=True, eta_value=1.5, eta_bounds=(1.4, 1.7),
+            gamma_learnable=True, gamma_value=0.7, gamma_bounds=(0.5, 1.5),
         )
+        # CRITICAL: SKAModule zero-inits out_proj when layerscale=False, which
+        # causes an exact-zero gradient stall — SKA internals receive NO gradient
+        # and the branch stays dead (loss never drops). The paper describes a
+        # near-zero out_proj, but exact-zero kills the gradient; we use a small
+        # non-zero std so SKA learns from step 1 while staying a small perturbation.
+        nn.init.normal_(self.ska.out_proj.weight, mean=0.0,
+                        std=getattr(cfg, "ska_out_proj_std", 0.02))
         self._ablate = False
 
     def forward(self, x):
@@ -157,6 +174,19 @@ def build_mamba_attention(cfg: KoopmanLMConfig):
     """
     def seq_fn(c, i, is_ska):
         return CausalAttentionBlock(c) if is_ska else Mamba2Block(c)
+    def mlp_fn(c):
+        return SwiGLUMLP(c.d_model, c.mlp_expand)
+    return _build_model(cfg, seq_fn, mlp_fn)
+
+
+def build_transformer(cfg: KoopmanLMConfig):
+    """
+    Pure causal Transformer: all sequence layers are CausalAttentionBlock,
+    all feedforward layers are SwiGLU MLP. No SSM, no SKA.
+    Parameter count matches the other 50M variants at the same d_model/n_layers.
+    """
+    def seq_fn(c, i, is_ska):
+        return CausalAttentionBlock(c)
     def mlp_fn(c):
         return SwiGLUMLP(c.d_model, c.mlp_expand)
     return _build_model(cfg, seq_fn, mlp_fn)

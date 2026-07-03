@@ -83,7 +83,17 @@ class KoopmanEvalWrapper(HFLM):
             if "cfg" in meta:
                 cfg = meta["cfg"]
 
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        # The tokenizer that actually produced this checkpoint's vocab is saved
+        # alongside it by train.py's tokenizer.save_pretrained(ckpt_dir) -- load
+        # THAT rather than the `tokenizer` arg's default, which differs from
+        # train.py's own CLI default. Both are 32k-vocab, so a mismatch would
+        # silently mismap every token id to the wrong embedding instead of
+        # erroring.
+        ckpt_dir = os.path.dirname(checkpoint)
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
+        except Exception:
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
