@@ -35,9 +35,11 @@ class SKABlock(nn.Module):
             # --- new scale-parameter + residual policy ---
             eta_learnable=cfg.ska_eta_learnable,
             eta_value=cfg.ska_eta_value,
+            eta_bounds=getattr(cfg, 'ska_eta_bounds', None),
             gamma_learnable=cfg.ska_gamma_learnable,
             gamma_value=cfg.ska_gamma_value,
             gamma_clamp=cfg.ska_gamma_clamp,
+            gamma_bounds=getattr(cfg, 'ska_gamma_bounds', None),
             layerscale=cfg.ska_layerscale,
             layerscale_init=cfg.ska_layerscale_init,
             out_proj_std=cfg.ska_out_proj_std,
@@ -390,7 +392,10 @@ class KoopmanLM(nn.Module):
             if isinstance(layer, SKABlock):
                 ska = layer.ska
                 ls = None if ska.layerscale_gate is None else float(ska.layerscale_gate.mean())
-                print(f"  SKA: eta={float(ska.eta)}, gamma_learnable={ska.gamma_learnable}, "
+                with torch.no_grad():
+                    eta_val = float(ska._resolve_eta())
+                print(f"  SKA: eta={eta_val:.4f}, gamma_learnable={ska.gamma_learnable}, "
+                      f"eta_bounds={ska.eta_bounds}, gamma_bounds={ska.gamma_bounds}, "
                       f"layerscale~{ls}, chunk={ska.chunk_size}/{ska.chunk_strategy}")
                 break
         return total

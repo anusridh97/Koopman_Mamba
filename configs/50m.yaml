@@ -1,6 +1,22 @@
-# Echo/SKA paper Section 3.4 — 50M model exact spec:
+# Echo/SKA paper Section 3.4 -- 50M model exact spec:
 # d=448, N=16, 4 SKA layers at {3,7,11,15}, r=56, H=7, S=64, d_state=64
-# Production SKA policy: eta=gamma=1 fixed, LayerScale, short-conv ON
+#
+# Original (paper/echo_jax.py-faithful) SKA policy, NOT the later "440M
+# rewrite" production policy: eta/gamma learnable and smoothly squashed to
+# bounds (not fixed, not hard-clamped), out_proj exact-zero init (no
+# LayerScale), no short-conv parallel path (that path doesn't exist in the
+# original architecture at all). Verified against archive/reference/echo_jax.py
+# (SKA class defaults: eta=1.5 in [1.4,1.7], gamma=0.7 in [0.5,1.5]) via a
+# direct cross-parity check (~1% max diff, fully attributable to JAX's bf16
+# GEMM precision vs PyTorch's fp32 -- not a structural difference).
+#
+# KNOWN RISK: this codebase's own history documents that exact-zero out_proj
+# init previously caused a gradient-stall bug (SKA receives zero gradient and
+# never learns) at other scales, which is why the "440M rewrite" moved to
+# LayerScale + nonzero init instead. Chosen anyway here for paper fidelity,
+# per explicit instruction -- if training shows SKA's contribution staying at
+# zero (e.g. via the ska_delta ablation in koopman_lm/evaluation/harness.py),
+# that documented tradeoff is the first thing to revisit.
 d_model: 448
 n_layers: 16
 vocab_size: 32000
@@ -10,13 +26,12 @@ ska_rank: 56
 ska_chunk_size: 64
 ska_layer_indices: [3, 7, 11, 15]
 mlp_gated: false
-ska_eta_learnable: false
-ska_eta_value: 1.0
-ska_gamma_learnable: false
-ska_gamma_value: 1.0
+ska_eta_learnable: true
+ska_eta_value: 1.5
+ska_eta_bounds: [1.4, 1.7]
+ska_gamma_learnable: true
+ska_gamma_value: 0.7
 ska_gamma_clamp: null
-ska_layerscale: true
-ska_layerscale_init: 0.0001
-ska_out_proj_std: 0.02
-ska_short_conv: true
-ska_short_conv_kernel: 4
+ska_gamma_bounds: [0.5, 1.5]
+ska_layerscale: false
+ska_short_conv: false

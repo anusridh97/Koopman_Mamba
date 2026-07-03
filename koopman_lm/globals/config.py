@@ -40,8 +40,15 @@ class KoopmanLMConfig:
     # --- SKA scale-parameter policy ---
     ska_eta_learnable: bool = True
     ska_eta_value: float = 1.5
+    # Smooth sigmoid-squash bounds (echo_jax.py parity), distinct from the
+    # hard torch.clamp ska_gamma_clamp below: squash keeps a nonzero gradient
+    # at the boundary, clamp kills it. None preserves prior (clamp/fixed)
+    # behavior; set both to reproduce the original paper-faithful regime
+    # (eta in [1.4, 1.7] init 1.5, gamma in [0.5, 1.5] init 0.7).
+    ska_eta_bounds: Optional[tuple] = None
     ska_gamma_learnable: bool = True
     ska_gamma_clamp: Optional[tuple] = (1.0, 1.5)
+    ska_gamma_bounds: Optional[tuple] = None
     ska_gamma_value: float = 1.0
 
     # Residual injection
@@ -81,6 +88,10 @@ class KoopmanLMConfig:
             object.__setattr__(self, "ska_layer_indices", tuple(self.ska_layer_indices))
         if self.ska_gamma_clamp is not None:
             object.__setattr__(self, "ska_gamma_clamp", tuple(self.ska_gamma_clamp))
+        if self.ska_eta_bounds is not None:
+            object.__setattr__(self, "ska_eta_bounds", tuple(self.ska_eta_bounds))
+        if self.ska_gamma_bounds is not None:
+            object.__setattr__(self, "ska_gamma_bounds", tuple(self.ska_gamma_bounds))
 
         # % 16 (not 64) allows the paper's d=96 while still ensuring reasonable alignment.
         # Production runs (d≥448) are always multiples of 64 via their YAML configs.

@@ -19,12 +19,17 @@ source .venv/bin/activate
 # Install torch first — mamba_ssm build requires it
 uv pip install torch --index-url https://download.pytorch.org/whl/cu124
 
-# Install mamba_ssm (must be compiled against the torch above)
+# Install mamba_ssm + triton (must be compiled/matched against the torch above)
 export PIP_CACHE_DIR=${SLURM_TMPDIR:-/tmp}/pip-cache
-MAX_JOBS=4 uv pip install mamba-ssm causal-conv1d \
+MAX_JOBS=4 uv pip install mamba-ssm causal-conv1d triton \
     --no-build-isolation --no-cache-dir
 
-# Install the project
+# Install the project (transformers/datasets/safetensors are core deps, so
+# they come along regardless of which extras are requested here)
 uv pip install -e ".[dev]"
+
+# Only needed later, before running koopman_lm.evaluation.lm_harness_eval
+# (the zero-shot HellaSwag/PIQA/ARC/WinoGrande/LAMBADA suite):
+#   uv pip install -e ".[lmharness]"
 
 echo "Done. Activate with: source .venv/bin/activate"
