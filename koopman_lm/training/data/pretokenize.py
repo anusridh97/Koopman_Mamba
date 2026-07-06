@@ -154,8 +154,13 @@ def main():
         fw_stream = fw_stream.skip(a.skip_docs)
     fw = iter(fw_stream.shuffle(seed=a.seed, buffer_size=10000))
     fw_docs_consumed = 0
-    pg = iter(load_dataset(a.pg19, split="train", streaming=True)
-              .shuffle(seed=a.seed, buffer_size=1000))
+
+    pg = None
+    if quota.get("pg19", 0) > 0:
+        pg = iter(load_dataset(a.pg19, split="train", streaming=True,
+                               trust_remote_code=True)
+                  .shuffle(seed=a.seed, buffer_size=1000))
+
     # SCROLLS: chain the chosen subsets
     def scrolls_stream():
         for sub in a.scrolls_subsets:
@@ -166,7 +171,7 @@ def main():
                 continue
             for ex in ds:
                 yield sub, ex
-    sc = iter(scrolls_stream())
+    sc = iter(scrolls_stream()) if quota.get("scrolls", 0) > 0 else None
 
     def pull_fineweb(n):
         nonlocal fw_docs_consumed
