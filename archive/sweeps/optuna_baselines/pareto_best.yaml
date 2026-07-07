@@ -1,0 +1,248 @@
+# Pareto-optimal baseline hyperparameters from Cody's Optuna sweeps
+# (branch cody-sweep-baselines, June 2026). Objectives: maximize final_mqar_acc,
+# minimize final_wikitext_ppl. Keys parameterize the OLD koopman-lm-fast trainer;
+# translate manually before use with the koopman_lm package.
+
+optuna_baseline_1m:
+  source: pareto_front.csv
+  trials:
+    - trial: 232
+      score: -0.333496505022049
+      model_type: mamba_attn
+      n_params: 8110932
+      final_mqar_acc: 0.0
+      n_non_embedding_params: 1678036
+      final_wikitext_ppl: 788.3404978835316
+      final_mqar_proxy_ppl: 42462.30712912446
+      d_model: 128
+      n_layers: 8
+      head_dim: 64
+      mlp_expand: 2.0
+      d_state: 64
+      d_conv: 4
+      mamba_expand: 2
+      attention_fraction: 0.125
+      attention_placement: late
+      learning_rate: 0.002957215361732634
+      weight_decay: 0.16067194288739267
+      warmup_ratio: 5.23300528798825e-05
+      max_grad_norm: 1.0
+
+optuna_baseline_1m_mqar_mix:
+  source: pareto_front_ppl_le_5000.csv
+  trials:
+    - trial: 11
+      score: -0.267072743177414
+      model_type: transformer
+      n_params: 10366912
+      final_mqar_acc: 0.0751953125
+      n_non_embedding_params: 717568
+      final_wikitext_ppl: 939.5124904487541
+      final_mqar_proxy_ppl: 16.03461392537094
+      d_model: 192
+      n_layers: 2
+      head_dim: 64
+      mlp_expand: 2.667
+      attention_fraction: 0.0
+      attention_placement: none
+      learning_rate: 0.002803751863132791
+      weight_decay: 0.00774503999223658
+      warmup_ratio: 0.0969132666736412
+      max_grad_norm: 2.0
+      transformer_dropout: 0.0
+    - trial: 33
+      score: -0.27430873811244966
+      model_type: transformer
+      n_params: 14215936
+      final_mqar_acc: 0.06640625
+      n_non_embedding_params: 1350144
+      final_wikitext_ppl: 910.778530929544
+      final_mqar_proxy_ppl: 16.072091981497355
+      d_model: 256
+      n_layers: 2
+      head_dim: 32
+      mlp_expand: 3.0
+      attention_fraction: 0.0
+      attention_placement: none
+      learning_rate: 0.0026971800118670316
+      weight_decay: 0.16572670763793101
+      warmup_ratio: 0.06083718726421279
+      max_grad_norm: 0.5
+      transformer_dropout: 0.05
+    - trial: 45
+      score: -0.2665327891707421
+      model_type: mamba_only
+      n_params: 14468208
+      final_mqar_acc: 0.064453125
+      n_non_embedding_params: 1602416
+      final_wikitext_ppl: 749.7338548966819
+      final_mqar_proxy_ppl: 16.086813158969672
+      d_model: 256
+      n_layers: 2
+      head_dim: 64
+      mlp_expand: 2.0
+      d_state: 16
+      d_conv: 4
+      mamba_expand: 2
+      attention_fraction: 0.0
+      attention_placement: none
+      learning_rate: 0.0026928087833221616
+      weight_decay: 0.17484844211519734
+      warmup_ratio: 0.06952488400641171
+      max_grad_norm: 0.5
+
+optuna_baseline_20m:
+  source: pareto_front.csv
+  trials:
+    - trial: 24
+      score: -0.33176226466894154
+      model_type: transformer
+      n_params: 33555072
+      final_mqar_acc: 0.0
+      n_non_embedding_params: 14256384
+      final_wikitext_ppl: 761.4658254415766
+      final_mqar_proxy_ppl: 17393.023610708657
+      d_model: 384
+      n_layers: 12
+      head_dim: 64
+      mlp_expand: 2.0
+      learning_rate: 0.0009676648218040311
+      weight_decay: 0.1939209727650221
+      warmup_ratio: 0.09994409708708471
+      max_grad_norm: 0.5
+      transformer_dropout: 0.0
+
+optuna_baseline_20m_mqar_mix:
+  source: pareto_front_ppl_le_5000.csv
+  trials:
+    - trial: 12
+      score: -0.2147008329629898
+      model_type: mamba_attn
+      n_params: 26979184
+      final_mqar_acc: 0.11328125
+      n_non_embedding_params: 14113392
+      final_wikitext_ppl: 706.018654013622
+      final_mqar_proxy_ppl: 13.241705496255577
+      d_model: 256
+      n_layers: 12
+      head_dim: 64
+      mlp_expand: 4.0
+      d_state: 32
+      d_conv: 2
+      mamba_expand: 2
+      attention_fraction: 0.125
+      attention_placement: middle
+      learning_rate: 0.0028792857412198243
+      weight_decay: 0.19890605406438952
+      warmup_ratio: 0.08684123585042992
+      max_grad_norm: 0.5
+    - trial: 23
+      score: -0.25632282197475437
+      model_type: mamba_attn
+      n_params: 24030064
+      final_mqar_acc: 0.0654296875
+      n_non_embedding_params: 11164272
+      final_wikitext_ppl: 623.3138658867471
+      final_mqar_proxy_ppl: 16.10793703072714
+      d_model: 256
+      n_layers: 12
+      head_dim: 32
+      mlp_expand: 2.667
+      d_state: 32
+      d_conv: 2
+      mamba_expand: 2
+      attention_fraction: 0.125
+      attention_placement: middle
+      learning_rate: 0.00281314092021471
+      weight_decay: 0.1939209727650221
+      warmup_ratio: 0.07644450730936203
+      max_grad_norm: 0.5
+    - trial: 38
+      score: -0.2694960728287697
+      model_type: mamba_attn
+      n_params: 25020000
+      final_mqar_acc: 0.05078125
+      n_non_embedding_params: 12154208
+      final_wikitext_ppl: 605.1924197124268
+      final_mqar_proxy_ppl: 16.11334526592512
+      d_model: 256
+      n_layers: 12
+      head_dim: 64
+      mlp_expand: 4.0
+      d_state: 16
+      d_conv: 2
+      mamba_expand: 1
+      attention_fraction: 0.333
+      attention_placement: uniform
+      learning_rate: 0.0027775529110156743
+      weight_decay: 0.1968505171761047
+      warmup_ratio: 0.08207706765327676
+      max_grad_norm: 0.5
+
+optuna_baseline_5m:
+  source: pareto_front.csv
+  trials:
+    - trial: 102
+      score: -0.3365335389971733
+      model_type: transformer
+      n_params: 16652672
+      final_mqar_acc: 0.0
+      n_non_embedding_params: 3786880
+      final_wikitext_ppl: 837.70899592741
+      final_mqar_proxy_ppl: 21838.386753812083
+      d_model: 256
+      n_layers: 6
+      head_dim: 64
+      mlp_expand: 2.667
+      learning_rate: 0.0013946131081695853
+      weight_decay: 0.0977404030645868
+      warmup_ratio: 0.0790605276012127
+      max_grad_norm: 2.0
+      transformer_dropout: 0.05
+
+optuna_baseline_5m_mqar_mix:
+  source: pareto_front_ppl_le_5000.csv
+  trials:
+    - trial: 75
+      score: -0.17802326232194904
+      model_type: mamba_attn
+      n_params: 12195336
+      final_mqar_acc: 0.1630859375
+      n_non_embedding_params: 2545992
+      final_wikitext_ppl: 917.9877042237196
+      final_mqar_proxy_ppl: 10.729775947831659
+      d_model: 192
+      n_layers: 4
+      head_dim: 32
+      mlp_expand: 3.0
+      d_state: 32
+      d_conv: 2
+      mamba_expand: 4
+      attention_fraction: 0.5
+      attention_placement: uniform
+      learning_rate: 0.001599410229447846
+      weight_decay: 0.0803359591763805
+      warmup_ratio: 0.08748422536232006
+      max_grad_norm: 0.5
+    - trial: 55
+      score: -0.2699876442551613
+      model_type: mamba_only
+      n_params: 14260248
+      final_mqar_acc: 0.0625
+      n_non_embedding_params: 4610904
+      final_wikitext_ppl: 772.5933826097087
+      final_mqar_proxy_ppl: 16.160128375184094
+      d_model: 192
+      n_layers: 6
+      head_dim: 32
+      mlp_expand: 2.667
+      d_state: 64
+      d_conv: 2
+      mamba_expand: 4
+      attention_fraction: 0.0
+      attention_placement: none
+      learning_rate: 0.002991942221329727
+      weight_decay: 0.05059237093354576
+      warmup_ratio: 0.040108428429234844
+      max_grad_norm: 0.5
+

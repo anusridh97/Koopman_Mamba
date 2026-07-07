@@ -1,0 +1,3 @@
+number,score,model_type,n_params,final_mqar_acc,n_non_embedding_params,final_wikitext_ppl,final_mqar_proxy_ppl,d_model,n_layers,head_dim,mlp_expand,d_state,d_conv,mamba_expand,attention_fraction,attention_placement,learning_rate,weight_decay,warmup_ratio,max_grad_norm,transformer_dropout
+75,-0.17802326232194904,mamba_attn,12195336,0.1630859375,2545992,917.9877042237196,10.729775947831659,192,4,32,3.0,32,2,4,0.5,uniform,0.001599410229447846,0.0803359591763805,0.08748422536232006,0.5,
+55,-0.2699876442551613,mamba_only,14260248,0.0625,4610904,772.5933826097087,16.160128375184094,192,6,32,2.667,64,2,4,,,0.002991942221329727,0.05059237093354576,0.040108428429234844,0.5,

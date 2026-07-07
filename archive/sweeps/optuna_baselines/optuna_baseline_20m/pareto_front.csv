@@ -1,0 +1,2 @@
+number,score,model_type,n_params,final_mqar_acc,n_non_embedding_params,final_wikitext_ppl,final_mqar_proxy_ppl,d_model,n_layers,head_dim,mlp_expand,d_state,d_conv,mamba_expand,attention_fraction,attention_placement,learning_rate,weight_decay,warmup_ratio,max_grad_norm,transformer_dropout
+24,-0.33176226466894154,transformer,33555072,0.0,14256384,761.4658254415766,17393.023610708657,384,12,64,2.0,,,,,,0.0009676648218040311,0.1939209727650221,0.09994409708708471,0.5,0.0
