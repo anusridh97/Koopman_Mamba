@@ -25,7 +25,7 @@ inferred):
       than a separately-specified format.
 
 Given that gap, this script trains on MQAR itself (koopman_lm.experiments.
-curricula.make_mqar, the one generator format the paper actually cites) at
+evaluation.mqar.make_mqar, the one generator format the paper actually cites) at
 num_kv_pairs=4, seq_len=64 -- KV=1 is held out entirely from training so it
 remains a genuine zero-shot generalization test, matching Table 2's own
 "(KV=1)" framing and never-trained-on requirement. This is a stand-in for
@@ -56,7 +56,7 @@ from torch.utils.data import Dataset, DataLoader
 from koopman_lm.globals.config import build_config, config_hash
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
-from koopman_lm.experiments.curricula import make_mqar, eval_mqar
+from koopman_lm.evaluation.mqar import make_mqar, eval_mqar
 
 TABLE2_SEQ_LENS = (64, 128, 256, 512, 1024, 2048, 4096)
 TRAIN_SEQ_LEN    = 64

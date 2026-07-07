@@ -53,7 +53,7 @@ from koopman_lm.globals.config import build_config, config_hash
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu, build_transformer)
-from koopman_lm.experiments.curricula import make_mqar, eval_mqar
+from koopman_lm.evaluation.mqar import make_mqar, eval_mqar
 
 # Paper grid (Echo/SKA, Arora et al. 2024)
 PAPER_KV_PAIRS     = (4, 8, 16, 32)

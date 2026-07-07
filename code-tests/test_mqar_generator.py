@@ -5,7 +5,7 @@ invariants are pure and tested here.
 """
 import pytest
 
-from koopman_lm.experiments.curricula import make_mqar
+from koopman_lm.evaluation.mqar import make_mqar
 
 pytestmark = pytest.mark.correctness
 

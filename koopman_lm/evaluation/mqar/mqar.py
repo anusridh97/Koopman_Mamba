@@ -1,8 +1,24 @@
 """MQAR (Multi-Query Associative Recall), Arora et al. 2024 / Zoology setup.
 
+The single canonical MQAR generator, shared by everything MQAR-shaped:
+
+    - evaluation/harness.py: the ``mqar`` eval task (``eval_mqar_grid``).
+    - training/train_mqar.py: single-cell MQAR training.
+    - experiments/mqar_finetune.py (Section 5.2): 50M in-task MQAR
+      fine-tuning, one cell trained+evaluated independently per
+      (model_type, KV pairs, distractor gap).
+    - experiments/table2.py (Table 2, Section 4.1): "needle-in-a-haystack
+      retrieval (KV=1)" is this same generator special-cased to
+      num_kv_pairs=1 -- the paper gives no separate NIAH token format, and
+      frames Table 2's task explicitly as "(KV=1)" while noting "each task
+      varies KV pairs and sequence length," so KV=1 is read here as the
+      MQAR family's smallest cell rather than a bespoke needle format.
+
 Token-id-level synthetic: keys and values live in disjoint halves of the vocab.
 A sequence lists key-value pairs, then re-presents a subset of keys as queries;
 the model must predict each queried key's value at the following position.
+Sparse supervision (labels are -100 except at the answer positions) matches the
+paper's own MQAR protocol (Sec 5.2: "trained and evaluated independently").
 
 The grid sweeps sequence length x number of KV pairs, the axes the scaling plan
 calls out (256/512/1K/2K x 4/8/16/32/64), to compare against published Mamba-2
@@ -19,7 +35,7 @@ def make_mqar(batch, seq_len, num_kv_pairs, vocab_size,
     """Build a batch of MQAR sequences.
 
     Returns (input_ids, labels) each (batch, seq_len). labels are -100 except at
-    the answer positions (the token where the queried key's value must appear),
+    the answer positions (the position where the queried key's value must appear),
     so cross-entropy / argmax is scored only there.
 
     Layout per sequence:

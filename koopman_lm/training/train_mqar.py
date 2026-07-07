@@ -29,7 +29,7 @@ Single-cell example
         --distractor_gap 1024 \\
         --output_dir ./mqar-koopman-m32-g1024
 
-Sweep all cells (see scripts/sweep_mqar.py).
+Sweep all cells (see koopman_lm/training/sweep_mqar.py).
 """
 
 import os
