@@ -35,7 +35,6 @@ class KoopmanLMConfig:
     ska_scale: float = 1.5      # legacy eta-init; IGNORED when ska_eta_learnable=False
     ska_power_K: int = 2
     ska_chunk_size: int = 64    # multiple of 8
-    ska_backend: str = 'auto'
 
     # --- SKA scale-parameter policy ---
     ska_eta_learnable: bool = True
@@ -63,11 +62,6 @@ class KoopmanLMConfig:
 
     # --- Exact intra-chunk causal stats ---
     ska_exact_intrachunk: bool = False
-
-    # SKA adaptive chunking
-    ska_chunk_strategy: str = 'standard'
-    ska_overlap_fraction: float = 0.5
-    ska_decay_alpha: float = 0.95
 
     # Koopman MLP config
     mlp_expand: float = 2.667

@@ -28,10 +28,6 @@ class SKABlock(nn.Module):
             scale=cfg.ska_scale,
             power_K=cfg.ska_power_K,
             chunk_size=cfg.ska_chunk_size,
-            backend=cfg.ska_backend,
-            chunk_strategy=cfg.ska_chunk_strategy,
-            overlap_fraction=cfg.ska_overlap_fraction,
-            decay_alpha=cfg.ska_decay_alpha,
             # --- new scale-parameter + residual policy ---
             eta_learnable=cfg.ska_eta_learnable,
             eta_value=cfg.ska_eta_value,
@@ -396,6 +392,6 @@ class KoopmanLM(nn.Module):
                     eta_val = float(ska._resolve_eta())
                 print(f"  SKA: eta={eta_val:.4f}, gamma_learnable={ska.gamma_learnable}, "
                       f"eta_bounds={ska.eta_bounds}, gamma_bounds={ska.gamma_bounds}, "
-                      f"layerscale~{ls}, chunk={ska.chunk_size}/{ska.chunk_strategy}")
+                      f"layerscale~{ls}, chunk={ska.chunk_size}")
                 break
         return total

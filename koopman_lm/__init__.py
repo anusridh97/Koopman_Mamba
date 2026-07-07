@@ -17,10 +17,6 @@ from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.globals.modules.ska import SKAModule
 from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
 from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
-from koopman_lm.globals.modules.ska.adaptive_chunking import (
-    compute_chunk_stats_overlap,
-    compute_chunk_stats_decay,
-)
 
 __all__ = [
     "KoopmanLMConfig",
@@ -34,6 +30,4 @@ __all__ = [
     "SpectralKoopmanMLP",
     "SpectralKoopmanMLPGated",
     "RecurrentKoopmanLM",
-    "compute_chunk_stats_overlap",
-    "compute_chunk_stats_decay",
 ]

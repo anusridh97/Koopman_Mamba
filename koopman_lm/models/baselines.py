@@ -59,7 +59,6 @@ class SKABlock(nn.Module):
             scale=cfg.ska_scale,
             power_K=cfg.ska_power_K,
             chunk_size=cfg.ska_chunk_size,
-            backend=cfg.ska_backend,
             # echo_jax.py parity (the cited "verified parity" reference): eta and
             # gamma are BOTH learnable, smoothly squashed to bounded ranges via
             # sigmoid, not fixed/unconstrained. Sec 6.1: "a learned scalar gamma

@@ -43,7 +43,7 @@ def _make_ska(layerscale=True, **kw):
     return SKAModule(
         d_model=D, n_heads=H, rank=R, head_dim=D // H,
         ridge_eps=RIDGE, power_K=2, chunk_size=CS,
-        backend="pytorch", layerscale=layerscale, layerscale_init=1e-4, **kw)
+        layerscale=layerscale, layerscale_init=1e-4, **kw)
 
 
 def _finite(t):
