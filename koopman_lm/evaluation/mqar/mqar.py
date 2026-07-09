@@ -1,18 +1,17 @@
 """MQAR (Multi-Query Associative Recall), Arora et al. 2024 / Zoology setup.
 
-The single canonical MQAR generator, shared by everything MQAR-shaped:
+The evaluation-side MQAR generator:
 
     - evaluation/harness.py: the ``mqar`` eval task (``eval_mqar_grid``).
-    - training/train_mqar.py: single-cell MQAR training.
-    - experiments/mqar_finetune.py (Section 5.2): 50M in-task MQAR
-      fine-tuning, one cell trained+evaluated independently per
-      (model_type, KV pairs, distractor gap).
-    - experiments/table2.py (Table 2, Section 4.1): "needle-in-a-haystack
-      retrieval (KV=1)" is this same generator special-cased to
-      num_kv_pairs=1 -- the paper gives no separate NIAH token format, and
-      frames Table 2's task explicitly as "(KV=1)" while noting "each task
-      varies KV pairs and sequence length," so KV=1 is read here as the
-      MQAR family's smallest cell rather than a bespoke needle format.
+
+NOTE (dedup pending): experiments/curricula.py carries its own ``make_mqar``
+(plus toolcall/sysprompt/NIAH generators), used by experiments/table2.py and
+experiments/mqar_finetune.py. Consolidating the two MQAR generators is an
+open item to coordinate on -- do NOT let their token formats drift silently.
+On Table 2's "needle-in-a-haystack retrieval (KV=1)": the paper gives no
+separate NIAH token format and frames the task explicitly as "(KV=1)", so
+KV=1 is read as the MQAR family's smallest cell rather than a bespoke
+needle format.
 
 Token-id-level synthetic: keys and values live in disjoint halves of the vocab.
 A sequence lists key-value pairs, then re-presents a subset of keys as queries;

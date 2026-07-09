@@ -1,0 +1,8 @@
+{
+  "model_type": "koopman",
+  "fineweb_ppl": {
+    "loss": 2.960674560978769,
+    "ppl": 19.310993805808113,
+    "n_tokens": 49997824
+  }
+}

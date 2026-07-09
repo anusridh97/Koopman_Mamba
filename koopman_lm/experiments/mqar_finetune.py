@@ -23,13 +23,13 @@ Resume with --resume_from <output_dir>/step_<N>.
 Single-cell example
 --------------------
     python -m koopman_lm.experiments.mqar_finetune \\
-        --model_type koopman \\
+        --model_type mamba_ska_swiglu \\
         --model_size 50m \\
         --num_kv_pairs 32 \\
         --distractor_gap 1024 \\
-        --output_dir ./mqar-koopman-m32-g1024
+        --output_dir ./mqar-ska-swiglu-m32-g1024
 
-Every cell (Section 5.2 grid: 5 model types x 4 KV counts x 7 gaps):
+Every cell (Section 5.2 grid: 3 model types x 4 KV counts x 7 gaps):
     python -m koopman_lm.experiments.mqar_finetune --sweep \\
         --output_root ./mqar-sweep
 """
@@ -50,15 +50,14 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from koopman_lm.globals.config import build_config, config_hash
-from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import (
-    build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu, build_transformer)
-from koopman_lm.evaluation.mqar import make_mqar, eval_mqar
+    build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
+from koopman_lm.experiments.curricula import make_mqar, eval_mqar
 
 # Paper grid (Echo/SKA, Arora et al. 2024)
 PAPER_KV_PAIRS     = (4, 8, 16, 32)
 PAPER_GAPS         = (64, 128, 256, 512, 1024, 2048, 4096)
-PAPER_MODEL_TYPES  = ("koopman", "mamba_attn", "mamba_only", "mamba_ska_swiglu", "transformer")
+PAPER_MODEL_TYPES  = ("mamba_ska_swiglu", "mamba_attn", "mamba_only")
 
 
 # ---------------------------------------------------------------------------
@@ -95,16 +94,12 @@ class MQARDataset(Dataset):
 # ---------------------------------------------------------------------------
 
 def build_model(model_type, cfg):
-    if model_type == "koopman":
-        return KoopmanLM(cfg)
+    if model_type == "mamba_ska_swiglu":
+        return build_mamba_ska_swiglu(cfg)
     elif model_type == "mamba_attn":
         return build_mamba_attention(cfg)
     elif model_type == "mamba_only":
         return build_mamba_only(cfg)
-    elif model_type == "mamba_ska_swiglu":
-        return build_mamba_ska_swiglu(cfg)
-    elif model_type == "transformer":
-        return build_transformer(cfg)
     else:
         raise ValueError(f"Unknown model_type: {model_type!r}. "
                          f"Choose from {PAPER_MODEL_TYPES}")
@@ -452,7 +447,7 @@ def parse_args():
                         "one subprocess per cell, instead of a single cell")
 
     # Cell definition (single-cell mode)
-    p.add_argument("--model_type", type=str, default="koopman",
+    p.add_argument("--model_type", type=str, default="mamba_ska_swiglu",
                    choices=list(PAPER_MODEL_TYPES),
                    help="which model variant to train")
     p.add_argument("--num_kv_pairs", type=int, default=32,

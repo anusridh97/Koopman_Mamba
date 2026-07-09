@@ -6,7 +6,7 @@ This session took a fragmented codebase split across two legacy directories (`ec
 
 - **Restructure** — flat `koopman_lm/` reorganised into `globals/`, `models/`, `training/`, and `evaluation/` layers with clean dependency direction
 - **Config system** — factory functions replaced with YAML files; `build_config("50m")` loads `configs/smoke/50m.yaml`; all scale configs now have explicit, correct `ska_layer_indices`
-- **MQAR experiments** — in-task training script (`train_mqar.py`) and full 84-cell sweep launcher (`sweep_mqar.py`) matching the paper's protocol
+- **MQAR experiments** — Section 5.2 runner (`mqar_finetune.py`) with its built-in 84-cell sweep matching the paper's protocol
 - **Bug fixes** — 8 issues found and fixed via code review: broken imports in recurrent decode, wrong eval argmax range, missing `_ablate` on baseline SKABlock, SKA layer index regression across all scales, and more
 - **Cleanup** — dead code, empty placeholders, build artifacts, and planning docs removed; repo is now production-ready
 
@@ -33,8 +33,6 @@ koopman_lm/
     baselines.py              # Mamba-only and Mamba+Attention variants
   training/
     train.py                  # LM pretraining (wikitext / FineWeb)
-    train_mqar.py             # In-task MQAR training (paper §4.2)
-    sweep_mqar.py             # Launches all 84 MQAR grid cells
     data/                     # MemmapPackedDataset, pretokenize
   evaluation/
     mqar/mqar.py              # make_mqar, eval_mqar, eval_mqar_grid
@@ -51,12 +49,12 @@ archive/                      # Old reference code, legacy scripts, notebook
 
 ### 1 — MQAR In-Task Training
 
-Trains a 50M model on a single MQAR cell (one combination of KV pair count and distractor gap length) and evaluates on the same cell. Three architectures are trained independently for comparison: `koopman` (Mamba-2 + SKA), `mamba_attn` (Mamba-2 + Attention), and `mamba_only` (pure Mamba-2). The grid covers M in {4, 8, 16, 32} KV pairs and gap in {64, 128, 256, 512, 1024, 2048, 4096} tokens — 28 cells per architecture, 84 total.
+Trains a 50M model on a single MQAR cell (one combination of KV pair count and distractor gap length) and evaluates on the same cell. Three architectures are trained independently for comparison: `mamba_ska_swiglu` (Mamba-2 + SKA + SwiGLU), `mamba_attn` (Mamba-2 + Attention), and `mamba_only` (pure Mamba-2). The grid covers M in {4, 8, 16, 32} KV pairs and gap in {64, 128, 256, 512, 1024, 2048, 4096} tokens — 28 cells per architecture, 84 total.
 
 Single cell:
 ```bash
-python -m koopman_lm.training.train_mqar \
-    --model_type koopman \
+python -m koopman_lm.experiments.mqar_finetune \
+    --model_type mamba_ska_swiglu \
     --model_size 50m \
     --num_kv_pairs 32 \
     --distractor_gap 1024 \
@@ -65,23 +63,23 @@ python -m koopman_lm.training.train_mqar \
     --eval_batch 64 \
     --max_steps 10000 \
     --save_steps 2000 \
-    --output_dir ./mqar-koopman-kv32-gap1024
+    --output_dir ./mqar-ska-swiglu-kv32-gap1024
 ```
 
 Resume after interruption:
 ```bash
-python -m koopman_lm.training.train_mqar \
-    --model_type koopman --model_size 50m \
+python -m koopman_lm.experiments.mqar_finetune \
+    --model_type mamba_ska_swiglu --model_size 50m \
     --num_kv_pairs 32 --distractor_gap 1024 \
     --task_vocab_size 128 --batch_size 64 \
     --max_steps 10000 --save_steps 2000 \
-    --resume_from ./mqar-koopman-kv32-gap1024/step_4000 \
-    --output_dir ./mqar-koopman-kv32-gap1024
+    --resume_from ./mqar-ska-swiglu-kv32-gap1024/step_4000 \
+    --output_dir ./mqar-ska-swiglu-kv32-gap1024
 ```
 
 Full sweep (all 84 cells, skips already-completed ones):
 ```bash
-python -m koopman_lm.training.sweep_mqar \
+python -m koopman_lm.experiments.mqar_finetune --sweep \
     --output_root ./mqar-sweep \
     --batch_size 64 \
     --eval_batch 64 \
@@ -90,9 +88,9 @@ python -m koopman_lm.training.sweep_mqar \
 
 One architecture only:
 ```bash
-python -m koopman_lm.training.sweep_mqar \
+python -m koopman_lm.experiments.mqar_finetune --sweep \
     --output_root ./mqar-sweep \
-    --model_types koopman \
+    --model_types mamba_ska_swiglu \
     --max_steps 10000
 ```
 
@@ -133,7 +131,7 @@ pytest code-tests/ -m "correctness and not gpu" -q
 
 Ran a single MQAR cell on an A100 to validate the training loop end-to-end.
 
-**Cell:** `koopman`, kv=32, gap=1024 (seq_len=1152), 50M params, 10k steps  
+**Historical cell:** old `koopman` naming, kv=32, gap=1024 (seq_len=1152), 50M params, 10k steps  
 **Result:** in-task accuracy **0.957**
 
 The paper reports 100% on every in-task MQAR cell (§5.2), so 95.7% at 10k steps is expected — the model is still converging. Longer training or a full sweep across all 84 cells would close the gap.

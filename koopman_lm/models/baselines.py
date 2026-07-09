@@ -2,13 +2,22 @@
 """
 baselines.py -- Baseline model variants for ablation comparison.
 
-  transformer  — Pure causal Transformer, all attention layers + SwiGLU MLP
-  mamba_only   — All Mamba-2 + SwiGLU MLP (no global retrieval)
-  mamba_attn   — 75% Mamba-2 + 25% Flash Attention + SwiGLU MLP
-  koopman      — 75% Mamba-2 + 25% SKA + Koopman MLP  (in model.py)
+  transformer         — Pure causal Transformer, all attention layers + SwiGLU MLP
+  mamba_only          — All Mamba-2 + SwiGLU MLP (no global retrieval)
+  mamba_attn           — 75% Mamba-2 + 25% Flash Attention + SwiGLU MLP
+  mamba_ska_swiglu     — 75% Mamba-2 + 25% SKA + SwiGLU MLP (isolates SKA from the Koopman MLP)
+  mamba_ska_koopman    — 75% Mamba-2 + 25% SKA + Spectral Koopman MLP (Sec 3.3's actual "Echo" MLP)
+  koopman (full Echo)  — same layout, with the extras (short-conv, last-layer memory,
+                          ablation context manager); see models/koopman_lm.py::KoopmanLM
 
 The attention/SKA indices mirror ska_layer_indices from the config so that
-mamba_attn and koopman have the same Mamba/non-Mamba split.
+mamba_attn, mamba_ska_swiglu, and mamba_ska_koopman all share the same
+Mamba/non-Mamba split -- mamba_ska_koopman vs mamba_ska_swiglu is a clean,
+single-variable ablation (only the MLP type differs; same SKABlock, same
+Mamba2Block). Note: Table 2 (Sec 4.1) itself specifies SwiGLU MLPs for all
+three of its sub-million models -- mamba_ska_koopman is not part of that
+table's literal protocol, it's for comparing the Koopman MLP's effect on
+the same task.
 """
 
 import math
@@ -17,6 +26,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from koopman_lm.globals.config import KoopmanLMConfig
 from koopman_lm.globals.modules.ska import SKAModule
+from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
 from koopman_lm.globals.modules.mamba import Mamba2Block      # noqa: F401 (re-exported)
 from koopman_lm.globals.modules.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
 
@@ -200,4 +210,30 @@ def build_mamba_ska_swiglu(cfg: KoopmanLMConfig):
         return SKABlock(c) if is_ska else Mamba2Block(c)
     def mlp_fn(c):
         return SwiGLUMLP(c.d_model, c.mlp_expand)
+    return _build_model(cfg, seq_fn, mlp_fn)
+
+
+def build_mamba_ska_koopman(cfg: KoopmanLMConfig, mlp_expand: float | None = None):
+    """
+    Mamba-2 + SKA + Spectral Koopman MLP (Sec 3.3) -- same sequence-layer
+    layout as build_mamba_ska_swiglu (same SKABlock, same Mamba2Block, same
+    ska_layer_indices), only the MLP type differs. Uses SpectralKoopmanMLPGated
+    when cfg.mlp_gated, else the plain (ungated) SpectralKoopmanMLP -- matching
+    how models/koopman_lm.py::KoopmanLM picks between the two.
+
+    mlp_expand overrides cfg.mlp_expand for this MLP only (the shared backbone
+    -- embeddings, Mamba-2, SKA -- is untouched). SpectralKoopmanMLP has 2
+    weight matrices (lift, readout) vs SwiGLUMLP's 3 (gate, up, down), so at
+    the SAME expand ratio it's structurally ~2/3 the size in the MLP portion
+    alone -- at cfg.mlp_expand's default (2.667) that's 0.74M total vs
+    build_mamba_ska_swiglu's 933,732, not the matched-budget comparison an
+    ablation needs. Pass mlp_expand explicitly (e.g. table2.py's
+    --koopman_mlp_expand) to compensate; None keeps cfg.mlp_expand unchanged.
+    """
+    def seq_fn(c, i, is_ska):
+        return SKABlock(c) if is_ska else Mamba2Block(c)
+    def mlp_fn(c):
+        MLPClass = SpectralKoopmanMLPGated if c.mlp_gated else SpectralKoopmanMLP
+        expand = c.mlp_expand if mlp_expand is None else mlp_expand
+        return MLPClass(c.d_model, expand=expand, spectral_norm_gamma=c.mlp_spectral_norm)
     return _build_model(cfg, seq_fn, mlp_fn)
