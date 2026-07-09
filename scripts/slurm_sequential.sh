@@ -1,6 +1,6 @@
 #!/bin/bash
-# SLURM single job — runs all 112 cells sequentially on one H100.
-# Use slurm_array.sh instead when possible (84x faster).
+# SLURM single job — runs all 84 cells sequentially on one H100.
+# Use slurm_array.sh instead when possible.
 #
 # Submit: sbatch scripts/slurm_sequential.sh
 
@@ -22,7 +22,7 @@ source "$SCRATCH/Koopman_Mamba/.venv/bin/activate"
 
 python -m koopman_lm.experiments.mqar_finetune --sweep \
     --output_root   "$SCRATCH/mqar-sweep" \
-    --model_types   koopman mamba_attn mamba_only transformer \
+    --model_types   mamba_ska_swiglu mamba_attn mamba_only \
     --batch_size    64 \
     --eval_batch    64 \
     --max_steps     10000 \
