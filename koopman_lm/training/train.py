@@ -8,8 +8,9 @@ train_fast.py -- Optimized training for Koopman LM and baselines.
     SCROLLS answer spans). Baseline behavior is recovered when weights are all
     ones (no weights.bin) -- identical to the original mean CE.
   * Tokenizer default -> meta-llama/Llama-2-7b-hf (use NousResearch mirror if gated).
-  * For model_type==koopman the SKA fast-patch is OPTIONAL now (the custom
-    autograd core already avoids autograd-through-cholesky); --ska_fast to enable.
+  * The old ska_fast patch is gone: its fused k/q/v projection now lives
+    directly in SKAModule.forward, and the custom autograd core already
+    avoids autograd-through-cholesky.
 
 Everything else (bf16 autocast, targeted torch.compile, gradient checkpointing,
 fused AdamW, DDP, checkpointing) is unchanged.
@@ -65,14 +66,6 @@ def build_model(args, tokenizer):
     if args.model_type == "koopman":
         print(f"Building Koopman LM ({args.model_size}): {n_mamba} Mamba-2 + {n_ska} SKA")
         model = KoopmanLM(cfg)
-        if args.ska_fast:
-            from koopman_lm.globals.modules.ska.fast import patch_ska_module
-            for layer in model.seq_layers:
-                if isinstance(layer, SKABlock):
-                    patch_ska_module(layer.ska)
-            print("  Applied SKA fast patches (fused proj / bf16 einsums)")
-        else:
-            print("  SKA uses the custom autograd core (no fast-patch needed)")
     elif args.model_type == "mamba_attn":
         model = build_mamba_attention(cfg)
     elif args.model_type == "mamba_only":
@@ -343,8 +336,6 @@ def parse_args():
     p.add_argument("--no_compile", action="store_false", dest="compile")
     p.add_argument("--gradient_checkpointing", action="store_true", default=True)
     p.add_argument("--no_gradient_checkpointing", action="store_false", dest="gradient_checkpointing")
-    p.add_argument("--ska_fast", action="store_true", default=False,
-                   help="apply ska_fast fused-proj patch (optional; core is custom autograd)")
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--ddp", action="store_true", default=False)
     p.add_argument("--logging_steps", type=int, default=10)
