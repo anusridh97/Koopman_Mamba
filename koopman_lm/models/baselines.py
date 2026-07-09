@@ -25,7 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.globals.modules.ska import SKAModule
+from koopman_lm.models.koopman_lm import SKABlock  # the one shared SKA block
 from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
 from koopman_lm.globals.modules.mamba import Mamba2Block      # noqa: F401 (re-exported)
 from koopman_lm.globals.modules.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
@@ -56,44 +56,17 @@ class SwiGLUMLP(nn.Module):
 # CausalAttentionBlock is defined in globals/modules/attention.py and imported above.
 
 
-class SKABlock(nn.Module):
-    def __init__(self, cfg: KoopmanLMConfig):
-        super().__init__()
-        self.norm = nn.LayerNorm(cfg.d_model)
-        self.ska = SKAModule(
-            d_model=cfg.d_model,
-            n_heads=cfg.ska_n_heads,
-            rank=cfg.ska_rank,
-            head_dim=cfg.head_dim,
-            ridge_eps=cfg.ska_ridge,
-            scale=cfg.ska_scale,
-            power_K=cfg.ska_power_K,
-            chunk_size=cfg.ska_chunk_size,
-            # echo_jax.py parity (the cited "verified parity" reference): eta and
-            # gamma are BOTH learnable, smoothly squashed to bounded ranges via
-            # sigmoid, not fixed/unconstrained. Sec 6.1: "a learned scalar gamma
-            # in [1.0, 1.5]" describes the effect qualitatively, but the actual
-            # reference implementation clamps gamma to [0.5, 1.5] starting BELOW
-            # 1.0 (init 0.7, a damped operator) and eta to [1.4, 1.7] (init 1.5)
-            # -- previously eta was an unconstrained parameter (could drift to
-            # any value) and gamma was fixed at exactly 1.0 (not learnable at
-            # all), neither of which matches the reference.
-            eta_learnable=True, eta_value=1.5, eta_bounds=(1.4, 1.7),
-            gamma_learnable=True, gamma_value=0.7, gamma_bounds=(0.5, 1.5),
-        )
-        # CRITICAL: SKAModule zero-inits out_proj when layerscale=False, which
-        # causes an exact-zero gradient stall — SKA internals receive NO gradient
-        # and the branch stays dead (loss never drops). The paper describes a
-        # near-zero out_proj, but exact-zero kills the gradient; we use a small
-        # non-zero std so SKA learns from step 1 while staying a small perturbation.
-        nn.init.normal_(self.ska.out_proj.weight, mean=0.0,
-                        std=getattr(cfg, "ska_out_proj_std", 0.02))
-        self._ablate = False
-
-    def forward(self, x):
-        if self._ablate:
-            return x
-        return x + self.ska(self.norm(x))
+# SKABlock is THE shared block from models/koopman_lm.py — config-driven
+# eta/gamma/layerscale/short_conv policy. baselines used to carry a near-
+# duplicate class that (a) hardcoded the echo_jax-parity eta/gamma regime
+# (eta in [1.4,1.7] init 1.5, gamma in [0.5,1.5] init 0.7, sigmoid-squashed)
+# and (b) silently ran with LayerScale ON (SKAModule's default) regardless of
+# cfg.ska_layerscale — its own out_proj re-init was written for the
+# layerscale=False case that never actually happened. That policy now lives
+# in the YAML configs (1m.yaml encodes the parity regime + layerscale
+# explicitly, matching the old class's ACTUAL behavior; 50m.yaml documents
+# the paper-faithful regime) so the ablation baselines and KoopmanLM provably
+# share block code and configs are no longer silently overridden.
 
 
 # Mamba2Block is defined in globals/modules/mamba.py and imported above.

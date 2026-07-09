@@ -187,28 +187,36 @@ class SKAModule(nn.Module):
             self.register_buffer('ssn_gamma', torch.tensor(float(gamma_value)))
             self._gamma_const = float(gamma_value)
 
+    @staticmethod
+    def _resolve_scale(param, bounds=None, const=None, clamp=None):
+        """Shared regime resolver for the eta/gamma scalar scales.
+
+        Precedence (mirrors the construction regimes above):
+          bounds -> sigmoid-squashed tensor (echo_jax.py parity)
+          const  -> python float           (fixed buffer; enables the
+                                            skip-multiply-when-1.0 fast path)
+          clamp  -> hard-clamped tensor    (baseline learnable gamma; keeps
+                                            grad inside the range, kills it
+                                            at the boundary — unlike squash)
+          else   -> raw tensor             (unconstrained learnable)
+        """
+        if bounds is not None:
+            return _squash(param, *bounds)
+        if const is not None:
+            return const
+        if clamp is not None:
+            return torch.clamp(param, min=clamp[0], max=clamp[1])
+        return param
+
     def _resolve_eta(self):
-        """Return the eta to apply this forward (squashed tensor, unconstrained
-        tensor, or fixed buffer, depending on construction regime)."""
-        if self.eta_bounds is not None:
-            lo, hi = self.eta_bounds
-            return _squash(self.eta_raw, lo, hi)
-        return self.eta
+        return self._resolve_scale(
+            self.eta_raw if self.eta_bounds is not None else self.eta,
+            bounds=self.eta_bounds)
 
     def _resolve_gamma(self):
-        """Return the gamma to apply this forward.
-        Squash regime -> smoothly bounded tensor (echo_jax.py parity).
-        Fixed regime -> python float (enables the skip-when-1.0 fast path).
-        Learnable regime -> clamped tensor (keeps grad), as in the baseline."""
-        if self.gamma_bounds is not None:
-            lo, hi = self.gamma_bounds
-            return _squash(self.ssn_gamma, lo, hi)
-        if not self.gamma_learnable:
-            return self._gamma_const
-        if self.gamma_clamp is not None:
-            lo, hi = self.gamma_clamp
-            return torch.clamp(self.ssn_gamma, min=lo, max=hi)
-        return self.ssn_gamma
+        return self._resolve_scale(
+            self.ssn_gamma, bounds=self.gamma_bounds,
+            const=self._gamma_const, clamp=self.gamma_clamp)
 
 
     def forward(self, hidden_states):

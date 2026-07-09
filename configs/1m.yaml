@@ -14,6 +14,22 @@ ska_chunk_size: 16
 ska_power_K: 2
 ska_ridge: 0.001
 ska_layer_indices: [2, 3]
+# SKA policy for the Table 2 baselines — previously hardcoded inside
+# baselines.py's (now-removed) duplicate SKABlock; moved here verbatim so the
+# shared SKABlock reproduces the same models. echo_jax.py-parity eta/gamma
+# (sigmoid-squashed, matching the JAX reference: eta 1.5 in [1.4,1.7],
+# gamma 0.7 in [0.5,1.5] -- gamma starts BELOW 1.0, a damped operator).
+# layerscale: true matches the old class's ACTUAL behavior (it never passed
+# layerscale, inheriting SKAModule's default True: gate 1e-4 + out_proj
+# N(0, 0.02)).
+ska_eta_learnable: true
+ska_eta_value: 1.5
+ska_eta_bounds: [1.4, 1.7]
+ska_gamma_learnable: true
+ska_gamma_value: 0.7
+ska_gamma_clamp: null
+ska_gamma_bounds: [0.5, 1.5]
+ska_layerscale: true
 mlp_gated: false
 max_seq_len: 4096
 tie_embeddings: true
