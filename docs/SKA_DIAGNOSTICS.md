@@ -18,7 +18,7 @@ port.
 
 | File | Status | Purpose |
 |---|---|---|
-| `koopman_lm/globals/modules/ska/ska.py` | edited | `SKAModule.collect_diagnostics()` + `_spectral_radius()` helper |
+| `koopman_lm/modules/ska/ska.py` | edited | `SKAModule.collect_diagnostics()` + `_spectral_radius()` helper |
 | `koopman_lm/training/diagnostics.py` | **new** | `SKAHealthMonitor`, `GradFlowMonitor`, `profile_overhead()` |
 | `koopman_lm/training/train.py` | edited | wires the monitors into the training loop + CLI flags (opt-in) |
 | `code-tests/test_diagnostics.py` | **new** | CPU-only test suite (no GPU / mamba_ssm / wandb needed) |
@@ -40,7 +40,7 @@ training forward actually applies** (see "Faithfulness" below), not a proxy.
 
 ---
 
-## 1. `SKAModule.collect_diagnostics()`  (`koopman_lm/globals/modules/ska/ska.py`)
+## 1. `SKAModule.collect_diagnostics()`  (`koopman_lm/modules/ska/ska.py`)
 
 The core measurement. A detached, fp32, no-grad method on the SKA module.
 
@@ -74,10 +74,10 @@ so downstream code can aggregate per head, per chunk, or over the whole pool
 however it wants.
 
 **Faithfulness.** It calls the *same* `chunk_stats` function the training
-forward uses (`koopman_lm/globals/modules/ska/chunk_stats.py`: β-gated,
+forward uses (`koopman_lm/modules/ska/chunk_stats.py`: β-gated,
 strictly-causal, exclusive-prefix sufficient statistics) and forms each chunk's
 operator with the same `_whiten_M` / `_spec_w` helpers `ska_core` uses
-(`koopman_lm/globals/modules/ska/core.py`):
+(`koopman_lm/modules/ska/core.py`):
 `A_eff = γ · α · (L⁻¹ M L⁻ᵀ)`, with `α = 1/max(σ_max, 1)`. So every operator
 measured is one a real query sees, at the model's chunk level.
 
@@ -306,8 +306,8 @@ layout.
 
 | phase1 (old layout) | this port |
 |---|---|
-| `koopman_lm/ska.py`, `koopman_lm/diagnostics.py`, `koopman_lm/train_fast.py`, `koopman_lm/model.py` | `koopman_lm/globals/modules/ska/ska.py`, `koopman_lm/training/diagnostics.py`, `koopman_lm/training/train.py`, `koopman_lm/models/koopman_lm.py` |
-| `_whiten_M`, `_spec_w` from `koopman_lm.ska_core_torch` | from `koopman_lm.globals.modules.ska.core` |
+| `koopman_lm/ska.py`, `koopman_lm/diagnostics.py`, `koopman_lm/train_fast.py`, `koopman_lm/model.py` | `koopman_lm/modules/ska/ska.py`, `koopman_lm/training/diagnostics.py`, `koopman_lm/training/train.py`, `koopman_lm/models/koopman_lm.py` |
+| `_whiten_M`, `_spec_w` from `koopman_lm.ska_core_torch` | from `koopman_lm.modules.ska.core` |
 | `A_eff = α·W` (γ fixed at 1.0) | `A_eff = γ·α·W` with γ resolved via `_resolve_gamma()` (fixed / clamped-learnable / squash) |
 | `gate_mag` fallback reads `self.eta` directly | fallback via `_resolve_eta()` (the squash regime has `eta_raw`, no `.eta`) |
 | no η/γ reporting | `eta` / `gamma` scalars in `collect_diagnostics` and per-layer wandb keys |

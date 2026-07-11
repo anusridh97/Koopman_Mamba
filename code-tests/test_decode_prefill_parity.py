@@ -16,8 +16,8 @@ import math
 import pytest
 import torch
 
-from koopman_lm.globals.modules.kernels.core import ska_core
-from koopman_lm.globals.modules.kernels.factor_scan import ska_core_given_L, rank1_chol_update_
+from koopman_lm.modules.kernels.core import ska_core
+from koopman_lm.modules.kernels.factor_scan import ska_core_given_L, rank1_chol_update_
 
 pytestmark = pytest.mark.correctness
 
@@ -76,7 +76,7 @@ def test_ska_operator_decode_equals_prefill():
 @pytest.mark.gpu
 def test_full_model_decode_prefill_parity():
     """Full KoopmanLM: streaming decode == parallel forward (<= 1e-4)."""
-    from koopman_lm.globals.config import build_config
+    from koopman_lm.config import build_config
     from koopman_lm.models.koopman_lm import KoopmanLM
     from koopman_lm.models.recurrent import RecurrentKoopmanLM
 

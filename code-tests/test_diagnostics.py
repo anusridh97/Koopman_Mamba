@@ -26,8 +26,8 @@ import pytest
 import torch
 import torch.nn as nn
 
-from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.globals.modules.token_mixer import SKAModule
+from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.modules.token_mixer import SKAModule
 from koopman_lm.models.koopman_lm import SKABlock, KoopmanLM
 from koopman_lm.training.diagnostics import (
     SKAHealthMonitor, GradFlowMonitor, profile_overhead,

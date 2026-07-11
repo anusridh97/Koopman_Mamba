@@ -24,12 +24,12 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.globals.modules.token_mixer.ska import SKABlock  # the one shared SKA block
-from koopman_lm.globals.modules.channel_mixer.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
-from koopman_lm.globals.modules.channel_mixer.swiglu import SwiGLUMLP
-from koopman_lm.globals.modules.token_mixer.mamba import Mamba2Block      # noqa: F401 (re-exported)
-from koopman_lm.globals.modules.token_mixer.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
+from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.modules.token_mixer.ska import SKABlock  # the one shared SKA block
+from koopman_lm.modules.channel_mixer.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
+from koopman_lm.modules.channel_mixer.swiglu import SwiGLUMLP
+from koopman_lm.modules.token_mixer.mamba import Mamba2Block      # noqa: F401 (re-exported)
+from koopman_lm.modules.token_mixer.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
 
 
 # ============================================================================

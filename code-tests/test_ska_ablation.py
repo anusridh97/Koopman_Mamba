@@ -5,7 +5,7 @@ flag correctly. Pure CPU.
 import pytest
 import torch
 
-from koopman_lm.globals.config import build_config
+from koopman_lm.config import build_config
 from koopman_lm.models.koopman_lm import SKABlock, KoopmanLM
 
 pytestmark = pytest.mark.correctness

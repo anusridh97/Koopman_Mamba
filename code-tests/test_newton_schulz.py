@@ -9,7 +9,7 @@ is marked gpu.
 import pytest
 import torch
 
-from koopman_lm.globals.modules.kernels.core import (
+from koopman_lm.modules.kernels.core import (
     ska_core,
     ska_core_ns,
     _inv_sqrt_ns,

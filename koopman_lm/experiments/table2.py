@@ -68,7 +68,7 @@ import torch
 import torch.nn.functional as F
 
 from koopman_lm.experiments.curricula import eval_niah, make_sysprompt, make_toolcall
-from koopman_lm.globals.config import build_config, config_hash
+from koopman_lm.config import build_config, config_hash
 from koopman_lm.models.baselines import (
     build_mamba_attention,
     build_mamba_only,

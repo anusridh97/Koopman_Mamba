@@ -7,7 +7,7 @@ import dataclasses
 
 import pytest
 
-from koopman_lm.globals.config import (
+from koopman_lm.config import (
     KoopmanLMConfig,
     config_hash,
     build_config,

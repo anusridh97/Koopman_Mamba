@@ -42,7 +42,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import AutoTokenizer
 import dataclasses
-from koopman_lm.globals.config import build_config, config_hash
+from koopman_lm.config import build_config, config_hash
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
 

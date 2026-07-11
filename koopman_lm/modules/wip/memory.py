@@ -162,7 +162,7 @@ class LastLayerRidgeMemory(nn.Module):
     def stream_write(self, h, v, weight=1.0):
         """Write (h,v) and rank-1-update the carried L by sqrt(weight)*z, so
         L stays consistent with G += weight z z^T. O(r^2) per item."""
-        from koopman_lm.globals.modules.kernels.cholesky_update import update_L_only
+        from koopman_lm.modules.kernels.cholesky_update import update_L_only
         z = self._feat(h)
         if not torch.is_tensor(weight):
             weight = torch.full((z.shape[0],), float(weight),

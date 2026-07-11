@@ -27,9 +27,9 @@ from contextlib import nullcontext
 #   ska_core  -- whitened L^{-1}M L^{-T} forward + custom O(K r^2) backward
 #                ("It Cancels"; Cholesky never differentiated)
 #   chunk_stats -- beta-gated, strictly-causal sufficient statistics
-from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.globals.modules.kernels.core import ska_core, _whiten_M, _spec_w
-from koopman_lm.globals.modules.kernels.chunk_stats import chunk_stats as _causal_chunk_stats
+from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.modules.kernels.core import ska_core, _whiten_M, _spec_w
+from koopman_lm.modules.kernels.chunk_stats import chunk_stats as _causal_chunk_stats
 
 
 # ============================================================================
@@ -259,8 +259,8 @@ class SKAModule(nn.Module):
                 # EXACT per-token causal stats (across + within chunk). Fixes
                 # within-chunk staleness; reuses the same verified ska_core.
                 # Cost: B*T*H solves instead of B*nchunks*H.
-                from koopman_lm.globals.modules.kernels.chunk_stats_exact import exact_stats
-                from koopman_lm.globals.modules.kernels.factor_scan import all_prefix_chol, ska_core_given_L
+                from koopman_lm.modules.kernels.chunk_stats_exact import exact_stats
+                from koopman_lm.modules.kernels.factor_scan import all_prefix_chol, ska_core_given_L
                 Gf, Mf, Cf, qf, (Be, Te, He, Pe) = exact_stats(
                     z_n, zb_n, zq_n, v_f, self.ridge_eps)
                 # factor scan over per-token update vectors (numerics-only):

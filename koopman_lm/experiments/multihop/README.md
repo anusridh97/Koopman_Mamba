@@ -24,7 +24,7 @@ python -m koopman_lm.experiments.multihop.run_multihop     # train + eval, hop-b
 ```
 Note: `koopman_core.py` is a deliberately self-contained snapshot of the SKA/Mamba
 core used for this experiment (frozen at the investigation's state), independent of
-`koopman_lm.globals.modules`.
+`koopman_lm.modules`.
 
 ## "Optimal SKA" configuration (and why)
 Set in `run_multihop.make_cfg`, from the investigation:

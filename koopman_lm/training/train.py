@@ -30,7 +30,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
-from koopman_lm.globals.config import build_config, config_hash, CONFIG_FACTORIES
+from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
 from koopman_lm.training.repro import seed_everything, enable_determinism, seed_worker
 from koopman_lm.models.koopman_lm import KoopmanLM, Mamba2Block, SKABlock
 from koopman_lm.models.baselines import (

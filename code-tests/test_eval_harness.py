@@ -9,7 +9,7 @@ import contextlib
 import pytest
 import torch
 
-from koopman_lm.globals.config import build_config, config_hash
+from koopman_lm.config import build_config, config_hash
 from koopman_lm.models.koopman_lm import SKABlock, KoopmanLM
 from koopman_lm.evaluation.mqar.mqar import make_mqar
 from koopman_lm.evaluation.ruler import (

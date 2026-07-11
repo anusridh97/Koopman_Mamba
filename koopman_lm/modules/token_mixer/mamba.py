@@ -1,5 +1,5 @@
 import torch.nn as nn
-from koopman_lm.globals.config import KoopmanLMConfig
+from koopman_lm.config import KoopmanLMConfig
 
 
 class Mamba2Block(nn.Module):
