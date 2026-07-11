@@ -28,7 +28,8 @@ from contextlib import nullcontext
 #                ("It Cancels"; Cholesky never differentiated)
 #   chunk_stats -- beta-gated, strictly-causal sufficient statistics
 from koopman_lm.config import KoopmanLMConfig
-from koopman_lm.modules.kernels.core import ska_core, _whiten_M, _spec_w
+from koopman_lm.modules.kernels.ska_operator import ska_core
+from koopman_lm.modules.kernels.lin_alg import _whiten_M, _spec_w
 from koopman_lm.modules.kernels.chunk_stats import chunk_stats as _causal_chunk_stats
 
 

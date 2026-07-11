@@ -9,13 +9,8 @@ is marked gpu.
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.core import (
-    ska_core,
-    ska_core_ns,
-    _inv_sqrt_ns,
-    _whiten_M,
-    _spec_w,
-)
+from koopman_lm.modules.kernels.ska_operator import ska_core, ska_core_ns
+from koopman_lm.modules.kernels.lin_alg import _inv_sqrt_ns, _whiten_M, _spec_w
 
 pytestmark = pytest.mark.correctness
 

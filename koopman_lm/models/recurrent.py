@@ -27,7 +27,7 @@ from contextlib import nullcontext
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.token_mixer.mamba import Mamba2Block
 from koopman_lm.modules.token_mixer.ska import SKABlock
-from koopman_lm.modules.kernels.core import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
+from koopman_lm.modules.kernels.lin_alg import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
 
 
 def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
