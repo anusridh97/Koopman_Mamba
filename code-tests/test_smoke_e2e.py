@@ -42,7 +42,7 @@ def test_e2e_train_checkpoint_reload_decode(tmp_path):
     """Full loop on a tiny model: train -> eval -> checkpoint -> reload -> decode."""
     from koopman_lm.globals.config import build_config as _bc; config_50m = lambda: _bc("50m")
     from koopman_lm.models.koopman_lm import KoopmanLM
-    from koopman_lm.globals.modules.recurrent import RecurrentKoopmanLM
+    from koopman_lm.models.recurrent import RecurrentKoopmanLM
     from koopman_lm.training.train import checkpoint_meta
     from koopman_lm.training.repro import seed_everything
     from torch.utils.data import DataLoader

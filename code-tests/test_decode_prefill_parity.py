@@ -78,7 +78,7 @@ def test_full_model_decode_prefill_parity():
     """Full KoopmanLM: streaming decode == parallel forward (<= 1e-4)."""
     from koopman_lm.globals.config import build_config
     from koopman_lm.models.koopman_lm import KoopmanLM
-    from koopman_lm.globals.modules.recurrent import RecurrentKoopmanLM
+    from koopman_lm.models.recurrent import RecurrentKoopmanLM
 
     torch.manual_seed(0)
     V, T, P = 512, 24, 12          # tiny vocab, short seq, prompt length P
