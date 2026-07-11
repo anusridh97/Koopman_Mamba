@@ -31,7 +31,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.globals.config import build_config, config_hash, CONFIG_FACTORIES
-from koopman_lm.globals.modules.utils.repro import seed_everything, enable_determinism, seed_worker
+from koopman_lm.training.repro import seed_everything, enable_determinism, seed_worker
 from koopman_lm.models.koopman_lm import KoopmanLM, Mamba2Block, SKABlock
 from koopman_lm.models.baselines import (
     build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
@@ -42,7 +42,7 @@ from koopman_lm.training.data.dataset import MemmapPackedDataset
 
 def enable_gradient_checkpointing(model):
     # Both KoopmanLM and baseline models use the same Mamba2Block class from
-    # globals/modules/mamba, so a single isinstance check is sufficient.
+    # globals/modules/token_mixer/mamba, so a single isinstance check is sufficient.
     layers = model.seq_layers if hasattr(model, 'seq_layers') else []
     for layer in layers:
         if isinstance(layer, Mamba2Block):

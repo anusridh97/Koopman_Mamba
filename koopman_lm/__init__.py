@@ -14,9 +14,9 @@ from koopman_lm.globals.config import (
     CONFIG_FACTORIES,
 )
 from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.globals.modules.ska import SKAModule
-from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
-from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
+from koopman_lm.globals.modules.token_mixer import SKAModule
+from koopman_lm.globals.modules.channel_mixer import SpectralKoopmanMLP, SpectralKoopmanMLPGated
+from koopman_lm.globals.modules.recurrent import RecurrentKoopmanLM
 
 __all__ = [
     "KoopmanLMConfig",

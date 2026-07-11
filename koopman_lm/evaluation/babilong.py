@@ -29,7 +29,7 @@ def eval_babilong_subset(model, tokenizer, device, context_lens=(4096, 8192),
             "BABILong eval needs the `datasets` package: pip install datasets"
         ) from e
     from koopman_lm.evaluation.ruler import _greedy_generate
-    from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
+    from koopman_lm.globals.modules.recurrent import RecurrentKoopmanLM
 
     gen = model
     if hasattr(model, "cfg"):

@@ -25,35 +25,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.models.koopman_lm import SKABlock  # the one shared SKA block
-from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
-from koopman_lm.globals.modules.mamba import Mamba2Block      # noqa: F401 (re-exported)
-from koopman_lm.globals.modules.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
-
-
-# ============================================================================
-# MLP variants
-# ============================================================================
-
-class SwiGLUMLP(nn.Module):
-    def __init__(self, d, expand=2.667):
-        super().__init__()
-        d_ff = ((int(d * expand) + 63) // 64) * 64  # tensor-core aligned
-        self.norm = nn.LayerNorm(d)
-        self.w1 = nn.Linear(d, d_ff, bias=False)
-        self.w2 = nn.Linear(d, d_ff, bias=False)
-        self.w3 = nn.Linear(d_ff, d, bias=False)
-
-    def forward(self, x):
-        h = self.norm(x)
-        return x + self.w3(F.silu(self.w1(h)) * self.w2(h))
+from koopman_lm.globals.modules.token_mixer.ska import SKABlock  # the one shared SKA block
+from koopman_lm.globals.modules.channel_mixer.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
+from koopman_lm.globals.modules.channel_mixer.swiglu import SwiGLUMLP
+from koopman_lm.globals.modules.token_mixer.mamba import Mamba2Block      # noqa: F401 (re-exported)
+from koopman_lm.globals.modules.token_mixer.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
 
 
 # ============================================================================
 # Sequence layer blocks
 # ============================================================================
 
-# CausalAttentionBlock is defined in globals/modules/attention.py and imported above.
+# SwiGLUMLP (the standard channel mixer) now lives in
+# globals/modules/channel_mixer/swiglu.py, imported above.
+# CausalAttentionBlock is defined in globals/modules/token_mixer/attention.py and imported above.
 
 
 # SKABlock is THE shared block from models/koopman_lm.py — config-driven
@@ -69,7 +54,7 @@ class SwiGLUMLP(nn.Module):
 # share block code and configs are no longer silently overridden.
 
 
-# Mamba2Block is defined in globals/modules/mamba.py and imported above.
+# Mamba2Block is defined in globals/modules/token_mixer/mamba.py and imported above.
 
 
 # ============================================================================

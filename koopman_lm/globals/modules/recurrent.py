@@ -24,8 +24,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from contextlib import nullcontext
 
-from koopman_lm.models.koopman_lm import KoopmanLM, Mamba2Block, SKABlock
-from koopman_lm.globals.modules.ska.core import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
+from koopman_lm.models.koopman_lm import KoopmanLM
+from koopman_lm.globals.modules.token_mixer.mamba import Mamba2Block
+from koopman_lm.globals.modules.token_mixer.ska import SKABlock
+from koopman_lm.globals.modules.kernels.core import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
 
 
 def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
@@ -348,7 +350,7 @@ class RecurrentKoopmanLM(nn.Module):
         st.z_last = z1
         # rank-1 cholupdate of the carried factor: beta z z^T = w w^T with
         # w = sqrt(beta) z. Since z1 is unit-norm, beta == ||zb1||.
-        from koopman_lm.globals.modules.ska.factor_scan import rank1_chol_update_
+        from koopman_lm.globals.modules.kernels.factor_scan import rank1_chol_update_
         beta1 = zb1.norm(dim=-1, keepdim=True)
         w1 = beta1.clamp_min(1e-12).sqrt() * z1
         rank1_chol_update_(st.L.reshape(N, r, r), w1.reshape(N, r))

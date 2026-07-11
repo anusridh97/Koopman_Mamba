@@ -87,7 +87,7 @@ def eval_ruler_subset(model, tokenizer, device, context_lens=(4096, 8192),
     greedily-decoded continuation contains the gold answer string.
     """
     import torch
-    from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
+    from koopman_lm.globals.modules.recurrent import RecurrentKoopmanLM
 
     tasks = tasks or list(_BUILDERS)
     gen = model

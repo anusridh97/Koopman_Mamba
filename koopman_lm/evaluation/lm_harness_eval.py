@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import dataclasses
 from koopman_lm.globals.config import build_config
 from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
+from koopman_lm.globals.modules.recurrent import RecurrentKoopmanLM
 
 
 @register_model("koopman")

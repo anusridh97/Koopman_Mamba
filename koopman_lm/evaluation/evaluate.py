@@ -398,7 +398,7 @@ def _score_niah_parallel(model, tokenizer, device, examples, batch_size=4):
 
 def _score_niah_recurrent(model, tokenizer, device, examples):
     """Score NIAH using O(1) recurrent generation (Koopman only)."""
-    from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
+    from koopman_lm.globals.modules.recurrent import RecurrentKoopmanLM
 
     wrapper = RecurrentKoopmanLM(model)
     correct = 0

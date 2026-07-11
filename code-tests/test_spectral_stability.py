@@ -10,7 +10,7 @@ bf16 marked gpu.
 import pytest
 import torch
 
-from koopman_lm.globals.modules.ska.core import _whiten_M, _spec_w
+from koopman_lm.globals.modules.kernels.core import _whiten_M, _spec_w
 
 pytestmark = pytest.mark.correctness
 

@@ -9,12 +9,12 @@ import math
 import pytest
 import torch
 
-from koopman_lm.globals.modules.ska.cholesky_update import (
+from koopman_lm.globals.modules.kernels.cholesky_update import (
     update_reference,
     update_L_only,
     cholesky_rank1_update_,
 )
-from koopman_lm.globals.modules.ska.factor_scan import all_prefix_chol, rank1_chol_update_
+from koopman_lm.globals.modules.kernels.factor_scan import all_prefix_chol, rank1_chol_update_
 
 pytestmark = pytest.mark.correctness
 

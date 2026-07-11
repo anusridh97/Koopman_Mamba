@@ -193,7 +193,7 @@ def make_toolcall(batch, seq_len, num_keys=8, num_queries=4, vocab_size=128,
 # fixed variables set once at the front, then a noise gap. num_decoys=0 by
 # default -- SKA fits its Gram-matrix statistics over the whole context with
 # no mechanism to mark "this pair matters, that one doesn't" (confirmed by
-# reading koopman_lm/globals/modules/ska/ska.py), so decoy bindings that look
+# reading koopman_lm/globals/modules/token_mixer/ska.py), so decoy bindings that look
 # structurally identical to the real ones measurably stalled training versus
 # plain noise. Pass num_decoys>0 for the paper-appendix-faithful "confusing
 # distractors" version if training budget allows it.
