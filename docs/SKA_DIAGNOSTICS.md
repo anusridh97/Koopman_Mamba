@@ -18,9 +18,11 @@ port.
 
 | File | Status | Purpose |
 |---|---|---|
-| `koopman_lm/modules/ska/ska.py` | edited | `SKAModule.collect_diagnostics()` + `_spectral_radius()` helper |
+| `koopman_lm/modules/token_mixer/ska.py` | edited | `SKAModule.collect_diagnostics()` — applied + **raw** spectral radius, α clamp factor |
 | `koopman_lm/training/diagnostics.py` | **new** | `SKAHealthMonitor`, `GradFlowMonitor`, `profile_overhead()` |
 | `koopman_lm/training/train.py` | edited | wires the monitors into the training loop + CLI flags (opt-in) |
+| `koopman_lm/evaluation/harness.py` | edited | `eval_load_bearing()` — four-mode SKA/Mamba decomposition |
+| `koopman_lm/evaluation/calibrate.py` | **new** | Phase-1 threshold calibration on reference models |
 | `code-tests/test_diagnostics.py` | **new** | CPU-only test suite (no GPU / mamba_ssm / wandb needed) |
 
 ---
@@ -32,7 +34,9 @@ training forward actually applies** (see "Faithfulness" below), not a proxy.
 
 | Metric | What it measures | Healthy range |
 |---|---|---|
-| **Spectral radius** of `A_eff` (per layer/head) | dominant eigenvalue magnitude of the effective transition operator `A_eff = γ·α·(L⁻¹ M L⁻ᵀ)`. Identifies whether key→value bindings are persistent. | `[0.3, 0.95]`; `~0` = operator unlearned; `>1` = unstable |
+| **Spectral radius** of `A_eff` (per layer/head) | dominant eigenvalue magnitude of the APPLIED transition operator `A_eff = γ·α·(L⁻¹ M L⁻ᵀ)`. `α` clamps `σ_max(A_eff) ≤ 1`, so this is **always ≤ 1**. Identifies whether key→value bindings are persistent. | `[0.3, 0.95]`; `~0` = operator unlearned |
+| **Raw spectral radius** = `radius / α` (pre-clamp, per layer/head) | radius of `γ·W` **before** the α safety clamp — where instability actually shows. `frac_unstable` is measured on THIS, not the clamped radius. | `≤ 1`; `> 1` = unstable (α clamp is load-bearing) |
+| **α (clamp factor)** | `1/max(σ_max(W), 1) ∈ (0, 1]`. `alpha_min` / `frac_clamped` report how hard / how often the spectral-norm clamp engages. | near 1 = clamp rarely fires |
 | **λmin(G̃)** | smallest eigenvalue of the ridge-regularized Gram matrix; Cholesky conditioning. | comfortably above the ridge floor `ε`; pinned at `ε` ⇒ rank-deficient keys |
 | **Gap** `‖A_eff^K − A_eff‖ / ‖A_eff‖` | how much the power filter (squaring, K=2) reshapes the operator. | `< 0.5`; above ⇒ the filter dominates rather than confirms |
 | **Write-gate magnitude** | the LayerScale residual gate (`layerscale_gate`); how hard SKA is injected into the residual. Plot on a **log scale**; watch for monotonic growth. | grows off its `1e-4` init; flat ⇒ SKA effectively dead |
@@ -40,7 +44,7 @@ training forward actually applies** (see "Faithfulness" below), not a proxy.
 
 ---
 
-## 1. `SKAModule.collect_diagnostics()`  (`koopman_lm/modules/ska/ska.py`)
+## 1. `SKAModule.collect_diagnostics()`  (`koopman_lm/modules/token_mixer/ska.py`)
 
 The core measurement. A detached, fp32, no-grad method on the SKA module.
 
@@ -58,7 +62,9 @@ metrics = ska_module.collect_diagnostics(hidden_states, max_batch=2)
 
 | key | shape | meaning |
 |---|---|---|
-| `spectral_radius` | `(B, nc, H)` | `max eig(A_eff)` per (batch, chunk, head) |
+| `spectral_radius` | `(B, nc, H)` | `max eig(A_eff)` per (batch, chunk, head); applied (clamped) operator, ≤ 1 |
+| `raw_spectral_radius` | `(B, nc, H)` | pre-clamp radius `= spectral_radius / α`; `> 1` ⇒ unstable |
+| `alpha` | `(B, nc, H)` | spectral-norm clamp factor `∈ (0, 1]` |
 | `lambda_min` | `(B, nc, H)` | smallest eig of `G̃` per instance |
 | `gap` | `(B, nc, H)` | `‖A_eff^K − A_eff‖ / ‖A_eff‖` per instance |
 | `n_chunks` | `int` | number of chunks (`nc`); chunk 0 has no history |
@@ -74,10 +80,10 @@ so downstream code can aggregate per head, per chunk, or over the whole pool
 however it wants.
 
 **Faithfulness.** It calls the *same* `chunk_stats` function the training
-forward uses (`koopman_lm/modules/ska/chunk_stats.py`: β-gated,
+forward uses (`koopman_lm/modules/kernels/chunk_stats.py`: β-gated,
 strictly-causal, exclusive-prefix sufficient statistics) and forms each chunk's
 operator with the same `_whiten_M` / `_spec_w` helpers `ska_core` uses
-(`koopman_lm/modules/ska/core.py`):
+(`koopman_lm/modules/kernels/lin_alg.py`):
 `A_eff = γ · α · (L⁻¹ M L⁻ᵀ)`, with `α = 1/max(σ_max, 1)`. So every operator
 measured is one a real query sees, at the model's chunk level.
 
@@ -156,9 +162,12 @@ Per SKA layer `L{idx}`:
 
 **Scalars**
 ```
-ska/L{idx}/spectral_radius_mean | _max | _min
-ska/L{idx}/frac_healthy           # fraction of (chunk,head) ops in [0.3, 0.95]
-ska/L{idx}/frac_unstable          # fraction with radius > 1.0
+ska/L{idx}/spectral_radius_mean | _max | _min   # applied (clamped) radius, <=1
+ska/L{idx}/raw_spectral_radius_mean | _max       # pre-clamp radius (instability lives here)
+ska/L{idx}/frac_healthy           # fraction of (chunk,head) applied-radius in [0.3, 0.95]
+ska/L{idx}/frac_unstable          # fraction with RAW radius > 1.0
+ska/L{idx}/alpha_min              # smallest clamp factor (strongest clamp)
+ska/L{idx}/frac_clamped           # fraction of ops that hit the spectral-norm clamp
 ska/L{idx}/lambda_min_min
 ska/L{idx}/lambda_min_over_ridge  # ~1 ⇒ Cholesky is all regularization
 ska/L{idx}/gap_mean | _max
@@ -172,6 +181,7 @@ ska/L{idx}/residual_delta
 **Histograms** (full pool + per-head + per-chunk views; chunk 0 excluded)
 ```
 ska/L{idx}/spectral_radius        | _by_head | _by_chunk
+ska/L{idx}/raw_spectral_radius    | _by_head | _by_chunk
 ska/L{idx}/lambda_min             | _by_head | _by_chunk
 ska/L{idx}/gap                    | _by_head | _by_chunk
 ```
@@ -184,21 +194,29 @@ ska/residual_delta_mamba_mean
 
 ### `GradFlowMonitor`
 
-Backward-hook probe for gradient flow into SKA vs non-SKA branches. Registers
-`param.register_hook` on the SKA projection weights
-(`key_proj`/`query_proj`/`value_proj`/`out_proj`) and on every `nn.Linear`
-weight of non-SKA seq blocks. Same `capture()` / `collect()` pattern, but the
-capture must span a **forward+backward**.
+Probe for gradient flow into SKA vs non-SKA branches. It records references to
+the SKA projection weights (`key_proj`/`query_proj`/`value_proj`/`out_proj`) and
+every `nn.Linear` weight of non-SKA seq blocks, then **reads their `.grad`
+directly** via `snapshot()` — NOT backward hooks. Call `snapshot()` after the
+last microbatch `backward()` and **before** `clip_grad_norm_`/`zero_grad`, so it
+measures the ACCUMULATED gradient of the real optimizer step. Under DDP those
+grads are already all-reduced when `backward()` returns, so a rank-0 snapshot is
+well-defined (no separate probe backward, no reducer desync). `capture()` is
+kept as single-backward sugar (snapshots on exit) for tests/profiling.
 
 Metrics emitted:
 ```
-ska/grad_norm_ratio        # mean||grad_SKA|| / mean||grad_Mamba||  (<0.1 = alarm)
+ska/grad_norm_ratio               # mean||grad_SKA|| / mean||grad_Mamba||  (<0.1 = alarm)
 ska/grad_norm_ska_mean
 ska/grad_norm_mamba_mean
 ska/L{idx}/grad_norm
-ska/L{idx}/jacobian_rank        # SVs of the key_proj gradient above 1% of sigma_max
-ska/L{idx}/jacobian_rank_frac   # rank / total SVs; falling toward 0 = rank collapse
+ska/L{idx}/key_projection_grad_rank       # SVs of the key_proj gradient above 1% of sigma_max
+ska/L{idx}/key_projection_grad_rank_frac  # rank / total SVs; toward 0 = gradient rank collapse
 ```
+NOTE: `key_projection_grad_rank` is the numerical rank of `grad(key_proj.weight)`
+— a gradient-signal-collapse proxy, **not** the SKA input→output Jacobian
+`J = η·Bv·L·Aw^K·L⁻¹` (renamed from the old misleading `jacobian_rank`; the true
+Jacobian rank/conditioning is a Phase-2 follow-up).
 
 ### `profile_overhead(model, batch_fn, monitor, ...)`
 
@@ -232,11 +250,11 @@ On `step % diag_every == 0`:
   forward (rather than hooking the training forward) keeps it clean of
   gradient-accumulation bookkeeping and `torch.compile` graph breaks; at this
   cadence the extra forward amortizes well under budget.
-- `GradFlowMonitor` (only with `--diag_grad`): a dedicated forward+backward of
-  the current micro-batch under `grad_monitor.capture()`, gradients cleared
-  immediately afterwards (it runs right after `optimizer.zero_grad`, so the
-  next accumulation window starts clean). **Skipped under DDP** — a
-  rank-0-only backward would desynchronize the DDP gradient reducer.
+- `GradFlowMonitor` (only with `--diag_grad`): `snapshot()` reads the
+  ACCUMULATED `.grad` of the real training step at the accumulation boundary,
+  **before** `clip_grad_norm_` / `zero_grad` — no extra forward+backward. Works
+  under DDP (grads are already all-reduced when `backward()` returns; the rank-0
+  snapshot sees the reduced gradient), so it is no longer skipped under DDP.
 
 Console lines:
 ```
@@ -248,31 +266,36 @@ Console lines:
 
 ## 4. Load-bearing eval — four-mode SKA-zeroing
 
-The phase1 branch implemented four-mode PPL evaluation
-(full / ska_zeroed / mamba_zeroed / both_zeroed) with forward hooks in
-`koopman-lm-fast/evaluate.py`. In the refactored package that mechanism is
-built into the blocks: every sequence block carries an `_ablate` flag that
-turns it into a pure residual passthrough, driven by the
-`KoopmanLM.ablate(zero_ska=..., zero_mamba=...)` context manager
-(`koopman_lm/models/koopman_lm.py`). The key signal is unchanged:
-`ska_delta = ppl_ska_zeroed − ppl_full`; near zero means SKA is not
-load-bearing.
+The four-mode PPL decomposition (full / ska_zeroed / mamba_zeroed / both_zeroed)
+lives in `eval_load_bearing(model, ppl_fn)` in
+`koopman_lm/evaluation/harness.py` — **one shared zeroing path**: each mode
+toggles the block-level `_ablate` passthrough flags through
+`KoopmanLM.ablate(zero_ska=..., zero_mamba=...)` (`koopman_lm/models/koopman_lm.py`),
+with no duplicated forward-hook helpers anywhere (the tests call the production
+`eval_load_bearing` / `ablate` too).
+
+It returns `ppl_{full,ska_zeroed,mamba_zeroed,both_zeroed}` plus
+`ska_delta = ppl_ska_zeroed − ppl_full` and `mamba_delta`; a large positive
+`ska_delta` means SKA is load-bearing, near zero means the model routes around
+it. Exposed as the harness `load_bearing` task (`--tasks load_bearing`); the
+legacy `ska_zeroed_delta` key is derived from the same four-mode result.
 
 ---
 
 ## 5. Test suite — `code-tests/test_diagnostics.py`
 
-CPU-only, no GPU / `mamba_ssm` / wandb required. 22 tests, selected by the
-correctness gate:
+CPU-only, no GPU / `mamba_ssm` / wandb required. 26 tests (25 CPU + 1
+GPU-gated), selected by the correctness gate:
 
 ```bash
 python -m pytest code-tests/test_diagnostics.py -m "correctness and not gpu" -q
 ```
 
 Coverage:
-1. **invariants** — return keys (incl. the new `eta`/`gamma`); metrics are full
-   `(B, nc, H)` tensors; finiteness; `radius ≤ 1` (α caps σmax, γ=1 default),
-   `λmin ≥ ridge` (Lemma A.4), `gap ≥ 0`; at init `β ≈ 0.5` and `gate ≈ 1e-4`.
+1. **invariants** — return keys (incl. `eta`/`gamma`/`raw_spectral_radius`/`alpha`);
+   metrics are full `(B, nc, H)` tensors; finiteness; applied `radius ≤ 1` (α caps
+   σmax, γ=1 default), `α ∈ (0,1]`, `applied_radius ≤ raw_radius`, `λmin ≥ ridge`
+   (Lemma A.4), `gap ≥ 0`; at init `β ≈ 0.5` and `gate ≈ 1e-4`.
 2. **max_batch capping** — the diagnosed batch is capped at `max_batch`.
 3. **gate fallbacks** — with LayerScale off, `gate_mag` falls back to the
    resolved `|eta|`, including in the squash regime (no `.eta` attribute).
@@ -293,8 +316,13 @@ Coverage:
     computing and vice versa), flag restoration, four finite/distinct losses,
     and a known-delta synthetic check (SKA gate=1, Mamba~0 ⇒ zeroing SKA
     perturbs the output more).
-11. **gradient flow** — schema after a real backward, no-backward no-op,
-    frozen-SKA (ratio absent), and jacobian-rank unit + integration checks.
+11. **load-bearing production path** — a real tiny checkpoint is saved, reloaded
+    (logit parity), and run through the production `eval_load_bearing` /
+    `KoopmanLM.ablate` (not a re-implemented flag); a GPU-gated test covers the
+    mixed SKA+Mamba four-mode decomposition.
+12. **gradient flow** — schema after a real backward; `snapshot()` reads the
+    ACCUMULATED grad (two backwards ⇒ 2× the norm); no-snapshot no-op;
+    frozen-SKA (ratio absent); key-projection grad-rank unit + integration.
 
 Because `Mamba2Block` requires `mamba_ssm` (GPU box only), the stacked-model
 tests use a fake-Mamba stand-in and the real-model test uses an all-SKA layer
@@ -304,15 +332,19 @@ layout.
 
 ## Semantic adaptations vs the phase1 branch
 
-| phase1 (old layout) | this port |
+This section records how the diagnostics differ from the original `origin/phase1`
+branch. The `1c4a058` port brought them onto the consolidated `koopman_lm`
+package; the `phase1-finalize` pass then fixed the readiness gaps below.
+
+| phase1 (old layout) | now (`phase1-finalize` on `code-refactor`) |
 |---|---|
-| `koopman_lm/ska.py`, `koopman_lm/diagnostics.py`, `koopman_lm/train_fast.py`, `koopman_lm/model.py` | `koopman_lm/modules/ska/ska.py`, `koopman_lm/training/diagnostics.py`, `koopman_lm/training/train.py`, `koopman_lm/models/koopman_lm.py` |
-| `_whiten_M`, `_spec_w` from `koopman_lm.ska_core_torch` | from `koopman_lm.modules.ska.core` |
+| `koopman_lm/ska.py`, `koopman_lm/diagnostics.py`, `koopman_lm/train_fast.py`, `koopman_lm/model.py` | `koopman_lm/modules/token_mixer/ska.py`, `koopman_lm/training/diagnostics.py`, `koopman_lm/training/train.py`, `koopman_lm/models/koopman_lm.py` |
+| `_whiten_M`, `_spec_w` from `koopman_lm.ska_core_torch` | from `koopman_lm.modules.kernels.lin_alg` |
 | `A_eff = α·W` (γ fixed at 1.0) | `A_eff = γ·α·W` with γ resolved via `_resolve_gamma()` (fixed / clamped-learnable / squash) |
+| spectral radius read off the α-clamped `A_eff` only ⇒ **`>1` alarm could never fire** | also reports **raw** radius (`= radius/α`) + `α`; `frac_unstable` now measured on the raw radius, so instability actually fires |
+| `jacobian_rank` (misnamed: it is `rank(grad(key_proj.weight))`) | renamed `key_projection_grad_rank` + honest doc; true SKA Jacobian deferred to Phase 2 |
+| `GradFlowMonitor` ran a **separate fwd+bwd** on one microbatch, **skipped under DDP** | `snapshot()` reads the **accumulated** `.grad` before clip; DDP-correct (grads already all-reduced), no extra backward |
+| four-mode load-bearing lived only as a two-mode `ska_delta` in the harness / re-implemented `_ablate` in tests | full four-mode `eval_load_bearing` in the harness; tests use the production path + a real checkpoint |
 | `gate_mag` fallback reads `self.eta` directly | fallback via `_resolve_eta()` (the squash regime has `eta_raw`, no `.eta`) |
-| no η/γ reporting | `eta` / `gamma` scalars in `collect_diagnostics` and per-layer wandb keys |
 | diagnostics on by default (`--diag_enable` default True) | **off by default** (`--diag_enable` default False) |
-| `GradFlowMonitor` implemented but not wired into training | wired behind `--diag_grad` (off by default; skipped under DDP) |
-| four-mode zeroing via forward hooks in `evaluate.py` | `_ablate` flags + `KoopmanLM.ablate()` |
-| `wandb_smoke.py` dashboard harness | not ported (throwaway) |
-| `koopman_mlp.py` consolidation fix | not needed — the package already ships `SpectralKoopmanMLP`/`SpectralKoopmanMLPGated` |
+| `wandb_smoke.py` dashboard harness | not ported (superseded by `code-tests/test_smoke_e2e.py`) |
