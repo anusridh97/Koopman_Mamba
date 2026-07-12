@@ -335,8 +335,13 @@ class SKAModule(nn.Module):
         (see koopman_lm.training.diagnostics.SKAHealthMonitor).
 
         Returns dict:
-          spectral_radius : (B, nc, H) max|eig(A_eff)| per instance.
-                            Healthy ~[0.3, 0.95]; ~0 = unlearned; >1 = unstable.
+          spectral_radius : (B, nc, H) max|eig(A_eff)| per instance -- the
+                            APPLIED (alpha-clamped) operator, so always <= 1.
+                            Healthy ~[0.3, 0.95]; ~0 = unlearned.
+          raw_spectral_radius : (B, nc, H) max|eig(gamma * W)|, the pre-clamp
+                            operator radius. >1 => unstable (alpha clamp active).
+          alpha           : (B, nc, H) spectral-norm clamp factor in (0, 1];
+                            <1 means the clamp fired on that (chunk, head).
           lambda_min      : (B, nc, H) smallest eig(G_tilde) per instance.
                             Pinned at the ridge floor => rank-deficient keys.
           gap             : (B, nc, H) ||A_eff^K - A_eff|| / ||A_eff||.
@@ -378,7 +383,7 @@ class SKAModule(nn.Module):
             L = torch.where((info > 0).view(-1, 1, 1), L_j, L)
 
         W = _whiten_M(L, Mf)                      # L^-1 M L^-T  (N,r,r)
-        alpha = _spec_w(W)                        # (N,1) detached spectral-norm scale
+        alpha = _spec_w(W)                        # (N,1) detached spectral-norm clamp
         gamma = self._resolve_gamma()             # float (fixed) or tensor (learnable)
         gamma_val = gamma if isinstance(gamma, float) else float(gamma.detach())
         A_eff = alpha.unsqueeze(-1) * W           # operator applied per filter step
@@ -386,12 +391,24 @@ class SKAModule(nn.Module):
             A_eff = A_eff * gamma_val
 
         radius = _spectral_radius(A_eff)                               # (N,)
+        # RAW operator radius, BEFORE the alpha spectral-norm clamp. `alpha`
+        # forces sigma_max(A_eff) <= 1, so radius(A_eff) can NEVER exceed 1 --
+        # the ">1 = unstable" alarm is dead if read off A_eff. Since
+        # A_eff = alpha * (gamma * W), radius(A_eff) = alpha * raw_radius, so we
+        # recover raw_radius = radius / alpha from the SAME estimate (not a
+        # second, independently-seeded power iteration -- that would break the
+        # exact rad <= raw relationship). raw > 1 => the clamp is load-bearing /
+        # the pre-clamp operator (gamma * W) is trying to blow up.
+        alpha_flat = alpha.reshape(-1)                                 # (N,)
+        raw_radius = radius / alpha_flat.clamp(min=1e-8)               # (N,)
         lam = torch.linalg.eigvalsh(Gf).amin(dim=-1)                   # (N,)
         A_K = torch.linalg.matrix_power(A_eff, K)
         gap = (A_K - A_eff).norm(dim=(-2, -1)) / (A_eff.norm(dim=(-2, -1)) + 1e-12)
 
         # (N,) -> (B, nc, H). No reduction: hand back the whole distribution.
         radius = radius.view(Bc, nc, Hc)
+        raw_radius = raw_radius.view(Bc, nc, Hc)
+        alpha_bnh = alpha.reshape(Bc, nc, Hc)     # clamp factor in (0, 1]
         lam = lam.view(Bc, nc, Hc)
         gap = gap.view(Bc, nc, Hc)
 
@@ -401,6 +418,8 @@ class SKAModule(nn.Module):
 
         return {
             'spectral_radius': radius.detach(),
+            'raw_spectral_radius': raw_radius.detach(),
+            'alpha': alpha_bnh.detach(),
             'lambda_min': lam.detach(),
             'gap': gap.detach(),
             'n_chunks': int(nc),

@@ -10,8 +10,14 @@ health metrics to a wandb-ready dict. When inactive each hook is a single
 boolean check, so normal training steps pay essentially nothing.
 
 Metrics emitted (see SKAModule.collect_diagnostics for the math):
-  - spectral_radius : max|eig(A_eff)| per SKA layer/head. Healthy ~[0.3,0.95];
-                      ~0 = operator unlearned; >1 = unstable.
+  - spectral_radius : max|eig(A_eff)| per SKA layer/head, the APPLIED
+                      alpha-clamped operator (always <=1). Healthy ~[0.3,0.95];
+                      ~0 = operator unlearned.
+  - raw_spectral_radius : max|eig(gamma * W)|, the PRE-clamp operator. This is
+                      where instability shows up (>1 => alpha clamp fired);
+                      frac_unstable is computed on this, not the clamped radius.
+  - alpha           : spectral-norm clamp factor in (0,1]. alpha_min / frac_clamped
+                      report how hard / how often the clamp engages.
   - lambda_min      : smallest eig of the regularized Gram. Pinned at the ridge
                       floor => rank-deficient keys / Cholesky on regularization.
   - gap             : ||A_eff^K - A_eff|| / ||A_eff||. >0.5 => the power filter
@@ -170,13 +176,17 @@ class SKAHealthMonitor:
             ridge = rec["ridge_eps"]
             # (B, nc, H) -> drop chunk 0
             rad = self._valid_chunks(rec["spectral_radius"])
+            raw = self._valid_chunks(rec["raw_spectral_radius"])
+            alpha = self._valid_chunks(rec["alpha"])
             lmin = self._valid_chunks(rec["lambda_min"])
             gap = self._valid_chunks(rec["gap"])
 
             rad_f, lmin_f, gap_f = rad.reshape(-1), lmin.reshape(-1), gap.reshape(-1)
+            raw_f, alpha_f = raw.reshape(-1), alpha.reshape(-1)
 
             # full-pool distributions + per-head and per-chunk breakdowns
             for name, full, t in (("spectral_radius", rad_f, rad),
+                                  ("raw_spectral_radius", raw_f, raw),
                                   ("lambda_min", lmin_f, lmin),
                                   ("gap", gap_f, gap)):
                 hist_items[f"{p}/L{idx}/{name}"] = full
@@ -187,11 +197,20 @@ class SKAHealthMonitor:
                 (f"{p}/L{idx}/spectral_radius_mean", rad_f.mean()),
                 (f"{p}/L{idx}/spectral_radius_max", rad_f.max()),
                 (f"{p}/L{idx}/spectral_radius_min", rad_f.min()),
+                # RAW (pre-clamp) radius: instability shows up HERE, since the
+                # applied A_eff radius is alpha-clamped to <=1 (see ska.py).
+                (f"{p}/L{idx}/raw_spectral_radius_mean", raw_f.mean()),
+                (f"{p}/L{idx}/raw_spectral_radius_max", raw_f.max()),
                 # fraction of (chunk, head) operators inside the healthy band --
                 # the single number for "is this layer's operator alive & stable"
                 (f"{p}/L{idx}/frac_healthy",
                  ((rad_f >= self.healthy_lo) & (rad_f <= self.healthy_hi)).float().mean()),
-                (f"{p}/L{idx}/frac_unstable", (rad_f > 1.0).float().mean()),
+                # instability is the RAW radius exceeding 1 (the clamp saved it)
+                (f"{p}/L{idx}/frac_unstable", (raw_f > 1.0).float().mean()),
+                # alpha clamp factor: smallest alpha (strongest clamp) + fraction
+                # of operators that hit the spectral-norm clamp at all
+                (f"{p}/L{idx}/alpha_min", alpha_f.min()),
+                (f"{p}/L{idx}/frac_clamped", (alpha_f < 1.0 - 1e-6).float().mean()),
                 (f"{p}/L{idx}/lambda_min_min", lmin_f.min()),
                 # ratio to the ridge floor: ~1 means Cholesky is all regularization
                 (f"{p}/L{idx}/lambda_min_over_ridge", lmin_f.min() / (ridge + 1e-12)),
@@ -247,10 +266,14 @@ class GradFlowMonitor:
     Two quantities are tracked per SKA layer:
       - Gradient norms on key/query/value/out_proj weights, compared to the
         gradient norms on non-SKA (Mamba) Linear weights.
-      - Approximate Jacobian rank: the number of singular values of the
-        key_proj gradient matrix that exceed `rank_sv_threshold * sigma_max`.
-        Falling toward 1 means the optimizer sees SKA as effectively rank-1;
-        full rank is healthier.
+      - Key-projection gradient rank: the number of singular values of the
+        key_proj weight-gradient matrix that exceed `rank_sv_threshold *
+        sigma_max`. Falling toward 1 means the optimizer sees the key
+        projection's gradient as effectively rank-1; full rank is healthier.
+        NOTE: this is the numerical rank of grad(key_proj.weight), a proxy for
+        gradient-signal collapse -- NOT the SKA input->output Jacobian
+        (J = eta * Bv * L * Aw^K * L^-1). The true-Jacobian rank/conditioning is
+        a Phase-2 follow-up; the name reflects what is actually computed today.
 
     The central alarm metric is::
 
@@ -259,22 +282,27 @@ class GradFlowMonitor:
     Values < 0.1 (SKA 10x+ weaker than Mamba) indicate SKA is not receiving
     useful gradient signal and the per-group LR ratios likely need adjustment.
 
-    Usage (same pattern as SKAHealthMonitor)::
+    Capture reads param.grad DIRECTLY (no backward hooks) so it measures the
+    accumulated gradient of the real optimizer step. In training, call
+    snapshot() at the accumulation boundary, before clip_grad_norm_::
 
-        monitor = GradFlowMonitor(raw_model)
+        grad_monitor = GradFlowMonitor(raw_model)
         ...
-        with monitor.capture():
-            model(**batch)["loss"].backward()
-        metrics = monitor.collect()
+        # after the last microbatch backward, before clip / zero_grad:
+        grad_monitor.snapshot()
+        metrics = grad_monitor.collect()
         wandb.log(metrics, step=step)
+
+    Single-backward callers (tests, profiling) can use the capture() sugar,
+    which snapshots on context exit.
 
     Metrics emitted:
       ska/grad_norm_ratio        -- mean||grad_SKA|| / mean||grad_Mamba||
       ska/grad_norm_ska_mean     -- mean gradient norm across SKA layers
       ska/grad_norm_mamba_mean   -- mean gradient norm across non-SKA layers
       ska/LN/grad_norm           -- mean gradient norm for layer N
-      ska/LN/jacobian_rank       -- # SVs of key_proj gradient above threshold
-      ska/LN/jacobian_rank_frac  -- jacobian_rank / total singular values
+      ska/LN/key_projection_grad_rank      -- # SVs of key_proj grad above threshold
+      ska/LN/key_projection_grad_rank_frac -- rank / total singular values
     """
 
     def __init__(self, model, ska_cls=None, mamba_cls=None, prefix="ska",
@@ -282,59 +310,84 @@ class GradFlowMonitor:
         self.ska_cls, self.mamba_cls = _resolve_block_classes(ska_cls, mamba_cls)
         self.prefix = prefix
         self.rank_sv_threshold = rank_sv_threshold
-        self.active = False
-        # layer_idx -> {"is_ska": bool, "norms": [], "key_grad": tensor|None}
+        # layer_idx -> {"is_ska": bool, "weights": [(weight, is_key_proj), ...]}
+        self._params = {}
+        # layer_idx -> {"is_ska": bool, "norms": [...], "key_grad": tensor|None}
         self._buf = {}
-        self._hooks = []
         self._register(model)
 
     def _register(self, model):
+        """Record references to the weights whose .grad we snapshot (no hooks).
+
+        Grabbing the weight tensors up front means snapshot() can read their
+        ACCUMULATED .grad directly at the optimizer-step boundary -- the real
+        training gradient -- rather than intercepting per-microbatch grads mid
+        backward as an earlier hook-based version did.
+        """
         layers = getattr(model, "seq_layers", None)
         if layers is None:
             raise ValueError("model has no .seq_layers; cannot attach GradFlowMonitor")
         for idx, layer in enumerate(layers):
             is_ska = isinstance(layer, self.ska_cls)
-            self._buf[idx] = {"is_ska": is_ska, "norms": [], "key_grad": None}
+            weights = []
             if is_ska:
                 ska = layer.ska
                 for attr in ("key_proj", "query_proj", "value_proj", "out_proj"):
                     proj = getattr(ska, attr, None)
                     if proj is not None and proj.weight.requires_grad:
-                        self._hooks.append(
-                            proj.weight.register_hook(
-                                self._make_hook(idx, capture_for_rank=(attr == "key_proj"))))
+                        weights.append((proj.weight, attr == "key_proj"))
             else:
                 for _, mod in layer.named_modules():
                     if isinstance(mod, torch.nn.Linear) and mod.weight.requires_grad:
-                        self._hooks.append(
-                            mod.weight.register_hook(self._make_hook(idx, False)))
-
-    def _make_hook(self, idx, capture_for_rank):
-        def hook(grad):
-            if not self.active:
-                return
-            g = grad.detach().float()
-            self._buf[idx]["norms"].append(g.norm())
-            if capture_for_rank and self._buf[idx]["key_grad"] is None:
-                self._buf[idx]["key_grad"] = g.clone()
-        return hook
+                        weights.append((mod.weight, False))
+            self._params[idx] = {"is_ska": is_ska, "weights": weights}
 
     def remove(self):
-        for h in self._hooks:
-            h.remove()
-        self._hooks = []
+        self._params = {}
+
+    def snapshot(self):
+        """Read each registered weight's CURRENT .grad into the buffer.
+
+        Call AFTER backward() and BEFORE optimizer.zero_grad() / clip_grad_norm_,
+        so this measures the ACCUMULATED gradient of the real optimizer step
+        (summed over the whole microbatch window). Under DDP the grads are
+        already all-reduced by the time the last backward() returns, so a
+        rank-0 snapshot sees the reduced gradient -- no extra communication and
+        no separate probe pass. Weights whose .grad is None (e.g. frozen or
+        not yet backward'd) are skipped, so collect() reports {} in that case.
+        """
+        self._buf = {}
+        for idx, rec in self._params.items():
+            norms, key_grad = [], None
+            for w, is_key in rec["weights"]:
+                g = w.grad
+                if g is None:
+                    continue
+                g = g.detach().float()
+                norms.append(g.norm())
+                if is_key and key_grad is None:
+                    key_grad = g.clone()
+            self._buf[idx] = {"is_ska": rec["is_ska"], "norms": norms,
+                              "key_grad": key_grad}
 
     @contextmanager
     def capture(self):
-        """Activate the hooks for the duration of one forward+backward pass."""
-        for v in self._buf.values():
-            v["norms"] = []
-            v["key_grad"] = None
-        self.active = True
+        """Convenience: snapshot the accumulated grads on context exit.
+
+        Wrap the backward whose grads you want::
+
+            with grad_monitor.capture():
+                loss.backward()
+            metrics = grad_monitor.collect()
+
+        In training, prefer calling snapshot() directly at the accumulation
+        boundary (before clip/zero_grad); this sugar is for single-backward
+        callers (tests, profiling).
+        """
         try:
             yield self
         finally:
-            self.active = False
+            self.snapshot()
 
     def collect(self):
         """Reduce buffered gradient records into a flat wandb-ready dict.
@@ -363,8 +416,8 @@ class GradFlowMonitor:
                     sv = torch.linalg.svdvals(rec["key_grad"])
                     threshold = float(sv.max()) * self.rank_sv_threshold
                     rank = int((sv > threshold).sum().item())
-                    out[f"{p}/L{idx}/jacobian_rank"] = rank
-                    out[f"{p}/L{idx}/jacobian_rank_frac"] = (
+                    out[f"{p}/L{idx}/key_projection_grad_rank"] = rank
+                    out[f"{p}/L{idx}/key_projection_grad_rank_frac"] = (
                         rank / sv.shape[0] if sv.shape[0] > 0 else 0.0)
             else:
                 mamba_means.append(mean_norm)
@@ -379,11 +432,7 @@ class GradFlowMonitor:
         if ska_means and mamba_means:
             out[f"{p}/grad_norm_ratio"] = float(ska_m / (mam_m + 1e-12))
 
-        # Clear buffer
-        for v in self._buf.values():
-            v["norms"] = []
-            v["key_grad"] = None
-
+        self._buf = {}
         return out
 
 

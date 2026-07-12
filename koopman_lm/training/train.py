@@ -142,12 +142,12 @@ def train(args):
             print(f"  SKA health monitor disabled: {e}")
             monitor = None
         if args.diag_grad:
-            if is_ddp:
-                # rank-0-only backward would desync the DDP reducer
-                print("  SKA grad-flow monitor skipped under DDP")
-            else:
-                grad_monitor = GradFlowMonitor(raw_model)
-                print("  SKA grad-flow monitor attached")
+            # Snapshots the ACCUMULATED .grad at the step boundary (before clip
+            # / zero_grad). Under DDP those grads are already all-reduced when
+            # backward() returns, so a rank-0 snapshot is well-defined -- no
+            # separate backward, no reducer desync.
+            grad_monitor = GradFlowMonitor(raw_model)
+            print("  SKA grad-flow monitor attached")
 
     if is_ddp:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -219,6 +219,13 @@ def train(args):
             running_loss += raw_loss.detach(); loss_count += 1
             tokens_seen += ids.numel(); micro_step += 1
             if micro_step % args.gradient_accumulation_steps == 0:
+                # gradient-flow snapshot reads the ACCUMULATED grads of THIS
+                # step before clipping / zeroing (DDP has already all-reduced
+                # them). (step + 1) is the step number this boundary completes.
+                grad_diag = (grad_monitor is not None
+                             and (step + 1) % args.diag_every == 0)
+                if grad_diag:
+                    grad_monitor.snapshot()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step(); scheduler.step()
                 optimizer.zero_grad(set_to_none=True); step += 1
@@ -259,15 +266,9 @@ def train(args):
                         import wandb
                         wandb.log(health, step=step)
 
-                # ---- SKA gradient-flow diagnostics (extra fwd+bwd, amortized) ----
-                if grad_monitor is not None and step % args.diag_every == 0:
-                    # dedicated fwd+bwd on the current micro-batch; grads are
-                    # cleared afterwards so the next accumulation window starts
-                    # clean (we are right after optimizer.zero_grad anyway).
-                    with grad_monitor.capture():
-                        gout = raw_model(input_ids=ids, labels=labels, loss_weights=lw)
-                        gout["loss"].backward()
-                    raw_model.zero_grad(set_to_none=True)
+                # ---- SKA gradient-flow diagnostics (reduce the snapshot taken
+                # before clip above; no extra fwd+bwd) ----
+                if grad_diag:
                     gflow = grad_monitor.collect()
                     if gflow:
                         gr = gflow.get("ska/grad_norm_ratio", float("nan"))
