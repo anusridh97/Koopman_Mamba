@@ -12,7 +12,10 @@ model SCALE is auto-detected -- no manual config. Produces a single JSON with:
   * MQAR grid (seq_len x #kv pairs)  -- koopman_lm.evals.mqar
   * RULER subset (4K/8K)             -- koopman_lm.evals.ruler
   * BABILong QA1/QA2 (4K/8K)         -- koopman_lm.evals.babilong
-  * SKA-zeroed PPL delta             -- model.ablate(zero_ska=True)
+  * load-bearing (four-mode PPL)     -- eval_load_bearing / model.ablate:
+                                        full / ska_zeroed / mamba_zeroed /
+                                        both_zeroed + ska_delta + mamba_delta
+  * SKA-zeroed PPL delta (legacy)    -- derived from the four-mode result
 plus a wandb summary if --wandb_project is given.
 
 The metric runners need a GPU (mamba_ssm backbone) and/or network (BABILong);
@@ -28,7 +31,7 @@ import torch
 from koopman_lm.config import config_hash, CONFIG_FACTORIES
 
 # tasks the harness can run; --tasks selects a subset
-ALL_TASKS = ["ppl", "niah", "mqar", "ruler", "babilong", "ska_delta"]
+ALL_TASKS = ["ppl", "niah", "mqar", "ruler", "babilong", "load_bearing", "ska_delta"]
 
 
 # --------------------------------------------------------------------------
@@ -116,18 +119,55 @@ def _ppl(model, device, tokenizer, plan):
                              batch_size=plan["ppl_batch_size"])
 
 
-def _ska_delta(model, device, tokenizer, plan, base_ppl=None):
-    """PPL(SKA-zeroed) - PPL(full). Positive + large => SKA is load-bearing."""
-    from koopman_lm.evaluation.evaluate import eval_held_out_ppl
+def eval_load_bearing(model, ppl_fn, full=None):
+    """Four-mode SKA/Mamba load-bearing decomposition via model.ablate().
+
+    THE single shared zeroing path (production + tests): each mode toggles the
+    same block-level ``_ablate`` passthrough flags through ``model.ablate`` --
+    no duplicated forward-hook helpers anywhere.
+
+    ppl_fn(model) -> float perplexity. Runs the four modes
+      full / ska_zeroed / mamba_zeroed / both_zeroed
+    and returns their PPLs plus the SKA and Mamba deltas. A large positive
+    ``ska_delta`` (PPL rises when SKA is zeroed) means the SKA layers are
+    load-bearing; ``ska_delta`` near zero means the model routes around them.
+    Pass ``full`` to reuse an already-computed baseline PPL (avoids one eval).
+    """
     if not hasattr(model, "ablate"):
         return {"supported": False}
-    full = base_ppl if base_ppl is not None else _ppl(model, device, tokenizer, plan)["ppl"]
+    out = {"supported": True}
+    out["ppl_full"] = full if full is not None else ppl_fn(model)
     with model.ablate(zero_ska=True):
-        zeroed = eval_held_out_ppl(model, device, tokenizer,
-                                   max_seq_len=plan["ppl_max_seq_len"],
-                                   batch_size=plan["ppl_batch_size"])["ppl"]
-    return {"supported": True, "ppl_full": full, "ppl_ska_zeroed": zeroed,
-            "delta": zeroed - full}
+        out["ppl_ska_zeroed"] = ppl_fn(model)
+    with model.ablate(zero_mamba=True):
+        out["ppl_mamba_zeroed"] = ppl_fn(model)
+    with model.ablate(zero_ska=True, zero_mamba=True):
+        out["ppl_both_zeroed"] = ppl_fn(model)
+    out["ska_delta"] = out["ppl_ska_zeroed"] - out["ppl_full"]
+    out["mamba_delta"] = out["ppl_mamba_zeroed"] - out["ppl_full"]
+    return out
+
+
+def _load_bearing(model, device, tokenizer, plan, base_ppl=None):
+    """Harness wrapper: held-out-PPL four-mode load-bearing decomposition."""
+    from koopman_lm.evaluation.evaluate import eval_held_out_ppl
+
+    def ppl_fn(m):
+        return eval_held_out_ppl(m, device, tokenizer,
+                                 max_seq_len=plan["ppl_max_seq_len"],
+                                 batch_size=plan["ppl_batch_size"])["ppl"]
+
+    return eval_load_bearing(model, ppl_fn, full=base_ppl)
+
+
+def _ska_delta_from_load_bearing(lb):
+    """Back-compat two-mode view (ppl_full / ppl_ska_zeroed / delta) derived
+    from the four-mode result -- so the legacy ``ska_zeroed_delta`` JSON key
+    keeps working without a second SKA-zeroed eval."""
+    if not lb.get("supported"):
+        return {"supported": False}
+    return {"supported": True, "ppl_full": lb["ppl_full"],
+            "ppl_ska_zeroed": lb["ppl_ska_zeroed"], "delta": lb["ska_delta"]}
 
 
 def run(args):
@@ -147,8 +187,10 @@ def run(args):
     tasks = args.tasks or ALL_TASKS
     metrics = {}
 
-    if "ppl" in tasks or "ska_delta" in tasks:
+    ppl_full = None
+    if "ppl" in tasks or "ska_delta" in tasks or "load_bearing" in tasks:
         ppl = _ppl(model, device, tokenizer, plan)
+        ppl_full = ppl["ppl"]
         if "ppl" in tasks:
             metrics["perplexity"] = ppl
     if "niah" in tasks:
@@ -174,9 +216,14 @@ def run(args):
             model, tokenizer, device,
             context_lens=tuple(plan["babilong_context_lens"]),
             n_examples=args.n_examples)
-    if "ska_delta" in tasks:
-        base = metrics.get("perplexity", {}).get("ppl")
-        metrics["ska_zeroed_delta"] = _ska_delta(model, device, tokenizer, plan, base)
+    lb = None
+    if "load_bearing" in tasks or "ska_delta" in tasks:
+        lb = _load_bearing(model, device, tokenizer, plan, ppl_full)
+        if "load_bearing" in tasks:
+            metrics["load_bearing"] = lb
+        if "ska_delta" in tasks:
+            # legacy key, derived from the four-mode result (no extra eval)
+            metrics["ska_zeroed_delta"] = _ska_delta_from_load_bearing(lb)
 
     results = assemble_results(args.checkpoint, scale, plan, metrics)
 

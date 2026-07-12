@@ -53,21 +53,29 @@ from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
 
 def load_model(checkpoint, model_size="180m",
                tokenizer_name="mistralai/Mistral-7B-v0.1",
-               model_type=None):
+               model_type=None, init_only=False):
     """
     Load a model from checkpoint. Auto-detects model_type from meta.pt.
     Returns (model, cfg, tokenizer, model_type).
+
+    init_only=True builds the model but SKIPS load_state_dict, yielding an
+    UNTRAINED reference at the requested architecture (Phase-1 threshold
+    calibration needs a from-scratch baseline for the health/grad-flow metrics).
+    When init_only is set, `checkpoint` may be None; if a checkpoint IS given,
+    its embedded cfg/tokenizer are reused so the untrained model matches the
+    trained one's architecture exactly.
     """
-    meta_path = checkpoint.replace("model.pt", "meta.pt")
     meta = {}
-    if os.path.exists(meta_path):
-        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
+    if checkpoint:
+        meta_path = checkpoint.replace("model.pt", "meta.pt")
+        if os.path.exists(meta_path):
+            meta = torch.load(meta_path, map_location="cpu", weights_only=False)
 
     if model_type is None:
         model_type = meta.get("model_type", "koopman")
 
     # Prefer the checkpoint's embedded config (auto-detects scale at any size);
-    # fall back to the model_size string for legacy checkpoints with no cfg.
+    # fall back to the model_size string for legacy / no-checkpoint cases.
     if "cfg" in meta:
         cfg = meta["cfg"]
     else:
@@ -78,9 +86,9 @@ def load_model(checkpoint, model_size="180m",
     # THAT rather than tokenizer_name, whose default differs from train.py's
     # own CLI default. Both are 32k-vocab, so a mismatch would silently
     # mismap every token id to the wrong embedding instead of erroring.
-    ckpt_dir = os.path.dirname(checkpoint)
+    tok_src = os.path.dirname(checkpoint) if checkpoint else tokenizer_name
     try:
-        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
+        tokenizer = AutoTokenizer.from_pretrained(tok_src)
     except Exception:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     if tokenizer.pad_token is None:
@@ -94,10 +102,12 @@ def load_model(checkpoint, model_size="180m",
     else:
         model = KoopmanLM(cfg)
 
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-
-    print(f"Loaded {model_type} model from {checkpoint}")
+    if init_only or not checkpoint:
+        print(f"Built UNTRAINED {model_type} model (init_only; no weights loaded)")
+    else:
+        state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        model.load_state_dict(state)
+        print(f"Loaded {model_type} model from {checkpoint}")
     total = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {total:,}")
 
