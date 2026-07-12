@@ -14,7 +14,7 @@ Covers:
   4. profile_overhead() runs and returns finite amortized cost.
   5. Load-bearing four-mode decomposition via the _ablate passthrough flags
      (the new package's mechanism behind KoopmanLM.ablate()).
-  6. GradFlowMonitor: schema, no-backward noop, frozen-SKA, jacobian rank.
+  6. GradFlowMonitor: schema, no-backward noop, frozen-SKA, key-proj grad rank.
 
 Mamba2Block needs mamba_ssm (GPU box only), so the stacked-model tests use a
 fake-Mamba stand-in; the real-model test uses an all-SKA KoopmanLM config.
@@ -32,6 +32,7 @@ from koopman_lm.models.koopman_lm import SKABlock, KoopmanLM
 from koopman_lm.training.diagnostics import (
     SKAHealthMonitor, GradFlowMonitor, profile_overhead,
 )
+from koopman_lm.evaluation.harness import eval_load_bearing
 
 pytestmark = pytest.mark.correctness
 
@@ -60,24 +61,33 @@ def test_invariants():
     B, T = 2, 40
     m = ska.collect_diagnostics(torch.randn(B, T, D))
 
-    expected = {"spectral_radius", "lambda_min", "gap", "n_chunks", "gate_mag",
+    expected = {"spectral_radius", "raw_spectral_radius", "alpha", "lambda_min",
+                "gap", "n_chunks", "gate_mag",
                 "beta_mean", "outproj_norm", "eta", "gamma", "ridge_eps"}
     assert expected <= set(m), f"missing keys: {expected - set(m)}"
 
     rad, lmin, gap = m["spectral_radius"], m["lambda_min"], m["gap"]
+    raw, alpha = m["raw_spectral_radius"], m["alpha"]
     nc = m["n_chunks"]
     # full per-(batch, chunk, head) distributions -- nothing pre-averaged
     assert rad.shape == (B, nc, H), f"expected (B,nc,H), got {tuple(rad.shape)}"
     assert lmin.shape == (B, nc, H) and gap.shape == (B, nc, H)
+    assert raw.shape == (B, nc, H) and alpha.shape == (B, nc, H)
 
     for name, t in m.items():
         if torch.is_tensor(t):
             assert _finite(t), f"{name} has non-finite values"
 
     # A_eff = gamma * alpha * W with gamma=1 (fixed default) has sigma_max <= 1
-    # by construction => spectral radius <= 1
+    # by construction => APPLIED spectral radius <= 1
     assert float(rad.max()) <= 1.0 + 1e-4, f"radius>1: {float(rad.max())}"
     assert float(rad.min()) >= 0.0
+    # alpha is the spectral-norm clamp factor in (0, 1]
+    assert float(alpha.min()) > 0.0 and float(alpha.max()) <= 1.0 + 1e-6, \
+        f"alpha out of (0,1]: [{float(alpha.min())}, {float(alpha.max())}]"
+    # radius(A_eff) = alpha * raw_radius, alpha <= 1 => applied radius <= raw
+    assert float((rad - raw).clamp(min=0).max()) < 1e-2, \
+        "applied (clamped) radius should not exceed the raw radius"
     # Lemma A.4: lambda_min(G + ridge I) >= ridge
     assert float(lmin.min()) >= RIDGE - 1e-5, \
         f"lambda_min {float(lmin.min())} < ridge {RIDGE}"
@@ -242,6 +252,8 @@ def test_monitor_schema():
     # per-SKA-layer scalar keys present for layers 1 and 3
     for idx in (1, 3):
         for suffix in ("spectral_radius_mean", "spectral_radius_max",
+                       "raw_spectral_radius_mean", "raw_spectral_radius_max",
+                       "alpha_min", "frac_clamped",
                        "lambda_min_over_ridge", "gap_mean", "gate_mag",
                        "beta_mean", "eta", "gamma", "frac_healthy",
                        "frac_unstable", "residual_delta"):
@@ -549,6 +561,80 @@ def test_known_delta_synthetic():
     )
 
 
+def test_load_bearing_production_ablate_roundtrip(tmp_path):
+    """Exercise the PRODUCTION four-mode path (harness.eval_load_bearing +
+    KoopmanLM.ablate) on a real, checkpointed model -- NOT a re-implemented
+    _ablate flag. All-SKA config so no mamba_ssm is needed on CPU.
+
+    save -> reload (logit parity) -> four-mode decomposition. With no Mamba
+    blocks present, zero_mamba is a no-op, giving exact invariants:
+    ppl_mamba_zeroed == ppl_full and ppl_both_zeroed == ppl_ska_zeroed.
+    """
+    torch.manual_seed(0)
+    cfg = _tiny_cfg(ska_layer_indices=(0, 1, 2, 3))   # all-SKA -> CPU-safe
+    model = KoopmanLM(cfg).eval()
+
+    # boost the SKA residual so zeroing SKA measurably changes PPL at init
+    with torch.no_grad():
+        for layer in model.seq_layers:
+            if isinstance(layer, SKABlock) and layer.ska.layerscale_gate is not None:
+                layer.ska.layerscale_gate.fill_(1.0)
+
+    # save -> reload into a fresh model, assert logit parity (the real ckpt path)
+    ckpt = tmp_path / "model.pt"
+    torch.save(model.state_dict(), ckpt)
+    reloaded = KoopmanLM(cfg).eval()
+    reloaded.load_state_dict(torch.load(ckpt, weights_only=True))
+
+    ids = torch.randint(0, cfg.vocab_size, (2, 32))
+    labels = torch.randint(0, cfg.vocab_size, (2, 32))
+    with torch.no_grad():
+        assert torch.allclose(model(input_ids=ids)["logits"],
+                              reloaded(input_ids=ids)["logits"], atol=1e-5), \
+            "reloaded checkpoint logits differ from original"
+
+    def ppl_fn(m):
+        with torch.no_grad():
+            loss = m(input_ids=ids, labels=labels)["loss"].item()
+        return math.exp(min(loss, 20))
+
+    res = eval_load_bearing(reloaded, ppl_fn)
+    assert res["supported"]
+    for k in ("ppl_full", "ppl_ska_zeroed", "ppl_mamba_zeroed", "ppl_both_zeroed"):
+        assert math.isfinite(res[k]) and res[k] > 0, f"{k} not finite/positive"
+    # SKA is present and contributes -> zeroing it changes PPL
+    assert res["ppl_ska_zeroed"] != res["ppl_full"], "SKA zeroing had no effect"
+    assert abs(res["ska_delta"]) > 0
+    # no Mamba blocks -> zero_mamba is a no-op (exact invariants)
+    assert abs(res["ppl_mamba_zeroed"] - res["ppl_full"]) < 1e-6, \
+        "mamba zeroing changed PPL despite no Mamba layers"
+    assert abs(res["mamba_delta"]) < 1e-6
+    assert abs(res["ppl_both_zeroed"] - res["ppl_ska_zeroed"]) < 1e-6, \
+        "both-zeroed should equal ska-zeroed when there are no Mamba layers"
+
+
+@pytest.mark.gpu
+def test_load_bearing_mixed_model_gpu():
+    """Four-mode decomposition on a real MIXED SKA+Mamba KoopmanLM (needs
+    mamba_ssm + CUDA). Each ablation must change PPL vs the full model."""
+    torch.manual_seed(0)
+    cfg = _tiny_cfg(ska_layer_indices=(1, 3))   # layers 0,2 are Mamba
+    model = KoopmanLM(cfg).cuda().eval()
+    ids = torch.randint(0, cfg.vocab_size, (2, 32), device="cuda")
+    labels = torch.randint(0, cfg.vocab_size, (2, 32), device="cuda")
+
+    def ppl_fn(m):
+        with torch.no_grad():
+            return math.exp(min(m(input_ids=ids, labels=labels)["loss"].item(), 20))
+
+    res = eval_load_bearing(model, ppl_fn)
+    assert res["supported"]
+    for k in ("ppl_full", "ppl_ska_zeroed", "ppl_mamba_zeroed", "ppl_both_zeroed"):
+        assert math.isfinite(res[k]) and res[k] > 0, f"{k} not finite/positive"
+    assert res["ppl_ska_zeroed"] != res["ppl_full"], "SKA zeroing had no effect"
+    assert res["ppl_mamba_zeroed"] != res["ppl_full"], "Mamba zeroing had no effect"
+
+
 # ---------------------------------------------------------------------------
 # 6. Gradient-flow tracking (Phase 1, Task 3)
 # ---------------------------------------------------------------------------
@@ -559,8 +645,8 @@ def test_known_delta_synthetic():
 #   b. No-backward noop -- collect() is empty without calling .backward().
 #   c. Frozen SKA -- ratio absent when SKA params have requires_grad=False.
 #   d. Both branches active -- ratio is finite and positive.
-#   e. Jacobian rank (unit) -- SVD rank logic on synthetic matrices.
-#   f. Jacobian rank (integration) -- rank from a real backward is in [1, max].
+#   e. Key-proj grad rank (unit) -- SVD rank logic on synthetic matrices.
+#   f. Key-proj grad rank (integration) -- rank from a real backward is in [1, max].
 
 
 def test_grad_flow_schema():
@@ -569,7 +655,7 @@ def test_grad_flow_schema():
     cfg = _tiny_cfg()
     model = _StandInModel(cfg)
     monitor = GradFlowMonitor(model, ska_cls=SKABlock)
-    assert monitor._buf  # hooks registered
+    assert monitor._params  # weights registered for .grad snapshots
 
     B, T = 2, 40
     with monitor.capture():
@@ -582,8 +668,8 @@ def test_grad_flow_schema():
     assert "ska/grad_norm_mamba_mean" in metrics
     for idx in (1, 3):   # SKA layers in _tiny_cfg
         k_norm = f"ska/L{idx}/grad_norm"
-        k_rank = f"ska/L{idx}/jacobian_rank"
-        k_frac = f"ska/L{idx}/jacobian_rank_frac"
+        k_rank = f"ska/L{idx}/key_projection_grad_rank"
+        k_frac = f"ska/L{idx}/key_projection_grad_rank_frac"
         assert k_norm in metrics, f"missing {k_norm}"
         assert k_rank in metrics, f"missing {k_rank}"
         assert k_frac in metrics, f"missing {k_frac}"
@@ -649,9 +735,52 @@ def test_grad_flow_active_both_branches():
         f"ratio should be finite and positive; got {ratio}")
 
 
-def test_jacobian_rank_unit():
-    """SVD rank logic in isolation: rank-1 outer product -> rank 1;
-    random full-rank matrix -> rank min(m, n).
+def test_grad_flow_snapshot_accumulates():
+    """snapshot() reads the ACCUMULATED .grad (summed over the microbatch
+    window before zero_grad), not a single microbatch -- the core of the
+    capture-before-clip refactor. Two identical backward passes without
+    zero_grad in between => exactly 2x the single-pass gradient norm.
+    """
+    torch.manual_seed(0)
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg)
+    x = torch.randn(2, 40, D)
+
+    # single backward
+    mon1 = GradFlowMonitor(model, ska_cls=SKABlock)
+    model.zero_grad(set_to_none=True)
+    model(x)["loss"].backward()
+    mon1.snapshot()
+    m1 = mon1.collect()
+
+    # two identical backwards ACCUMULATED, snapshot before zero_grad
+    mon2 = GradFlowMonitor(model, ska_cls=SKABlock)
+    model.zero_grad(set_to_none=True)
+    model(x)["loss"].backward()
+    model(x)["loss"].backward()
+    mon2.snapshot()
+    m2 = mon2.collect()
+
+    for idx in (1, 3):
+        k = f"ska/L{idx}/grad_norm"
+        assert abs(m2[k] - 2.0 * m1[k]) <= 1e-4 * (1.0 + 2.0 * m1[k]), \
+            f"L{idx} accumulated grad norm {m2[k]} != 2x single {m1[k]}"
+
+
+def test_grad_flow_no_snapshot_is_empty():
+    """Without a snapshot() (or capture()), collect() returns {} -- the monitor
+    holds only weight references until you ask it to read .grad."""
+    torch.manual_seed(0)
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg)
+    monitor = GradFlowMonitor(model, ska_cls=SKABlock)
+    model(torch.randn(2, 16, D))["loss"].backward()   # grads exist...
+    assert monitor.collect() == {}, "collect without snapshot should be empty"
+
+
+def test_key_proj_grad_rank_unit():
+    """SVD rank logic in isolation (the key_projection_grad_rank metric):
+    rank-1 outer product -> rank 1; random full-rank matrix -> rank min(m, n).
     """
     torch.manual_seed(0)
     threshold = 0.01   # matches GradFlowMonitor default
@@ -675,7 +804,7 @@ def test_jacobian_rank_unit():
         f"random matrix rank should be ~{expected}, got {approx_rank_full}")
 
 
-def test_jacobian_rank_integration():
+def test_key_proj_grad_rank_integration():
     """Rank captured from a real backward pass is in the valid range [1, min(rows, cols)]."""
     torch.manual_seed(0)
     cfg = _tiny_cfg()
@@ -689,9 +818,9 @@ def test_jacobian_rank_integration():
 
     max_rank = min(H * R, D)   # min(4*16, 64) = 64
     for idx in (1, 3):
-        rank = metrics.get(f"ska/L{idx}/jacobian_rank")
-        assert rank is not None, f"missing jacobian_rank for L{idx}"
+        rank = metrics.get(f"ska/L{idx}/key_projection_grad_rank")
+        assert rank is not None, f"missing key_projection_grad_rank for L{idx}"
         assert 1 <= rank <= max_rank, (
             f"L{idx} rank {rank} outside [1, {max_rank}]")
-        frac = metrics[f"ska/L{idx}/jacobian_rank_frac"]
+        frac = metrics[f"ska/L{idx}/key_projection_grad_rank_frac"]
         assert 0.0 < frac <= 1.0, f"rank_frac {frac} out of (0, 1]"
