@@ -24,6 +24,10 @@
 #SBATCH --error=/labs/mpsnyder/cody1212/koopman_runs/logs/phase1_calib_%j.err
 
 set -e
+# SCG old-cluster hardening (see CODEX_HANDOFF.md): keep nounset OFF (/etc/bashrc
+# trips on BASHRCSOURCED under -u), source bashrc to get `module`, never set -u.
+set +u
+source ~/.bashrc 2>/dev/null || true
 
 module load cuda/12.3.2_545.23.08_cudNN_9.0.0.312
 module unload gcc/13.3.0 2>/dev/null || true
@@ -38,9 +42,7 @@ export OMP_NUM_THREADS=8
 
 # venv is independent of the repo layout; override with KOOPMAN_VENV if moved.
 VENV="${KOOPMAN_VENV:-/labs/mpsnyder/cody1212/Koopman_Mamba/koopman-lm-fast/.venv}"
-set +u
 source "$VENV/bin/activate"
-set -u
 
 CKPT_50M="/labs/mpsnyder/cody1212/runs/echo-50m-fineweb-3B/final/model.pt"
 OUT="/labs/mpsnyder/cody1212/results/phase1_calibration"
@@ -55,12 +57,15 @@ python scripts/inspect_checkpoint.py --checkpoint "$CKPT_50M" --model_size 50m \
 # Reference set: trained 50M, an untrained init of the SAME arch, and a
 # from-scratch 50M scale. (Add the 180M checkpoint / a mamba_only baseline the
 # same way once available.)
+# --data synthetic (random token ids) is network-free and robust on an offline
+# compute node. If this node has WikiText cached under $HF_HOME, re-run with
+# --data wikitext for more realistic health/grad-flow inputs.
 echo "== calibrate: trained 50M =="
 python -m koopman_lm.evaluation.calibrate --checkpoint "$CKPT_50M" \
-    --tokenizer "$TOK" --data wikitext --out "$OUT/calib_50m_trained.json"
+    --tokenizer "$TOK" --data synthetic --out "$OUT/calib_50m_trained.json"
 
 echo "== calibrate: untrained init (same arch as the 50M checkpoint) =="
 python -m koopman_lm.evaluation.calibrate --checkpoint "$CKPT_50M" --init_only \
-    --tokenizer "$TOK" --data wikitext --out "$OUT/calib_50m_untrained.json"
+    --tokenizer "$TOK" --data synthetic --out "$OUT/calib_50m_untrained.json"
 
 echo "CALIBRATION DONE. Raw values under $OUT/"
