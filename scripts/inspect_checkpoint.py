@@ -14,7 +14,9 @@ this script builds the model to compare keys):
         --checkpoint /labs/mpsnyder/cody1212/runs/echo-50m-fineweb-3B/final/model.pt
 
 Prints: embedded cfg (if any), a strict-load verdict, and the missing/unexpected
-key sets on mismatch. Exit code 0 = strict load OK, 1 = mismatch/needs shim.
+key sets on mismatch. Exit codes: 0 = strict load OK, 3 = key mismatch (needs a
+shim), any other nonzero = the probe could not run (missing file / import /
+unpickle error) and is NOT a load verdict.
 """
 import argparse
 import os
@@ -86,7 +88,10 @@ def main():
     print("\nVERDICT: key mismatch -- strict load will FAIL. Options: (a) rebuild "
           "the training-time cfg explicitly so the architectures match, or "
           "(b) add a strict=False + key-remap/buffer-registration shim.")
-    sys.exit(1)
+    # Exit 3 (not 1) so a genuine key mismatch is distinguishable from an
+    # unhandled exception (import/unpickle/etc., which Python exits 1 on) -- the
+    # caller must not report those as a load verdict.
+    sys.exit(3)
 
 
 if __name__ == "__main__":
