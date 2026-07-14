@@ -54,6 +54,18 @@ echo "== repo: $REPO  branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || e
 for f in scripts/inspect_checkpoint.py koopman_lm/evaluation/calibrate.py; do
     [ -f "$f" ] || { echo "!! $REPO is missing $f -- this checkout is not on phase1-finalize."; exit 2; }
 done
+
+# The training venv has koopman_lm installed (editable, pointing at a DIFFERENT
+# checkout), which shadows THIS checkout under bare `python`. Put this repo first
+# on PYTHONPATH and HARD-VERIFY the import resolves here -- otherwise
+# inspect_checkpoint.py / calibrate.py import the stale tree and ModuleNotFound.
+export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+KL=$(python -c "import koopman_lm, os; print(os.path.dirname(koopman_lm.__file__))" 2>/dev/null || echo IMPORT_FAILED)
+echo "  koopman_lm imports from: $KL"
+case "$KL" in
+    "$REPO"/*) : ;;
+    *) echo "!! koopman_lm resolves to '$KL', not \$REPO=$REPO -- a stale install is shadowing this checkout. Aborting."; exit 2 ;;
+esac
 mkdir -p /labs/mpsnyder/cody1212/koopman_runs/logs
 
 CKPT_50M="/labs/mpsnyder/cody1212/runs/echo-50m-fineweb-3B/final/model.pt"

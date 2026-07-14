@@ -59,6 +59,18 @@ echo "== repo: $REPO  branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || e
 for f in scripts/profile_diag_overhead.py koopman_lm/training/diagnostics.py; do
     [ -f "$f" ] || { echo "!! $REPO is missing $f -- this checkout is not on phase1-finalize."; exit 2; }
 done
+
+# The training venv has koopman_lm installed (editable, pointing at a DIFFERENT
+# checkout), which shadows THIS checkout under bare `python`/`pytest`. Put this
+# repo first on PYTHONPATH and HARD-VERIFY the import resolves here before any
+# stage runs -- otherwise every koopman_lm.* import silently hits the stale tree.
+export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+KL=$(python -c "import koopman_lm, os; print(os.path.dirname(koopman_lm.__file__))" 2>/dev/null || echo IMPORT_FAILED)
+echo "  koopman_lm imports from: $KL"
+case "$KL" in
+    "$REPO"/*) : ;;
+    *) echo "!! koopman_lm resolves to '$KL', not \$REPO=$REPO -- a stale install is shadowing this checkout. Aborting."; exit 2 ;;
+esac
 mkdir -p /labs/mpsnyder/cody1212/koopman_runs/logs
 
 HAVE_PYTEST=$(python -c "import pytest" 2>/dev/null && echo 1 || echo 0)
@@ -79,9 +91,9 @@ PY
 # --- Stage 1+2 (best-effort; synthetic/no-network): CPU tests + GPU e2e ---
 if [ "$HAVE_PYTEST" = "1" ]; then
     echo "== stage 1: CPU correctness =="
-    pytest code-tests/ -m "correctness and not gpu" -q
+    python -m pytest code-tests/ -m "correctness and not gpu" -q
     echo "== stage 2: GPU e2e + diagnostics + mixed four-mode =="
-    pytest code-tests/test_smoke_e2e.py code-tests/test_diagnostics.py -m gpu -q
+    python -m pytest code-tests/test_smoke_e2e.py code-tests/test_diagnostics.py -m gpu -q
 else
     echo "== stages 1-2 SKIPPED: pytest not in venv (pip install pytest to enable) =="
 fi
