@@ -60,17 +60,32 @@ for f in scripts/profile_diag_overhead.py koopman_lm/training/diagnostics.py; do
     [ -f "$f" ] || { echo "!! $REPO is missing $f -- this checkout is not on phase1-finalize."; exit 2; }
 done
 
-# The training venv has koopman_lm installed (editable, pointing at a DIFFERENT
-# checkout), which shadows THIS checkout under bare `python`/`pytest`. Put this
-# repo first on PYTHONPATH and HARD-VERIFY the import resolves here before any
-# stage runs -- otherwise every koopman_lm.* import silently hits the stale tree.
+# The training venv has koopman_lm installed elsewhere; force THIS checkout onto
+# PYTHONPATH, then verify by a CODE MARKER (not a path string). /oak and /labs
+# are two mounts of the same dir, so a path-prefix check gives false alarms --
+# check that the imported koopman_lm actually has the phase1-finalize code.
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
-KL=$(python -c "import koopman_lm, os; print(os.path.dirname(koopman_lm.__file__))" 2>/dev/null || echo IMPORT_FAILED)
-echo "  koopman_lm imports from: $KL"
-case "$KL" in
-    "$REPO"/*) : ;;
-    *) echo "!! koopman_lm resolves to '$KL', not \$REPO=$REPO -- a stale install is shadowing this checkout. Aborting."; exit 2 ;;
-esac
+if ! python - <<'PY'
+import os, sys
+try:
+    import koopman_lm
+    from koopman_lm.evaluation import harness
+    from koopman_lm.training import diagnostics  # noqa: F401
+except Exception:
+    import traceback; traceback.print_exc()
+    print("  koopman_lm import FAILED (traceback above)")
+    sys.exit(1)
+print("  koopman_lm imports from:", os.path.dirname(koopman_lm.__file__))
+if not hasattr(harness, "eval_load_bearing"):
+    print("  MISSING marker harness.eval_load_bearing -- a stale/older koopman_lm"
+          " is shadowing this checkout")
+    sys.exit(1)
+print("  verified phase1-finalize diagnostics (eval_load_bearing present)")
+PY
+then
+    echo "!! aborting: koopman_lm is not the finalized phase1-finalize checkout (see above)"
+    exit 2
+fi
 mkdir -p /labs/mpsnyder/cody1212/koopman_runs/logs
 
 HAVE_PYTEST=$(python -c "import pytest" 2>/dev/null && echo 1 || echo 0)
