@@ -37,71 +37,9 @@ import os
 import random
 import time
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
-from transformers import AutoTokenizer
 import dataclasses
-from koopman_lm.config import build_config, config_hash
-from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
-
-
-# ============================================================================
-# Model loading (handles all model types)
-# ============================================================================
-
-def load_model(checkpoint, model_size="180m",
-               tokenizer_name="mistralai/Mistral-7B-v0.1",
-               model_type=None):
-    """
-    Load a model from checkpoint. Auto-detects model_type from meta.pt.
-    Returns (model, cfg, tokenizer, model_type).
-    """
-    meta_path = checkpoint.replace("model.pt", "meta.pt")
-    meta = {}
-    if os.path.exists(meta_path):
-        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
-
-    if model_type is None:
-        model_type = meta.get("model_type", "koopman")
-
-    # Prefer the checkpoint's embedded config (auto-detects scale at any size);
-    # fall back to the model_size string for legacy checkpoints with no cfg.
-    if "cfg" in meta:
-        cfg = meta["cfg"]
-    else:
-        cfg = build_config(model_size)
-
-    # The tokenizer that actually produced this checkpoint's vocab is saved
-    # alongside it by train.py's tokenizer.save_pretrained(ckpt_dir) -- load
-    # THAT rather than tokenizer_name, whose default differs from train.py's
-    # own CLI default. Both are 32k-vocab, so a mismatch would silently
-    # mismap every token id to the wrong embedding instead of erroring.
-    ckpt_dir = os.path.dirname(checkpoint)
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
-    except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    cfg = dataclasses.replace(cfg, vocab_size=len(tokenizer))   # frozen: use replace
-
-    if model_type == "mamba_attn":
-        model = build_mamba_attention(cfg)
-    elif model_type == "mamba_only":
-        model = build_mamba_only(cfg)
-    else:
-        model = KoopmanLM(cfg)
-
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-
-    print(f"Loaded {model_type} model from {checkpoint}")
-    total = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters: {total:,}")
-
-    return model, cfg, tokenizer, model_type
+from koopman_lm.evaluation.loader import load_model  # noqa: F401 (re-exported for harness.py)
 
 
 # ============================================================================

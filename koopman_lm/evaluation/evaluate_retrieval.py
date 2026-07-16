@@ -64,55 +64,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
 
 import dataclasses
-from koopman_lm.config import build_config
-from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
+from koopman_lm.evaluation import loader as _loader
 
 
 # ============================================================================
-# Model loading (same as evaluate.py, supports all 3 types)
+# Model loading (delegates to loader.load_model; unlike evaluate.py this
+# never tries the checkpoint-local tokenizer, only `tokenizer_name` --
+# use_ckpt_tokenizer=False preserves that existing behavior).
 # ============================================================================
 
 def load_model(checkpoint, model_size="180m",
                tokenizer_name="mistralai/Mistral-7B-v0.1",
                model_type=None):
     """Load model from checkpoint, auto-detecting model_type from meta.pt."""
-    meta_path = checkpoint.replace("model.pt", "meta.pt")
-    meta = {}
-    if os.path.exists(meta_path):
-        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
-
-    if model_type is None:
-        model_type = meta.get("model_type", "koopman")
-
-    if "cfg" in meta:
-        cfg = meta["cfg"]
-    else:
-        cfg = build_config(model_size)
-
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    cfg = dataclasses.replace(cfg, vocab_size=len(tokenizer))   # frozen: use replace
-
-    if model_type == "mamba_attn":
-        model = build_mamba_attention(cfg)
-    elif model_type == "mamba_only":
-        model = build_mamba_only(cfg)
-    else:
-        model = KoopmanLM(cfg)
-
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-
-    print(f"Loaded {model_type} model from {checkpoint}")
-    total = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters: {total:,}")
-
-    return model, cfg, tokenizer, model_type
+    return _loader.load_model(checkpoint, model_size, tokenizer_name,
+                              model_type, use_ckpt_tokenizer=False)
 
 
 # ============================================================================
