@@ -16,8 +16,11 @@ Metrics emitted (see SKAModule.collect_diagnostics for the math):
   - raw_spectral_radius : max|eig(gamma * W)|, the PRE-clamp operator. This is
                       where instability shows up (>1 => alpha clamp fired);
                       frac_unstable is computed on this, not the clamped radius.
-  - alpha           : spectral-norm clamp factor in (0,1]. alpha_min / frac_clamped
-                      report how hard / how often the clamp engages.
+  - preclamp_spectral_norm : sigma_max(gamma * W), the pre-clamp spectral NORM the
+                      alpha clamp actually responds to (>= raw_spectral_radius;
+                      a big gap = a very non-normal operator). mean / max emitted.
+  - alpha / clamp_factor : spectral-norm clamp factor in (0,1]. clamp_factor_mean,
+                      alpha_min, and frac_clamped report how hard / how often it engages.
   - lambda_min      : smallest eig of the regularized Gram. Pinned at the ridge
                       floor => rank-deficient keys / Cholesky on regularization.
   - gap             : ||A_eff^K - A_eff|| / ||A_eff||. >0.5 => the power filter
@@ -177,16 +180,18 @@ class SKAHealthMonitor:
             # (B, nc, H) -> drop chunk 0
             rad = self._valid_chunks(rec["spectral_radius"])
             raw = self._valid_chunks(rec["raw_spectral_radius"])
+            pnorm = self._valid_chunks(rec["spectral_norm"])
             alpha = self._valid_chunks(rec["alpha"])
             lmin = self._valid_chunks(rec["lambda_min"])
             gap = self._valid_chunks(rec["gap"])
 
             rad_f, lmin_f, gap_f = rad.reshape(-1), lmin.reshape(-1), gap.reshape(-1)
-            raw_f, alpha_f = raw.reshape(-1), alpha.reshape(-1)
+            raw_f, alpha_f, pnorm_f = raw.reshape(-1), alpha.reshape(-1), pnorm.reshape(-1)
 
             # full-pool distributions + per-head and per-chunk breakdowns
             for name, full, t in (("spectral_radius", rad_f, rad),
                                   ("raw_spectral_radius", raw_f, raw),
+                                  ("preclamp_spectral_norm", pnorm_f, pnorm),
                                   ("lambda_min", lmin_f, lmin),
                                   ("gap", gap_f, gap)):
                 hist_items[f"{p}/L{idx}/{name}"] = full
@@ -207,8 +212,12 @@ class SKAHealthMonitor:
                  ((rad_f >= self.healthy_lo) & (rad_f <= self.healthy_hi)).float().mean()),
                 # instability is the RAW radius exceeding 1 (the clamp saved it)
                 (f"{p}/L{idx}/frac_unstable", (raw_f > 1.0).float().mean()),
-                # alpha clamp factor: smallest alpha (strongest clamp) + fraction
-                # of operators that hit the spectral-norm clamp at all
+                # pre-clamp spectral NORM (sigma_max) -- what the clamp responds to
+                (f"{p}/L{idx}/preclamp_spectral_norm_mean", pnorm_f.mean()),
+                (f"{p}/L{idx}/preclamp_spectral_norm_max", pnorm_f.max()),
+                # alpha clamp factor: mean + smallest alpha (strongest clamp) +
+                # fraction of operators that hit the spectral-norm clamp at all
+                (f"{p}/L{idx}/clamp_factor_mean", alpha_f.mean()),
                 (f"{p}/L{idx}/alpha_min", alpha_f.min()),
                 (f"{p}/L{idx}/frac_clamped", (alpha_f < 1.0 - 1e-6).float().mean()),
                 (f"{p}/L{idx}/lambda_min_min", lmin_f.min()),

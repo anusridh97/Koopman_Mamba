@@ -19,10 +19,14 @@ assemble into the forward/backward.
 import torch
 
 
-def _spec_w(W, iters=20):
+def _spec_w(W, iters=20, return_sigma=False):
     """sigma_max(W) via detached power iteration; returns alpha=1/max(sigma,1).
     iters=20 matches the JAX core (converges on ill-conditioned chunks).
     Detached: straight-through, no grad through the scale (as in JAX _specW).
+
+    return_sigma=True additionally returns sigma_max(W) itself (the pre-clamp
+    spectral norm), for diagnostics -- the default (alpha only) is unchanged so
+    the forward-path callers are untouched.
     """
     r = W.shape[-1]
     v = torch.ones(*W.shape[:-1], 1, device=W.device, dtype=W.dtype) / (r ** 0.5)
@@ -35,6 +39,8 @@ def _spec_w(W, iters=20):
         sigma = (W @ v).norm(dim=-2, keepdim=True)            # (...,1,1)? -> (...,1)
         sigma = sigma.squeeze(-1)                              # (...,1) -> match
         alpha = 1.0 / torch.clamp(sigma, min=1.0)
+    if return_sigma:
+        return alpha, sigma  # both (..., 1)
     return alpha  # (..., 1)
 
 

@@ -61,18 +61,22 @@ def test_invariants():
     B, T = 2, 40
     m = ska.collect_diagnostics(torch.randn(B, T, D))
 
-    expected = {"spectral_radius", "raw_spectral_radius", "alpha", "lambda_min",
-                "gap", "n_chunks", "gate_mag",
+    expected = {"spectral_radius", "raw_spectral_radius", "spectral_norm", "alpha",
+                "lambda_min", "gap", "n_chunks", "gate_mag",
                 "beta_mean", "outproj_norm", "eta", "gamma", "ridge_eps"}
     assert expected <= set(m), f"missing keys: {expected - set(m)}"
 
     rad, lmin, gap = m["spectral_radius"], m["lambda_min"], m["gap"]
-    raw, alpha = m["raw_spectral_radius"], m["alpha"]
+    raw, alpha, pnorm = m["raw_spectral_radius"], m["alpha"], m["spectral_norm"]
     nc = m["n_chunks"]
     # full per-(batch, chunk, head) distributions -- nothing pre-averaged
     assert rad.shape == (B, nc, H), f"expected (B,nc,H), got {tuple(rad.shape)}"
     assert lmin.shape == (B, nc, H) and gap.shape == (B, nc, H)
     assert raw.shape == (B, nc, H) and alpha.shape == (B, nc, H)
+    assert pnorm.shape == (B, nc, H)
+    # spectral NORM (sigma_max) >= spectral RADIUS (|eig|) for any operator
+    assert float((raw - pnorm).clamp(min=0).max()) < 1e-2, \
+        "pre-clamp radius should not exceed the pre-clamp spectral norm"
 
     for name, t in m.items():
         if torch.is_tensor(t):
@@ -253,7 +257,8 @@ def test_monitor_schema():
     for idx in (1, 3):
         for suffix in ("spectral_radius_mean", "spectral_radius_max",
                        "raw_spectral_radius_mean", "raw_spectral_radius_max",
-                       "alpha_min", "frac_clamped",
+                       "preclamp_spectral_norm_mean", "preclamp_spectral_norm_max",
+                       "clamp_factor_mean", "alpha_min", "frac_clamped",
                        "lambda_min_over_ridge", "gap_mean", "gate_mag",
                        "beta_mean", "eta", "gamma", "frac_healthy",
                        "frac_unstable", "residual_delta"):

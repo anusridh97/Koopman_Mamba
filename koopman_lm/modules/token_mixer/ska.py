@@ -340,6 +340,9 @@ class SKAModule(nn.Module):
                             Healthy ~[0.3, 0.95]; ~0 = unlearned.
           raw_spectral_radius : (B, nc, H) max|eig(gamma * W)|, the pre-clamp
                             operator radius. >1 => unstable (alpha clamp active).
+          spectral_norm   : (B, nc, H) sigma_max(gamma * W), the pre-clamp spectral
+                            NORM -- what the alpha clamp actually responds to
+                            (>= raw_spectral_radius; larger gap = more non-normal).
           alpha           : (B, nc, H) spectral-norm clamp factor in (0, 1];
                             <1 means the clamp fired on that (chunk, head).
           lambda_min      : (B, nc, H) smallest eig(G_tilde) per instance.
@@ -383,7 +386,7 @@ class SKAModule(nn.Module):
             L = torch.where((info > 0).view(-1, 1, 1), L_j, L)
 
         W = _whiten_M(L, Mf)                      # L^-1 M L^-T  (N,r,r)
-        alpha = _spec_w(W)                        # (N,1) detached spectral-norm clamp
+        alpha, sigma = _spec_w(W, return_sigma=True)  # alpha=(N,1) clamp; sigma=sigma_max(W)
         gamma = self._resolve_gamma()             # float (fixed) or tensor (learnable)
         gamma_val = gamma if isinstance(gamma, float) else float(gamma.detach())
         A_eff = alpha.unsqueeze(-1) * W           # operator applied per filter step
@@ -405,10 +408,18 @@ class SKAModule(nn.Module):
         A_K = torch.linalg.matrix_power(A_eff, K)
         gap = (A_K - A_eff).norm(dim=(-2, -1)) / (A_eff.norm(dim=(-2, -1)) + 1e-12)
 
+        # Pre-clamp spectral NORM of the operator the forward WANTS to apply
+        # (gamma * W). This is what the alpha clamp actually responds to
+        # (sigma_max, largest singular value) -- distinct from raw_spectral_radius
+        # (largest |eigenvalue|); for a non-normal operator norm >= radius, often
+        # by a lot. clamp_factor alpha = 1/max(sigma_max(W), 1).
+        preclamp_norm = abs(gamma_val) * sigma                         # (N,1)
+
         # (N,) -> (B, nc, H). No reduction: hand back the whole distribution.
         radius = radius.view(Bc, nc, Hc)
         raw_radius = raw_radius.view(Bc, nc, Hc)
         alpha_bnh = alpha.reshape(Bc, nc, Hc)     # clamp factor in (0, 1]
+        preclamp_norm = preclamp_norm.reshape(Bc, nc, Hc)
         lam = lam.view(Bc, nc, Hc)
         gap = gap.view(Bc, nc, Hc)
 
@@ -419,6 +430,7 @@ class SKAModule(nn.Module):
         return {
             'spectral_radius': radius.detach(),
             'raw_spectral_radius': raw_radius.detach(),
+            'spectral_norm': preclamp_norm.detach(),
             'alpha': alpha_bnh.detach(),
             'lambda_min': lam.detach(),
             'gap': gap.detach(),

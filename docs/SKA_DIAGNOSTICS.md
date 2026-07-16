@@ -36,7 +36,8 @@ training forward actually applies** (see "Faithfulness" below), not a proxy.
 |---|---|---|
 | **Spectral radius** of `A_eff` (per layer/head) | dominant eigenvalue magnitude of the APPLIED transition operator `A_eff = γ·α·(L⁻¹ M L⁻ᵀ)`. `α` clamps `σ_max(A_eff) ≤ 1`, so this is **always ≤ 1**. Identifies whether key→value bindings are persistent. | `[0.3, 0.95]`; `~0` = operator unlearned |
 | **Raw spectral radius** = `radius / α` (pre-clamp, per layer/head) | radius of `γ·W` **before** the α safety clamp — where instability actually shows. `frac_unstable` is measured on THIS, not the clamped radius. | `≤ 1`; `> 1` = unstable (α clamp is load-bearing) |
-| **α (clamp factor)** | `1/max(σ_max(W), 1) ∈ (0, 1]`. `alpha_min` / `frac_clamped` report how hard / how often the spectral-norm clamp engages. | near 1 = clamp rarely fires |
+| **Pre-clamp spectral norm** = `σ_max(γ·W)` | the spectral NORM the α clamp actually responds to (largest singular value), distinct from the radius above; `≥ raw_spectral_radius`, and a large gap = a very non-normal operator. Emitted as `preclamp_spectral_norm_{mean,max}`. | grows with training; a big norm≫radius gap flags non-normality |
+| **α / clamp factor** | `1/max(σ_max(W), 1) ∈ (0, 1]`. `clamp_factor_mean` / `alpha_min` / `frac_clamped` report how hard / how often the spectral-norm clamp engages. | near 1 = clamp rarely fires |
 | **λmin(G̃)** | smallest eigenvalue of the ridge-regularized Gram matrix; Cholesky conditioning. | comfortably above the ridge floor `ε`; pinned at `ε` ⇒ rank-deficient keys |
 | **Gap** `‖A_eff^K − A_eff‖ / ‖A_eff‖` | how much the power filter (squaring, K=2) reshapes the operator. | `< 0.5`; above ⇒ the filter dominates rather than confirms |
 | **Write-gate magnitude** | the LayerScale residual gate (`layerscale_gate`); how hard SKA is injected into the residual. Plot on a **log scale**; watch for monotonic growth. | grows off its `1e-4` init; flat ⇒ SKA effectively dead |
@@ -64,6 +65,7 @@ metrics = ska_module.collect_diagnostics(hidden_states, max_batch=2)
 |---|---|---|
 | `spectral_radius` | `(B, nc, H)` | `max eig(A_eff)` per (batch, chunk, head); applied (clamped) operator, ≤ 1 |
 | `raw_spectral_radius` | `(B, nc, H)` | pre-clamp radius `= spectral_radius / α`; `> 1` ⇒ unstable |
+| `spectral_norm` | `(B, nc, H)` | pre-clamp spectral norm `σ_max(γ·W)`; what the α clamp responds to (`≥ raw_spectral_radius`) |
 | `alpha` | `(B, nc, H)` | spectral-norm clamp factor `∈ (0, 1]` |
 | `lambda_min` | `(B, nc, H)` | smallest eig of `G̃` per instance |
 | `gap` | `(B, nc, H)` | `‖A_eff^K − A_eff‖ / ‖A_eff‖` per instance |
@@ -164,6 +166,8 @@ Per SKA layer `L{idx}`:
 ```
 ska/L{idx}/spectral_radius_mean | _max | _min   # applied (clamped) radius, <=1
 ska/L{idx}/raw_spectral_radius_mean | _max       # pre-clamp radius (instability lives here)
+ska/L{idx}/preclamp_spectral_norm_mean | _max    # pre-clamp sigma_max (what the clamp responds to)
+ska/L{idx}/clamp_factor_mean      # mean alpha (1 = no clamp)
 ska/L{idx}/frac_healthy           # fraction of (chunk,head) applied-radius in [0.3, 0.95]
 ska/L{idx}/frac_unstable          # fraction with RAW radius > 1.0
 ska/L{idx}/alpha_min              # smallest clamp factor (strongest clamp)
@@ -182,6 +186,7 @@ ska/L{idx}/residual_delta
 ```
 ska/L{idx}/spectral_radius        | _by_head | _by_chunk
 ska/L{idx}/raw_spectral_radius    | _by_head | _by_chunk
+ska/L{idx}/preclamp_spectral_norm | _by_head | _by_chunk
 ska/L{idx}/lambda_min             | _by_head | _by_chunk
 ska/L{idx}/gap                    | _by_head | _by_chunk
 ```
