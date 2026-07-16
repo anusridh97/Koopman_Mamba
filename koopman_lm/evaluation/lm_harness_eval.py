@@ -19,7 +19,6 @@ Usage:
 
 import torch
 import transformers
-from transformers import AutoTokenizer
 from lm_eval.api.model import LM
 from lm_eval.models.huggingface import HFLM
 from lm_eval.api.registry import register_model
@@ -34,6 +33,7 @@ import dataclasses
 from koopman_lm.config import build_config
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.recurrent import RecurrentKoopmanLM
+from koopman_lm.evaluation import loader as _loader
 
 
 @register_model("koopman")
@@ -75,27 +75,10 @@ class KoopmanEvalWrapper(HFLM):
         self.backend = "causal"
         # ------------------------------------------------------------------
 
-        cfg = build_config(model_size)
+        meta = _loader.load_checkpoint_meta(checkpoint)
+        cfg = meta["cfg"] if "cfg" in meta else build_config(model_size)
 
-        meta_path = checkpoint.replace("model.pt", "meta.pt")
-        if os.path.exists(meta_path):
-            meta = torch.load(meta_path, map_location="cpu", weights_only=False)
-            if "cfg" in meta:
-                cfg = meta["cfg"]
-
-        # The tokenizer that actually produced this checkpoint's vocab is saved
-        # alongside it by train.py's tokenizer.save_pretrained(ckpt_dir) -- load
-        # THAT rather than the `tokenizer` arg's default, which differs from
-        # train.py's own CLI default. Both are 32k-vocab, so a mismatch would
-        # silently mismap every token id to the wrong embedding instead of
-        # erroring.
-        ckpt_dir = os.path.dirname(checkpoint)
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
-        except Exception:
-            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.tokenizer = _loader.load_checkpoint_tokenizer(checkpoint, tokenizer)
 
         cfg = dataclasses.replace(cfg, vocab_size=len(self.tokenizer),
                                   max_seq_len=int(max_length))   # frozen: use replace
