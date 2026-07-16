@@ -13,6 +13,8 @@ import random
 
 import torch
 
+from koopman_lm.evaluation.generation import _greedy_generate  # noqa: F401 (re-exported for babilong.py)
+
 _FILLER = (
     "The grass is green. The sky is blue. The sun is bright today. "
     "We went to the store to buy groceries and then walked home slowly. "
@@ -109,27 +111,3 @@ def eval_ruler_subset(model, tokenizer, device, context_lens=(4096, 8192),
                 hits += int(answer in text)
             results[task][ctx] = hits / max(n_examples, 1)
     return results
-
-
-def _greedy_generate(gen, tokenizer, device, prompt, max_new_tokens):
-    import torch
-    ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
-    out_ids = []
-    if hasattr(gen, "prefill") and hasattr(gen, "step"):
-        logits = gen.prefill(ids)
-        nxt = logits[:, -1].argmax(-1, keepdim=True)
-        out_ids.append(nxt.item())
-        for _ in range(max_new_tokens - 1):
-            logits = gen.step(nxt)
-            logits = logits[:, -1] if logits.dim() == 3 else logits
-            nxt = logits.argmax(-1, keepdim=True)
-            out_ids.append(nxt.item())
-    else:                                     # fallback: parallel re-forward
-        cur = ids
-        for _ in range(max_new_tokens):
-            out = gen(input_ids=cur)
-            logits = out["logits"] if isinstance(out, dict) else out
-            nxt = logits[:, -1].argmax(-1, keepdim=True)
-            out_ids.append(nxt.item())
-            cur = torch.cat([cur, nxt], dim=1)
-    return tokenizer.decode(out_ids)
