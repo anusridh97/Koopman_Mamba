@@ -298,7 +298,7 @@ automatic, since FineWeb sequences carry no labels.
 | §C retrain-ablation harness | **Landed** (`1525708`, `scripts/sqrt_beta_ablation/`) | Two-ref A/B + α probe + verdict file; decision tree verified on synthetic inputs. The Gate-1 mechanism |
 | Power-iteration removal | Specced, next after Gate 1 | Exact no-op given √β (α≡1 by lower-bound direction); ships with `σ≤1+tol` assert |
 | Gated-read oracle (C1–C5) | **Landed** (`01b7ce5`, `code-tests/test_gated_blend_oracle.py`) | Contractivity+teeth, gradients, init-equivalence, Cholesky-free form, learnability smoke |
-| Incremental decode kernel (torch) | Specced | Acceptance = `38b04a7` oracle; rebuild cadence vs FP32 drift |
+| Incremental decode kernel (torch) | **Reference build landed** (`incremental_transport.py` + `test_incremental_transport_torch.py`); standalone, default-inert | Batched port verified faithful to the `38b04a7` oracle (numpy transcription, machine precision); torch parity test is the CI gate. **Not wired into live decode** — promotion needs the torch test green + decode-vs-recompute parity, behind a default-off flag. Fusion (`18r²+15r`) is a later separate step. Invariant to Gate 1 (transport is exact for any rank-1 stream) |
 | Causal norm-clip (memo §6) | Specced | Own before/after eval (behavior change, not exact); **must precede Gate 2 arms** |
 | Gate implementation + arms | Specced (Section 2 pins; oracle = acceptance) | **Blocked on Gates 1 and norm-clip** |
 | Exact-replay training | Future | Wall-clock benchmark vs batched (rank-c form) |
