@@ -1,22 +1,24 @@
-"""Koopman MLP eigenvalue-scaling: unit-circle (norm-preserving) vs unit-disk.
+"""Koopman MLP rotation: exact norm-preserving (angle-only) vs unit-disk clamp.
 
 The 2x2 block [[g, o], [-o, g]] = radius * R(theta) has BOTH singular values
 equal to radius = sqrt(g^2 + o^2). So:
 
-  * norm_preserving=True  -> radius forced to 1 -> sigma_min = sigma_max = 1
-    (exact norm-preserving rotation; paper S3.3 "Gradient preservation").
-  * norm_preserving=False -> radius clamped to <=1 -> contractive once radius<1
-    (unit-disk / legacy behavior).
+  * norm_preserving=True  -> ANGLE-ONLY param: g=cos(theta), o=sin(theta) -> the
+    block is exactly R(theta): sigma_min = sigma_max = 1, and it is smooth
+    EVERYWHERE (no radius to divide by, so no 1/radius gradient singularity at
+    the origin). Paper S3.3 "Gradient preservation".
+  * norm_preserving=False -> learned (g, o) clamped to the unit disk -> |lambda|
+    <= 1 but contractive once radius < 1 (legacy behavior).
 
-This test locks in the fix for the audit item "MLP disk-clamp is not
-norm-preserving": with the circle projection the whole SiLU-lifted vector's L2
-norm is preserved through the rotation, and each block is exactly orthogonal.
+Locks in the audit fix "MLP disk-clamp is not norm-preserving" AND guards the
+reviewer-flagged 1/radius origin singularity: the angle-only construction has
+no such point, so gradients stay finite for any theta.
 """
 import pytest
 import torch
 
 from koopman_lm.globals.modules.koopman_mlp import (
-    SpectralKoopmanMLP, SpectralKoopmanMLPGated, _radius_scale)
+    SpectralKoopmanMLP, SpectralKoopmanMLPGated, _disk_clamp, _rotation_coeffs)
 
 pytestmark = pytest.mark.correctness
 
@@ -29,13 +31,13 @@ def _block_singular_values(gamma, omega):
     return torch.linalg.svdvals(blocks)                 # (P, 2)
 
 
-@pytest.mark.parametrize("gamma0,omega0", [(1.0, 0.1), (0.6, 0.2), (0.3, 0.05), (2.0, 1.0)])
-def test_circle_projection_is_orthogonal(gamma0, omega0):
-    g = torch.full((8,), float(gamma0))
-    o = torch.full((8,), float(omega0))
-    gp, op = _radius_scale(g, o, norm_preserving=True)
-    sv = _block_singular_values(gp, op)
-    # every singular value is exactly 1 -> exact norm-preserving rotation
+@pytest.mark.parametrize("theta", [0.0, 0.1, 1.0, -2.5, 100.0])
+def test_angle_only_is_orthogonal(theta):
+    m = SpectralKoopmanMLP(64, norm_preserving=True)
+    with torch.no_grad():
+        m.theta.fill_(float(theta))
+    gamma, omega = _rotation_coeffs(m)
+    sv = _block_singular_values(gamma, omega)
     assert torch.allclose(sv, torch.ones_like(sv), atol=1e-6), sv
 
 
@@ -43,36 +45,44 @@ def test_disk_clamp_is_contractive_when_radius_below_one():
     # radius = sqrt(0.6^2 + 0.2^2) = 0.632 < 1 -> disk clamp leaves it unchanged
     g = torch.full((8,), 0.6)
     o = torch.full((8,), 0.2)
-    gp, op = _radius_scale(g, o, norm_preserving=False)
+    gp, op = _disk_clamp(g, o)
     sv = _block_singular_values(gp, op)
     assert torch.all(sv < 0.99)                          # strictly contractive
-    # ...whereas the circle projection makes the SAME pair norm-preserving
-    gpc, opc = _radius_scale(g, o, norm_preserving=True)
-    svc = _block_singular_values(gpc, opc)
-    assert torch.allclose(svc, torch.ones_like(svc), atol=1e-6)
+
+
+def test_norm_preserving_has_no_origin_singularity():
+    """Reviewer catch: a `scale = 1/radius` construction blows up as (g,o)->0.
+    The angle-only param has no radius, so forward+backward is finite even for
+    extreme theta and near-zero SiLU activations."""
+    torch.manual_seed(0)
+    m = SpectralKoopmanMLP(64, norm_preserving=True)
+    with torch.no_grad():
+        m.theta.copy_(torch.linspace(-50.0, 50.0, m.theta.numel()))
+    x = torch.randn(4, 7, 64, requires_grad=True)
+    y = m(x)
+    y.pow(2).mean().backward()
+    for name, p in m.named_parameters():
+        assert torch.isfinite(p.grad).all(), name
+    assert torch.isfinite(x.grad).all()
 
 
 @pytest.mark.parametrize("Klass", [SpectralKoopmanMLP, SpectralKoopmanMLPGated])
 def test_rotation_preserves_lifted_norm(Klass):
-    """In norm_preserving mode the rotation preserves the L2 norm of the
-    SiLU-lifted vector g (each 2x2 block is orthogonal), for BOTH variants."""
+    """In norm_preserving mode each 2x2 block is orthogonal, so the rotation
+    preserves the L2 norm of the SiLU-lifted vector g -- for BOTH variants."""
     torch.manual_seed(0)
     d = 64
     mlp = Klass(d, norm_preserving=True).eval()
-    # push the learned pair off the unit circle so the projection has to work
     with torch.no_grad():
-        mlp.gamma.copy_(torch.empty_like(mlp.gamma).uniform_(0.2, 2.0))
-        mlp.omega.copy_(torch.empty_like(mlp.omega).uniform_(-1.0, 1.0))
+        mlp.theta.copy_(torch.empty_like(mlp.theta).uniform_(-3.0, 3.0))
     x = torch.randn(2, 5, d)
     with torch.no_grad():
         h = mlp.norm(x)
         g = torch.nn.functional.silu(mlp.lift(h))
-        gamma, omega = _radius_scale(mlp.gamma, mlp.omega, True)
+        gamma, omega = _rotation_coeffs(mlp)
         gp = g.view(*g.shape[:-1], mlp.d_k // 2, 2)
         z1 = gamma * gp[..., 0] + omega * gp[..., 1]
         z2 = -omega * gp[..., 0] + gamma * gp[..., 1]
         z = torch.stack([z1, z2], dim=-1).reshape_as(g)
-    # orthogonal per-pair rotation -> ||z|| == ||g|| exactly
     assert torch.allclose(z.norm(dim=-1), g.norm(dim=-1), atol=1e-5)
-    # sanity: forward runs and is finite
     assert torch.isfinite(mlp(x)).all()
