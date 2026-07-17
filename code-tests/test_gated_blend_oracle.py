@@ -241,6 +241,194 @@ def test_c5_teeth_no_separation_without_signal():
     assert abs(gap) < 0.1                      # signal-driven, not optimizer drift
 
 
+# ===========================================================================
+# 3-way basis {I, A, A^2} -- folding in K=1 (the INDUCTION read). The 2-way blend
+# above skips K=1; A(A q_w) is already the A^2 intermediate, so the induction
+# branch is compute-free. Pinned convention (ECHO_V1_1_PLAN.md §2):
+#   3 logits l_k = (w_k . z_q)/sqrt(r) + b_k, k in {I, A, A^2}, softmax over them;
+#   all gate rows + all 3 biases off the weight-decay list.
+#   Init w_k=0, b = ln(0.05, 0.05, 0.9): A^2 dominant (proven-retrieval regime),
+#   A-involving mass 0.95 preserves the bootstrap, both minority branches get an
+#   equal trainable foothold (softmax damping ~0.0475 each, vs the scalar gate's
+#   0.09 at 0.9). Do NOT init p_A ~ 0.01 -- the logit gradient scales with p_k.
+# Convexity (softmax weights nonneg, sum 1) preserves contractivity pointwise.
+# ===========================================================================
+
+INIT_LOGITS = np.log(np.array([0.05, 0.05, 0.9]))       # pinned 3-way init
+
+
+def gate3(st, q, W, b):
+    """3-way softmax gate. W:(3,r), b:(3,) -> convex weights (3,) over {I,A,A^2}."""
+    logits = (W @ q) / np.sqrt(st["r"]) + b
+    ex = np.exp(logits - logits.max())
+    return ex / ex.sum()
+
+
+def read3(st, q, w3, eta=1.5):
+    qw = st["Li"] @ q
+    a1 = st["A"] @ qw
+    a2 = st["A"] @ a1
+    h = w3[0] * qw + w3[1] * a1 + w3[2] * a2
+    return eta * (st["R"] @ h)
+
+
+def test_c6_threeway_contractivity():
+    st = build_stats(400, 24, 16, mode="sym", rng=np.random.default_rng(6))
+    I = np.eye(24); A = st["A"]; A2 = A @ A
+    rng = np.random.default_rng(60)
+    for _ in range(2000):                       # softmax weights => convex => <=1
+        lg = rng.standard_normal(3); w = np.exp(lg - lg.max()); w /= w.sum()
+        assert np.linalg.norm(w[0]*I + w[1]*A + w[2]*A2, 2) <= 1 + 1e-12
+    worst = 0.0                                 # teeth: leave the convex hull
+    for _ in range(4000):
+        w = rng.standard_normal(3); w /= w.sum()   # sums to 1 but not nonneg
+        worst = max(worst, np.linalg.norm(w[0]*I + w[1]*A + w[2]*A2, 2))
+    assert worst > 1.0                          # convexity is load-bearing
+
+
+def test_c7_threeway_softmax_gradient_matches_fd():
+    """Correct softmax gradient vs FD on EVERY logit jointly, plus the teeth:
+    the classic bug treats the 3 gates as independent sigmoids (diagonal
+    p_k(1-p_k) only, dropping the -p_k Σ_j p_j d_j coupling) -- it passes
+    single-logit spot checks but must DIVERGE on the joint FD."""
+    rng = np.random.default_rng(70)
+    st = build_stats(300, 24, 16, mode="sym", rng=rng); eta = 1.5
+    q = rng.standard_normal(24); q /= np.linalg.norm(q)
+    W = 0.3 * rng.standard_normal((3, 24)); b = rng.standard_normal(3)
+    ystar = rng.standard_normal(16)
+    w3 = gate3(st, q, W, b)
+    g = read3(st, q, w3, eta) - ystar
+    qw = st["Li"] @ q; a1 = st["A"] @ qw; a2 = st["A"] @ a1
+    dLdw = np.array([g @ (eta * (st["R"] @ bk)) for bk in (qw, a1, a2)])
+    ana_b = (np.diag(w3) - np.outer(w3, w3)) @ dLdw       # softmax Jacobian
+    ana_b_bug = w3 * (1.0 - w3) * dLdw                    # independent-sigmoid (WRONG)
+    ana_W = np.outer(ana_b, q / np.sqrt(24))
+    h = 1e-6
+
+    def loss(W_, b_):
+        return 0.5 * np.sum((read3(st, q, gate3(st, q, W_, b_), eta) - ystar) ** 2)
+    fd_b = np.empty(3)
+    for k in range(3):
+        bp, bm = b.copy(), b.copy(); bp[k] += h; bm[k] -= h
+        fd_b[k] = (loss(W, bp) - loss(W, bm)) / (2 * h)
+        assert abs(ana_b[k] - fd_b[k]) / max(1e-12, abs(fd_b[k])) < 1e-5
+    for (i, j) in [(0, 0), (1, 7), (2, 23)]:
+        Wp, Wm = W.copy(), W.copy(); Wp[i, j] += h; Wm[i, j] -= h
+        fd = (loss(Wp, b) - loss(Wm, b)) / (2 * h)
+        assert abs(ana_W[i, j] - fd) / max(1e-12, abs(fd)) < 1e-5
+    # teeth: the independent-sigmoid formula diverges on the joint check
+    assert np.max(np.abs(ana_b_bug - fd_b) / (np.abs(fd_b) + 1e-12)) > 1e-2
+
+
+def test_c8_init_collapse_and_k1_expressivity():
+    """(i) C3' invariant: w=0 => the gate is bitwise the fixed init mixture
+    (0.05,0.05,0.9) for ANY query -> Arm 0 (biases trainable, w frozen) ≡ Arm 1
+    (both trainable) at step 0. (ii) p_A -> 0 recovers the validated 2-way blend
+    EXACTLY (ties the 3-way oracle to the 2-way one). (iii) with the A-branch on,
+    the read is NOT in any {I,A^2} blend -> K=1 adds a genuinely new direction."""
+    rng = np.random.default_rng(80)
+    st = build_stats(300, 24, 16, mode="sym", rng=rng)
+    # (i) w=0 -> exactly softmax(INIT_LOGITS), independent of the query
+    for _ in range(8):
+        q = rng.standard_normal(24); q /= np.linalg.norm(q)
+        w3 = gate3(st, q, np.zeros((3, 24)), INIT_LOGITS)
+        assert np.allclose(w3, np.array([0.05, 0.05, 0.9]), atol=1e-12)
+    # (ii) p_A -> 0 collapses to the 2-way blend at lam
+    for _ in range(8):
+        q = rng.standard_normal(24); q /= np.linalg.norm(q)
+        lam = rng.uniform(0.05, 0.95)
+        b = np.array([0.0, -1e9, np.log(lam / (1 - lam))])   # w -> [1-lam, ~0, lam]
+        y3 = read3(st, q, gate3(st, q, np.zeros((3, 24)), b))
+        assert np.max(np.abs(y3 - read_lam(st, q, lam))) < 1e-9
+    # (iii) K=1 expressivity: A q_w generically outside span{q_w, A^2 q_w}
+    q = rng.standard_normal(24); q /= np.linalg.norm(q)
+    qw = st["Li"] @ q; a1 = st["A"] @ qw; a2 = st["A"] @ a1
+    B = np.stack([qw, a2], axis=1)
+    coef, *_ = np.linalg.lstsq(B, a1, rcond=None)
+    assert np.linalg.norm(a1 - B @ coef) / np.linalg.norm(a1) > 1e-3
+
+
+def _orth_stream(iid, sigma, seed):
+    """Keys z_{t+1}=normalize(Q z_t + sigma n), Q orthogonal (QR of Gaussian) --
+    orthogonal dynamics commute with L2-normalization, so keys stay linearly
+    predictable AFTER normalization (rotary-style; paper Appendix B is SO(2) on
+    keys). values v_t = W_true z_{t-1} (induction target). Returns
+    (err_K1, err_Cp, err_MGiQ) where err_MGiQ = ||M G^-1 - Q|| tests that A LEARNS
+    THE ADVANCE ROTATION -- the mechanism, not just the endpoint."""
+    rng = np.random.default_rng(seed); r, P, T, eps = 24, 24, 4000, 1e-3
+    Q, _ = np.linalg.qr(rng.standard_normal((r, r)))
+    Wt = 0.7 * rng.standard_normal((P, r))
+    Z = np.empty((T, r)); Z[0] = rng.standard_normal(r); Z[0] /= np.linalg.norm(Z[0])
+    for t in range(1, T):
+        z = rng.standard_normal(r) if iid else Q @ Z[t - 1] + sigma * rng.standard_normal(r)
+        Z[t] = z / np.linalg.norm(z)
+    V = np.vstack([np.zeros((1, P)), Z[:-1] @ Wt.T])
+    st = stats_from(Z, V, np.ones(T), eps)
+    Gi = np.linalg.inv(st["G"])
+    Cp = V[1:].T @ (np.sqrt(np.ones(T))[1:, None] * Z[:-1])   # (beta=1) exact lag-1
+    e = lambda B: np.linalg.norm(B - Wt) / np.linalg.norm(Wt)
+    err_K1 = e(st["C"] @ Gi @ st["M"] @ Gi)
+    err_Cp = e(Cp @ Gi)
+    err_MGiQ = np.linalg.norm(st["M"] @ Gi - Q) / np.linalg.norm(Q)
+    return err_K1, err_Cp, err_MGiQ
+
+
+def test_c9_orthogonal_dynamics_advance():
+    """Closes the caveat: under orthogonal (predictable) key dynamics K=1 IS a
+    position-advance -- it recovers the induction map AND M G^-1 matches Q itself.
+    Under iid keys K=1 fails (~1.0) while the exact lag-1 statistic C+ works in
+    every regime. The M G^-1 ≈ Q check is teeth-grade: it tests the mechanism."""
+    k0, c0, mq0 = _orth_stream(iid=False, sigma=0.0, seed=1)
+    k2, c2, mq2 = _orth_stream(iid=False, sigma=0.02, seed=1)
+    ki, ci, mqi = _orth_stream(iid=True, sigma=0.0, seed=1)
+    assert k0 < 0.05 and k2 < 0.05 and ki > 0.5           # K=1: orth works, iid fails
+    assert mq0 < 0.05 and mq2 < 0.05 and mqi > 0.5        # A learns the advance rotation
+    assert c0 < 0.05 and c2 < 0.05 and ci < 0.05          # C+ exact in every regime
+
+
+def _route3(separable, seed=3, steps=4000):
+    rng = np.random.default_rng(seed); r, P, T, n = 16, 16, 256, 300
+    Z = rng.standard_normal((T, r)); Z /= np.linalg.norm(Z, axis=1, keepdims=True)
+    V = rng.standard_normal((T, P)); beta = rng.uniform(0.05, 1.0, T)
+    st = stats_from(Z, V, beta, mode="sym"); A = st["A"]; A2 = A @ A
+    mus = np.linalg.qr(rng.standard_normal((r, 3)))[0].T
+    def mk(c):
+        base = mus[c][None, :] if separable else 0.0
+        Qy = base + 0.5 * rng.standard_normal((n, r))
+        return Qy / np.linalg.norm(Qy, axis=1, keepdims=True)
+    qs = np.vstack([mk(0), mk(1), mk(2)]); cls = np.repeat([0, 1, 2], n)
+    QW = qs @ st["Li"].T
+    reads = np.stack([1.5*(QW@st["R"].T), 1.5*((QW@A.T)@st["R"].T),
+                      1.5*((QW@A2.T)@st["R"].T)], axis=1)      # (3n,3,P) per-branch reads
+    Ystar = reads[np.arange(3*n), cls]                         # target = the class's branch
+    W = np.zeros((3, r)); b = INIT_LOGITS.copy(); lr = 0.5
+    for _ in range(steps):
+        lg = (qs @ W.T) / np.sqrt(r) + b
+        ex = np.exp(lg - lg.max(1, keepdims=True)); wts = ex / ex.sum(1, keepdims=True)
+        g = np.einsum('nk,nkp->np', wts, reads) - Ystar
+        d = np.einsum('np,nkp->nk', g, reads)
+        dlog = wts * (d - (wts * d).sum(1, keepdims=True))     # softmax Jacobian (coupled)
+        b -= lr * dlog.mean(0); W -= lr * (dlog.T @ qs) / (3 * n * np.sqrt(r))
+    lg = (qs @ W.T) / np.sqrt(r) + b
+    ex = np.exp(lg - lg.max(1, keepdims=True)); wts = ex / ex.sum(1, keepdims=True)
+    masses = np.stack([wts[cls == c].mean(0) for c in range(3)])   # (class, branch)
+    return masses, (masses.max(0) - masses.min(0)).max()
+
+
+def test_c10_threeclass_routing():
+    """C5': three token classes with targets = ridge/induction/spectral reads.
+    Tests the gate can route to K=1 SPECIFICALLY (the point of adding it): each
+    class's mass must peak on its own branch, incl. the induction class pulling
+    mass onto A off the 0.9 A^2 prior. TEETH: identical query distributions ->
+    no routing (recalibrated separation floor; the scalar 0.02 does NOT carry)."""
+    masses, spread = _route3(separable=True)
+    assert spread > 0.3
+    for c in range(3):
+        assert int(np.argmax(masses[c])) == c, (c, masses[c])
+    _, spread0 = _route3(separable=False)
+    assert spread0 < 0.06            # recalibrated 3-way non-separable floor (~0.02)
+
+
 if __name__ == "__main__":
     test_c1_contractivity_and_sqrt_beta_dependency(); print("C1 contractivity + sqrt-beta dependency: PASS")
     test_c2_gate_gradient_matches_fd(); print("C2 gate gradient vs FD: PASS")
@@ -248,4 +436,9 @@ if __name__ == "__main__":
     test_c4_cholesky_free_form(); print("C4 Cholesky-free form: PASS")
     test_c5_learnability_given_separable_signal(); print("C5 learnability (separable): PASS")
     test_c5_teeth_no_separation_without_signal(); print("C5 teeth (non-separable): PASS")
+    test_c6_threeway_contractivity(); print("C6 3-way {I,A,A^2} contractivity + teeth: PASS")
+    test_c7_threeway_softmax_gradient_matches_fd(); print("C7 3-way softmax gradient + indep-sigmoid teeth: PASS")
+    test_c8_init_collapse_and_k1_expressivity(); print("C8 init mixture + 2-way collapse + K=1 expressivity: PASS")
+    test_c9_orthogonal_dynamics_advance(); print("C9 orthogonal-dynamics advance (A learns Q; C+ always): PASS")
+    test_c10_threeclass_routing(); print("C10 3-class routing to K=1 + recalibrated floor: PASS")
     print("ALL PASS")

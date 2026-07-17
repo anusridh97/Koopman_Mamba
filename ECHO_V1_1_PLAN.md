@@ -116,31 +116,33 @@ is enforced as a code comment on the gate and as a review pin.
 The full read, per token, per head:
 
 ```
-λₜ  = σ( (w_λ · z_qₜ)/√r + b_λ )        # gate on the PRE-whitening query
-q_w = L⁻¹ z_qₜ                           # one triangular solve
-h   = (1−λₜ)·q_w + λₜ·A(A q_w)           # convex blend over {I, A²}
-yₜ  = η · R h                            # value readout
+ℓ    = (W_g z_qₜ)/√r + b_g   ∈ ℝ³       # 3 gate logits over {I, A, A²}, pre-whitening query
+w    = softmax(ℓ)                        # convex weights (per token, per head)
+q_w  = L⁻¹ z_qₜ                          # one triangular solve
+h    = w_I·q_w + w_A·(A q_w) + w_{A²}·A(A q_w)   # K=1 branch (A q_w) is the A² intermediate → free
+yₜ   = η · R h                           # value readout
 ```
 
-**What the dial means.** `λ = 0` is exact ridge retrieval (the closed-form
-associative-recall predictor); `λ = 1` is the original K=2 spectral SKA
-(persistent-mode amplification, transient suppression — the mechanism behind
-the tool-call and MQAR results). Intermediate values retain diffuse
-information while partially suppressing transients. The gate makes this a
-*per-token* choice, which is where the LM-vs-retrieval tension actually lives:
-a binding query and a diffuse-context query interleave in the same sequence
-through the same head, and a fixed per-head constant cannot track that.
+**Basis `{I, A, A²}` — the three canonical retrieval circuits.** `A q_w`, the
+K=1 term, is the **induction read** (predict the next key, then look it up), and
+it sits strictly between the lookup and two-step-advance ends — so a `{I, A²}`
+basis skips it. The three branches are: `w_I` = lag-0 ridge lookup (K=0),
+`w_A` = induction (K=1), `w_{A²}` = spectral SKA (K=2, persistent-mode
+amplification — the tool-call/MQAR mechanism). The gate makes the choice
+*per-token*, which is where the LM-vs-retrieval tension lives: a binding query
+and a diffuse-context query interleave through the same head, and a fixed
+per-head constant cannot track that. (Oracle C9: under orthogonal key dynamics
+`A` literally learns the position-advance rotation, so `A q_w` *is* the
+induction advance; under unpredictable keys the exact statistic `C₊` (§Induction)
+is the robust route — a post-Gate-2 stage.)
 
-**One parameterization, three regimes.** A synthesis worth stating plainly:
-the memo-§5 fixed blend and the input-dependent gate are *the same
-parameterization* under different freeze settings. `b_λ` **is** the memo's
-per-head `λ_h`, in logit space. Freeze `w_λ ≡ 0` with `b_λ` trainable and you
-have exactly memo §5 (a learned per-head scalar); unfreeze `w_λ` and you have
-input dependence; freeze both and you have original SKA at `λ = σ(b_λ)`.
-There is no separate `λ_h` parameter anywhere. This is what makes the
-experiment arms a clean single-variable design: Arm 0 vs Arm 1 differ *only*
-in `requires_grad` on `w_λ`, and both start (bitwise — oracle check C3) from
-identical behavior.
+**One parameterization, its freeze settings.** The memo-§5 fixed blend and the
+input-dependent gate are *the same parameterization*: `b_g` **is** the memo's
+per-head `λ_h`, now a point on the 2-simplex (a 3-vector of biases). Freeze
+`W_g ≡ 0` with `b_g` trainable → memo §5 (a learned per-head mixture, no
+`λ_h` parameter anywhere); unfreeze `W_g` → input dependence; freeze both →
+fixed-mixture SKA. Arm 0 vs Arm 1 differ *only* in `requires_grad` on `W_g`,
+and both start bitwise identical at the init mixture (oracle C8-i).
 
 **Pinned conventions** (the `w1`-class decisions, fixed here so the diff
 doesn't re-litigate them):
@@ -156,34 +158,34 @@ doesn't re-litigate them):
    same λ, train and decode; only the operator it modulates differs, which is
    the pre-existing mismatch, unchanged, and eventually eliminated by exact
    replay. Gating on `q_w` would have made the gate inherit the mismatch.
-2. **Init `w_λ = 0`, `b_λ = logit(0.9) ≈ 2.197`.** Starts in the
-   proven-retrieval regime but inside the trainable band (σ′ at 0.9 is
-   0.09; at 0.99 it would be 10× smaller). Deviation from retrieval behavior
-   requires dense evidence — and (Section 4) the same init protects the
-   operator's gradient bootstrap.
-3. **`w_λ` and `b_λ` are excluded from weight decay.** Decay on `w_λ` pulls
-   it to zero — i.e., weight decay is a hidden prior for
-   *non*-input-dependence, which would bias the experiment against the very
-   mechanism under test. Both join the existing no-decay list (ridge, η, MLP
-   angles, norm scales).
-4. **λ never feeds the write path** (Section 1's boundary rule).
+2. **Init `W_g = 0`, `b_g = ln(0.05, 0.05, 0.9)`** (mixture (p_I, p_A, p_{A²}) =
+   (0.05, 0.05, 0.9), up to a shared constant). `A²` dominant keeps the
+   proven-retrieval regime; the A-involving mass 0.95 preserves the operator
+   bootstrap (both powers feed `M`'s gradient, §4); and both minority branches
+   get an *equal, genuinely trainable* foothold (softmax damping p(1−p) ≈ 0.0475
+   each, comparable to the 0.09 the scalar gate had at 0.9). **Do not** init
+   `p_A ≈ 0.01` — the logit gradient scales with `p_k`, so a near-zero branch
+   trains an order slower.
+3. **All rows of `W_g` and all three `b_g` are excluded from weight decay.**
+   Decay pulls `W_g` to zero — a hidden prior for *non*-input-dependence that
+   biases the experiment against the mechanism under test. They join the
+   no-decay list (ridge, η, MLP angles, norm scales).
+4. **The gate never feeds the write path** (Section 1's boundary rule).
 
-**Why it is safe.** Contractivity is preserved *pointwise by convexity*:
-`λₜ ∈ (0,1)` per token, so `‖(1−λₜ)I + λₜA²‖ ≤ (1−λₜ) + λₜ‖A²‖ ≤ 1` for
-every token independently. The runtime `σ(A) ≤ 1+tol` assert is untouched and
-remains valid. No normalization, no clamp, no new state.
+**Why it is safe.** Contractivity is preserved *pointwise by convexity*: the
+softmax weights are nonneg and sum to 1, so `‖w_I I + w_A A + w_{A²}A²‖ ≤ w_I +
+w_A‖A‖ + w_{A²}‖A²‖ ≤ 1` per token (oracle C6, with teeth: leaving the convex
+hull breaks it). The runtime `σ(A) ≤ 1+tol` assert is untouched. No
+normalization, no clamp, no new state.
 
-**The gradient, and where it concentrates.**
-
-```
-∂L/∂λₜ = ⟨ g_y , η R (A² − I) q_w ⟩         (validated vs FD to 1e-10)
-```
-
-The gate's per-token gradient magnitude is proportional to the *disagreement*
-between the spectral and ridge readouts — tokens where the choice is
-inconsequential contribute nothing. Signal is automatically spent where the
-decision matters. The chain to `(w_λ, b_λ)` and the aux-loss gradient are
-likewise FD-validated (oracle C2).
+**The gradient, and where it concentrates.** Per branch,
+`∂L/∂w_k = ⟨ g_y , η R (Aᵏ q_w) ⟩`, chained through the softmax Jacobian
+`diag(w) − wwᵀ` to `(W_g, b_g)` (oracle C7, vs FD to 1e-5; the classic
+independent-sigmoid bug that drops the cross-coupling is the teeth). The gate's
+per-token gradient is proportional to the *disagreement* between the branch
+readouts — tokens where the choice is inconsequential contribute nothing, so
+signal is spent where the decision matters. The aux-loss gradient is likewise
+FD-validated.
 
 **The backward stays Cholesky-free.** The read equals
 `η[(1−λ)·CG⁻¹q + λ·CG⁻¹MG⁻¹MG⁻¹q]` (oracle C4, 8e-16), so the App-C.7
@@ -262,17 +264,24 @@ concentrates on exactly the tokens that use the filter. Plausibly good
 (retrieval queries shape the spectrum; LM queries stop diluting it) — but it
 creates one specific feedback risk:
 
-**The bootstrap risk.** If λ drifts down *globally* early — before `W_k` has
-learned useful lag structure — then `M`'s gradient starves, `A` stays
-unstructured, the spectral branch never becomes worth choosing, and λ stays
-down. Self-sealing. Three design choices already mitigate it: the 0.9 init
-means `M` gets ~full gradient from step 0 (deviation requires evidence — the
-init now protects the operator bootstrap, not just retrieval behavior);
-oracle C3 guarantees step-0 behavior is bitwise the status quo (the
-zero-initialized output projection / additive-injection warmup story is
-untouched); and the failure has a clean observable, distinguishable from
-healthy specialization. Its pre-committed response lives in the decision tree
-below (freeze `b_λ` early; the aux loss is the *wrong* lever for this one).
+**The bootstrap risk.** If mass drains onto the `I` (lookup) branch *globally*
+early — before `W_k` has learned useful lag structure — then `M`'s gradient
+starves, `A` stays unstructured, the A/A² branches never become worth choosing,
+and mass stays on `I`. Self-sealing. Three design choices already mitigate it:
+the 0.95 A-involving init mass means `M` gets ~full gradient from step 0
+(deviation requires evidence — the init protects the operator bootstrap, not
+just retrieval behavior); oracle C8-i guarantees step-0 behavior is bitwise the
+init mixture (the zero-init output projection / additive-injection warmup story
+is untouched); and the failure has a clean observable
+(global-mean-mass-on-`I` trajectory), distinguishable from healthy
+specialization. Its pre-committed response lives in the decision tree below
+(freeze `b_g` for N steps; the aux loss is the *wrong* lever for this one).
+
+**Expected trajectory, so it isn't misread.** Early on `A` is unstructured, so
+the `A` and `A²` readouts are highly correlated and the gate effectively faces
+a 2-way (`I` vs A-ish) decision. The K=1/K=2 mass split should be expected to
+differentiate *late*, only once `A` has structure — late differentiation is the
+predicted trajectory, not a failure signature.
 
 **The auxiliary loss** (`−log λₜ` on labeled query positions, weight
 0.01–0.1) is designed, FD-validated, and **ships OFF**. Supervising λ toward
@@ -297,7 +306,8 @@ automatic, since FineWeb sequences carry no labels.
 | √β five-site symmetrization | **Provisional** (`1f1301b`, `Gated-By: SKA-C-retrain-eval`) | Diff + tests green; `z_last→x_last`; §D α≡1 proven live-path. **Blocked on Gate 1** |
 | §C retrain-ablation harness | **Landed** (`1525708`, `scripts/sqrt_beta_ablation/`) | Two-ref A/B + α probe + verdict file; decision tree verified on synthetic inputs. The Gate-1 mechanism |
 | Power-iteration removal | Specced, next after Gate 1 | Exact no-op given √β (α≡1 by lower-bound direction); ships with `σ≤1+tol` assert |
-| Gated-read oracle (C1–C5) | **Landed** (`01b7ce5`, `code-tests/test_gated_blend_oracle.py`) | Contractivity+teeth, gradients, init-equivalence, Cholesky-free form, learnability smoke |
+| Gated-read oracle (C1–C10) | **Landed** (`code-tests/test_gated_blend_oracle.py`) | 2-way (C1–C5) + **3-way `{I,A,A²}`** (C6 contractivity+teeth, C7 softmax-grad+indep-sigmoid teeth, C8 init-mixture/2-way-collapse/K=1-expressivity, C9 orthogonal-dynamics advance `A→Q`, C10 3-class routing to K=1 + recalibrated floor). Pins the §2 gate convention |
+| `C₊`/`R₊` induction oracle | **Queued** (post-Gate-2 stage) | Exact lag-1 ridge: shifted-ridge optimality vs brute-force, v-endpoint boundary combine (non-const β), `R₊` one-sided drag-along reusing `w_t=L⁻¹x_{t-1}`. Adds `Pr` state + touches write path → its own stage, not a gate ride-along |
 | Incremental decode kernel (torch) | **Reference build landed** (`incremental_transport.py` + `test_incremental_transport_torch.py`); standalone, default-inert | Batched port verified faithful to the `38b04a7` oracle (numpy transcription, machine precision); torch parity test is the CI gate. **Not wired into live decode** — promotion needs the torch test green + decode-vs-recompute parity, behind a default-off flag. Fusion (`18r²+15r`) is a later separate step. Invariant to Gate 1 (transport is exact for any rank-1 stream) |
 | Causal norm-clip (memo §6) | Specced | Own before/after eval (behavior change, not exact); **must precede Gate 2 arms** |
 | Gate implementation + arms | Specced (Section 2 pins; oracle = acceptance) | **Blocked on Gates 1 and norm-clip** |
@@ -337,29 +347,30 @@ constraint below):
 | Arm | Config | Isolates |
 |---|---|---|
 | **ref** | √β, pure FineWeb (reuses the Gate-1 50M v1.1 run — one run, two duties) | Cost of mixing |
-| **0** | Mixed data; `b_λ` trainable, `w_λ` frozen at 0 (= memo §5 exactly) | Does the *blend* + mixing preserve both capabilities? The spread of learned `b_λ` across heads is the per-head-specialization diagnostic. |
-| **1** | Mixed data; both trainable | Does *input dependence* train, and does it beat Arm 0? |
+| **0** | Mixed data; `b_g` (the 3-vector of biases) trainable, `W_g` frozen at 0 (= memo §5: a learned per-head point on the 2-simplex) | Does the *mixture* + mixing preserve both capabilities? The spread of learned `b_g` across heads is the per-head-specialization diagnostic. |
+| **1** | Mixed data; `W_g` and `b_g` both trainable | Does *input dependence* train, and does it beat Arm 0? |
 
 Staged as before: 1M sanity (does trainable λ match fixed-λ retrieval, does
 it specialize under retrieval-heavy signal), then the 50M mixed A/B — the
 mixed-rescue hypothesis is only testable where dense LM signal exists.
 
 ```
-Gate 2 verdict tree (λ-separation read against the 0.02 noise floor):
-λ separates by token class AND retrieval ≥ Arm-0 AND ppl ≈ ref?
+Gate 2 verdict tree (per-class mass-spread read against the C10 floor, NOT 0.02):
+gate routes by token class AND retrieval ≥ Arm-0 AND ppl ≈ ref?
 ├─ YES → input-dependence works under mixed signal. Land Arm 1.
-├─ λ ≈ init everywhere (gap ≲ 0.02) → gate not training even with LM density
-│    → turn ON aux loss, re-run 1M stage. Learned-vs-imposed is now answered
-│      ("not unaided"); the aux loss is the documented cost.
-├─ λ separates but retrieval < Arm-0 → check direction: λ DOWN on query
-│    tokens → LM gradient drowning → aux loss / answer-token upweighting;
-│    if still regressed → fall back to Arm 0 (already trained; the fallback
-│    is the other arm, free).
-├─ λ drifts DOWN globally in EARLY training, no separation
+├─ mass ≈ init for all classes (spread ≲ C10 floor) → gate not training even
+│    with LM density → turn ON aux loss, re-run 1M stage. Learned-vs-imposed is
+│    now answered ("not unaided"); the aux loss is the documented cost.
+├─ routes but retrieval < Arm-0 → check direction: mass drains OFF A/A² onto I
+│    on query tokens → LM gradient drowning → aux loss / answer-token
+│    upweighting; if still regressed → fall back to Arm 0 (already trained; the
+│    fallback is the other arm, free).
+├─ mass drains onto I globally in EARLY training, no separation
 │    → operator-bootstrap starvation (Section 4), not preference
-│    → freeze b_λ for the first N steps (hold λ≈0.9 while W_k/A develop),
-│      then unfreeze; w_λ trainable throughout. Aux loss stays OFF — this
-│      failure is not about query-position signal.
+│    → freeze b_g for the first N steps (hold the init mixture while W_k/A
+│      develop), then unfreeze; W_g trainable throughout. Aux loss stays OFF —
+│      this failure is not about query-position signal.
+│    (Reminder: K=1/K=2 mass differentiates LATE by design — not this node.)
 └─ ppl regressed vs ref beyond noise → mix ratio too high; sweep down
      before touching the gate.
 ```
@@ -399,24 +410,30 @@ merely self-consistent-from-broken:
 - `w1`-trap cross-path check — correct decode `L` matches `chol(G)` at
   1e-10; the norm-reinference bug (`w = β^{1/4}z`) desyncs past 1e-2. Guards
   the class of bug where a path is self-consistent but wrong.
-- Gated-read oracle C1–C5 — C1's teeth use the *structured-β adversary*
-  (same sequence, both conventions); C3 pins arm-equivalence at init
-  bitwise; C5's non-separable teeth calibrate the separation noise floor.
+- Gated-read oracle C1–C10 — C1's teeth use the *structured-β adversary*
+  (same sequence, both conventions); C8-i pins arm-equivalence at the init
+  mixture bitwise; C7's independent-sigmoid teeth guard the softmax-coupling
+  bug; C9's `M G⁻¹ ≈ Q` is teeth-grade (tests that `A` learns the advance, not
+  just the endpoint); C10's non-separable teeth calibrate the mass-spread floor.
 
-**λ-logging spec.** On synthetic evals (position labels free from the
-curricula): per-head λ statistics by token class {query, fact, distractor};
-separation metric = mean λ_query − mean λ_other, read against the
-**0.02 noise floor** calibrated by C5's teeth (the gate manufactures ~0.02
-spurious gaps from finite-sample noise; that is what "no separation" looks
-like). Early-training global-mean-λ trajectory, for the bootstrap-starvation
-signature. Written to the same metrics stream the verdict logic reads.
+**Gate-logging spec.** On synthetic evals (position labels free from the
+curricula): per-head **mass vector** `(w_I, w_A, w_{A²})` by token class
+{query, fact, distractor}; separation metric = per-class mean-mass spread,
+read against the **C10 non-separable floor** (~0.02–0.05; recalibrated for the
+3-way gate — the scalar 0.02 does *not* carry over, it was for the old λ-gap).
+Log the early-training global-mean-mass-on-`I` trajectory for the
+bootstrap-starvation signature, and expect the K=1/K=2 (A vs A²) split to
+differentiate *late* (§4) — not a failure early. Written to the same metrics
+stream the verdict logic reads.
 
 **Review pins** (the decisions that do not get re-litigated in diffs): gate
-input pre-whitening; λ never feeds β; no norm-based β re-inference anywhere
-(the `.norm(` grep is the structural check — the helper pins construction,
-the grep pins usage); `w`/`w1` G-increments keep the raw key; `w_λ, b_λ` off
-the decay list; one new learnable at a time; provisional commits carry the
-`Gated-By:` trailer and the verdict file is the merge check's input.
+input pre-whitening; the gate never feeds β; gate basis is `{I, A, A²}` (3-logit
+softmax, init `b_g=ln(0.05,0.05,0.9)`, `W_g=0`); no norm-based β re-inference
+anywhere (the `.norm(` grep is the structural check — the helper pins
+construction, the grep pins usage); `w`/`w1` G-increments keep the raw key;
+`W_g` rows + all `b_g` off the decay list; one new learnable at a time;
+provisional commits carry the `Gated-By:` trailer and the verdict file is the
+merge check's input.
 
 **Document drift-guards** (the same discipline, applied to this doc — else the
 authoritative reference is the one artifact exempt from the drift-guards it
