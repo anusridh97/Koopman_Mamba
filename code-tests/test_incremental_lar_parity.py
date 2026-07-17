@@ -169,6 +169,38 @@ def test_chunk_boundary_combine():
     assert np.linalg.norm(combined - true_M) < 1e-10
 
 
+def test_chunk_boundary_combine_sqrt_beta():
+    """Acceptance-spec (B): the weighted boundary term under sqrt(beta) carries
+    PER-ENDPOINT weights -- sqrt(beta_{i,0} * beta_{i-1,-1}) * z_{i,0} z_{i-1,-1}^T
+    -- NOT a single per-token beta. Built symmetrically as x_t = sqrt(beta_t) z_t,
+    the boundary is just x_c x_{c-1}^T.
+
+    beta MUST vary per token, else the geometric mean sqrt(b_c b_{c-1}) coincides
+    with the arithmetic/asymmetric forms and the test is toothless. We assert the
+    correct combine at machine precision AND that each wrong weighting deviates,
+    so a symmetrization regression at the boundary is caught (not just a smaller
+    residual that a loose tolerance would swallow)."""
+    rng = np.random.default_rng(7)
+    r, T, c = 24, 40, 17
+    Z = rng.standard_normal((T, r))
+    beta = rng.uniform(0.1, 1.0, size=T)               # per-token varying
+    x = np.sqrt(beta)[:, None] * Z                      # symmetric weighted key
+    true_M = sum(np.outer(x[t], x[t - 1]) for t in range(1, T))
+    dM_A = sum(np.outer(x[t], x[t - 1]) for t in range(1, c))
+    dM_B = sum(np.outer(x[t], x[t - 1]) for t in range(c + 1, T))
+
+    def rel(boundary):
+        return np.linalg.norm(dM_A + dM_B + boundary - true_M) / np.linalg.norm(true_M)
+
+    # correct: both endpoints carry their own sqrt(beta)
+    assert rel(np.outer(x[c], x[c - 1])) < 1e-12
+    # teeth: each wrong weighting must deviate well above tolerance
+    assert rel(np.outer(x[c], Z[c - 1])) > 1e-4         # forgot prev-endpoint weight
+    assert rel(np.outer(Z[c], x[c - 1])) > 1e-4         # forgot curr-endpoint weight
+    assert rel(beta[c] * np.outer(Z[c], Z[c - 1])) > 1e-4               # asymmetric beta_c
+    assert rel(0.5 * (beta[c] + beta[c - 1]) * np.outer(Z[c], Z[c - 1])) > 1e-4  # arithmetic mean
+
+
 if __name__ == "__main__":
     all_ok = True
     for r in (16, 64, 128):
@@ -181,5 +213,7 @@ if __name__ == "__main__":
               f"-> {'PASS' if ok else 'FAIL'}")
     # boundary combine
     test_chunk_boundary_combine()
-    print("chunk-boundary combine: PASS")
+    print("chunk-boundary combine (unweighted): PASS")
+    test_chunk_boundary_combine_sqrt_beta()
+    print("chunk-boundary combine (sqrt-beta, per-endpoint): PASS")
     print("ALL PASS" if all_ok else "SOME FAILED")
