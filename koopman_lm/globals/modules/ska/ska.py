@@ -27,7 +27,8 @@ from contextlib import nullcontext
 #                ("It Cancels"; Cholesky never differentiated)
 #   chunk_stats -- beta-gated, strictly-causal sufficient statistics
 from koopman_lm.globals.modules.ska.core import ska_core
-from koopman_lm.globals.modules.ska.chunk_stats import chunk_stats as _causal_chunk_stats
+from koopman_lm.globals.modules.ska.chunk_stats import (
+    chunk_stats as _causal_chunk_stats, symmetric_key_value)
 
 # ============================================================================
 # Backend detection
@@ -482,10 +483,14 @@ class SKAModule(nn.Module):
             beta_f = beta.float()
 
             # Causal normalization (matches echo_jax.py): per-token L2 on
-            # key/query + learned write gate beta. NO non-causal sequence-max.
+            # key/query. NO non-causal sequence-max.
             z_n = z_f * torch.rsqrt((z_f * z_f).sum(-1, keepdim=True) + 1e-12)
             zq_n = zq_f * torch.rsqrt((zq_f * zq_f).sum(-1, keepdim=True) + 1e-12)
-            zb_n = beta_f.unsqueeze(-1) * z_n                          # write-gated key
+            # v1.1 SYMMETRIC sqrt(beta) key/value: x=sqrt(beta)*z fed into BOTH
+            # key slots, vbar=sqrt(beta)*v. G,C invariant; M/boundary become the
+            # contractive cross-weight sqrt(beta_t beta_{t-1}). One helper, every
+            # site -> no norm-based beta re-inference (the train/decode trap).
+            x_n, v_w = symmetric_key_value(z_n, beta_f, v_f)
 
             if self.exact_intrachunk:
                 # EXACT per-token causal stats (across + within chunk). Fixes
@@ -494,11 +499,11 @@ class SKAModule(nn.Module):
                 from koopman_lm.globals.modules.ska.chunk_stats_exact import exact_stats
                 from koopman_lm.globals.modules.ska.factor_scan import all_prefix_chol, ska_core_given_L
                 Gf, Mf, Cf, qf, (Be, Te, He, Pe) = exact_stats(
-                    z_n, zb_n, zq_n, v_f, self.ridge_eps)
+                    x_n, x_n, zq_n, v_w, self.ridge_eps)
                 # factor scan over per-token update vectors (numerics-only):
-                # w_t = sqrt(beta_t) z_t  =>  w w^T = beta z z^T (the G increment)
-                w = beta_f.clamp_min(0).sqrt().unsqueeze(-1) * z_n     # (B,T,H,r)
-                w = w.permute(0, 2, 1, 3).reshape(Be * He, Te, r)
+                # w_t = x_n = sqrt(beta_t) z_t  =>  w w^T = beta z z^T (G increment).
+                # SAME symmetric key as the stats -> L stays the factor of G.
+                w = x_n.permute(0, 2, 1, 3).reshape(Be * He, Te, r)
                 # exact_stats builds Gf = (ridge + 1e-4)*I + prefix; factor the
                 # SAME matrix so backward's L matches the saved Gf exactly.
                 Lf = all_prefix_chol(w, self.ridge_eps + 1e-4, downsweep='qr')
@@ -515,7 +520,7 @@ class SKAModule(nn.Module):
             else:
                 # Strictly-causal CHUNKED statistics (exclusive chunk boundary).
                 Gf, Mf, Cf, qf, shp = _causal_chunk_stats(
-                    z_n, zb_n, zq_n, v_f, self.ridge_eps, self.chunk_size)
+                    x_n, x_n, zq_n, v_w, self.ridge_eps, self.chunk_size)
                 Y = ska_core(Gf, Mf, Cf, qf, self.power_K)            # (N,P,CS)
                 Bc, nc, Hc, Pc, CS, Tt, pad = shp
                 gamma_apply = self._resolve_gamma()

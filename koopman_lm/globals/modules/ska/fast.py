@@ -114,14 +114,16 @@ def patch_ska_module(ska):
         v = combined[:, :, 2 * Hh * rr:].reshape(B, T, Hh, Pp)
         beta = torch.sigmoid(self.beta_proj(hidden_states))
         ctx = torch.amp.autocast('cuda', enabled=False) if hidden_states.is_cuda else nullcontext()
-        from koopman_lm.globals.modules.ska.chunk_stats import chunk_stats as _cs
+        from koopman_lm.globals.modules.ska.chunk_stats import (
+            chunk_stats as _cs, symmetric_key_value)
         from koopman_lm.globals.modules.ska.core import ska_core
         with ctx:
             z_f = z.float(); zq_f = zq.float(); v_f = v.float(); beta_f = beta.float()
             z_n = z_f * torch.rsqrt((z_f * z_f).sum(-1, keepdim=True) + 1e-12)
             zq_n = zq_f * torch.rsqrt((zq_f * zq_f).sum(-1, keepdim=True) + 1e-12)
-            zb_n = beta_f.unsqueeze(-1) * z_n
-            Gf, Mf, Cf, qf, shp = _cs(z_n, zb_n, zq_n, v_f, self.ridge_eps, self.chunk_size)
+            # v1.1 symmetric sqrt(beta): x into both key slots, vbar as value.
+            x_n, v_w = symmetric_key_value(z_n, beta_f, v_f)
+            Gf, Mf, Cf, qf, shp = _cs(x_n, x_n, zq_n, v_w, self.ridge_eps, self.chunk_size)
             Y = ska_core(Gf, Mf, Cf, qf, self.power_K)
             Bc, nc, Hc, Pc, CS, Tt, pad = shp
             g = self._resolve_gamma()

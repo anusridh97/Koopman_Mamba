@@ -10,7 +10,7 @@ the new training math exactly:
   * eta/gamma applied via the SKAModule's own resolved values (fixed 1.0 for
     440M), and the LayerScale gate applied on the output.
 
-State per SKA layer is O(r^2): {G, M, C_v, z_last, L}. This version carries the
+State per SKA layer is O(r^2): {G, M, C_v, x_last, L}. This version carries the
 Cholesky factor L of G and updates it with an O(r^2) rank-1 cholupdate per token
 (NeurIPS "It Cancels"), so there is no per-token re-Cholesky. The factor is
 seeded once from the prompt stats during prefill (the only O(r^3), paid once).
@@ -26,6 +26,7 @@ from contextlib import nullcontext
 
 from koopman_lm.models.koopman_lm import KoopmanLM, Mamba2Block, SKABlock
 from koopman_lm.globals.modules.ska.core import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
+from koopman_lm.globals.modules.ska.chunk_stats import symmetric_key_value
 
 
 def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
@@ -48,8 +49,8 @@ def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
 
 
 class SKAState:
-    """Fixed-size recurrent state for one SKA layer (beta-gated)."""
-    __slots__ = ['G', 'M', 'C_v', 'z_last', 'L']
+    """Fixed-size recurrent state for one SKA layer (sqrt-beta symmetric)."""
+    __slots__ = ['G', 'M', 'C_v', 'x_last', 'L']
 
     def __init__(self, B, H, r, P, device, dtype=torch.float32, ridge_eps=1e-3):
         eye = torch.eye(r, device=device, dtype=dtype)
@@ -58,7 +59,10 @@ class SKAState:
                      .expand(B, H, r, r).clone()      # carried Cholesky of G
         self.M = torch.zeros(B, H, r, r, device=device, dtype=dtype)
         self.C_v = torch.zeros(B, H, P, r, device=device, dtype=dtype)
-        self.z_last = None    # (B,H,r) previous L2-normalized key (for boundary M)
+        # (B,H,r) previous SYMMETRIC key x = sqrt(beta)*z (for the boundary M
+        # cross-term sqrt(beta_t beta_{t-1})). NOT the raw key -- carrying raw z
+        # here is the train/decode divergence bug.
+        self.x_last = None
 
 
 class RecurrentKoopmanLM(nn.Module):
@@ -83,8 +87,11 @@ class RecurrentKoopmanLM(nn.Module):
     # ---- helpers to project + causally normalize one or many tokens ----
     @staticmethod
     def _proj_norm(ska, h):
-        """h:(B,t,d) -> z_n,(B,t,H,r) zb_n,(B,t,H,r) zq_n,(B,t,H,r) v,(B,t,H,P)
-        using per-token L2 + beta gate (matches training)."""
+        """h:(B,t,d) -> x,(B,t,H,r) zq_n,(B,t,H,r) vbar,(B,t,H,P), the v1.1
+        SYMMETRIC sqrt(beta) key/value (x=sqrt(beta)*z, vbar=sqrt(beta)*v) via
+        the shared symmetric_key_value helper -- identical convention to the
+        training/chunk path. Query zq is NOT beta-weighted. Note: beta is used
+        ONLY inside the helper; no downstream site re-derives it from a norm."""
         B, t, _ = h.shape
         H, r, P = ska.H, ska.rank, ska.P
         z = ska.key_proj(h).reshape(B, t, H, r).float()
@@ -93,8 +100,8 @@ class RecurrentKoopmanLM(nn.Module):
         beta = torch.sigmoid(ska.beta_proj(h)).float()           # (B,t,H)
         z_n = z * torch.rsqrt((z * z).sum(-1, keepdim=True) + 1e-12)
         zq_n = zq * torch.rsqrt((zq * zq).sum(-1, keepdim=True) + 1e-12)
-        zb_n = beta.unsqueeze(-1) * z_n
-        return z_n, zb_n, zq_n, v
+        x, vbar = symmetric_key_value(z_n, beta, v)
+        return x, zq_n, vbar
 
     @torch.no_grad()
     def prefill(self, input_ids):
@@ -127,17 +134,18 @@ class RecurrentKoopmanLM(nn.Module):
         # accumulate state from the full prefix (no future leak: these are sums
         # over the whole prefill window, which is exactly tokens <= last)
         h = ska_block.norm(x)
-        z_n, zb_n, zq_n, v = self._proj_norm(ska, h)
-        zp = z_n.permute(0, 2, 1, 3)      # (B,H,T,r)
-        zbp = zb_n.permute(0, 2, 1, 3)
-        vp = v.permute(0, 2, 1, 3)        # (B,H,T,P)
+        x_n, zq_n, vbar = self._proj_norm(ska, h)
+        xp = x_n.permute(0, 2, 1, 3)      # (B,H,T,r) symmetric key sqrt(beta)*z
+        vbp = vbar.permute(0, 2, 1, 3)    # (B,H,T,P) sqrt(beta)*v
         st = SKAState(B, H, r, P, x.device, ridge_eps=ska.ridge_eps)
         eye = torch.eye(r, device=x.device, dtype=torch.float32)
-        st.G = torch.einsum('bhtr,bhts->bhrs', zbp, zp) + ska.ridge_eps * eye
+        # symmetric key in BOTH slots: G,C own-weight beta (invariant), M gets the
+        # contractive cross-weight sqrt(beta_t beta_{t-1}).
+        st.G = torch.einsum('bhtr,bhts->bhrs', xp, xp) + ska.ridge_eps * eye
         if T > 1:
-            st.M = torch.einsum('bhtr,bhts->bhrs', zbp[:, :, 1:], zp[:, :, :-1])
-        st.C_v = torch.einsum('bhtp,bhtr->bhpr', vp, zbp)
-        st.z_last = zp[:, :, -1]          # (B,H,r)
+            st.M = torch.einsum('bhtr,bhts->bhrs', xp[:, :, 1:], xp[:, :, :-1])
+        st.C_v = torch.einsum('bhtp,bhtr->bhpr', vbp, xp)
+        st.x_last = xp[:, :, -1]          # (B,H,r) symmetric key
         # seed the carried factor from the prompt stats (one O(r^3), total)
         Gs = 0.5 * (st.G + st.G.transpose(-1, -2)).reshape(B * H, r, r)
         Ls, info = torch.linalg.cholesky_ex(Gs)
@@ -309,8 +317,8 @@ class RecurrentKoopmanLM(nn.Module):
         st = self._ska_states[idx]
 
         h = ska_block.norm(x)
-        z_n, zb_n, zq_n, v = self._proj_norm(ska, h)
-        z1 = z_n[:, 0]; zb1 = zb_n[:, 0]; zq1 = zq_n[:, 0]; v1 = v[:, 0]   # (B,H,*)
+        x, zq_n, vbar = self._proj_norm(ska, h)
+        x1 = x[:, 0]; zq1 = zq_n[:, 0]; vbar1 = vbar[:, 0]   # (B,H,*) symmetric key/value
 
         # --- READ FIRST: carried factor over tokens < t (no re-Cholesky) ---
         N = B * H
@@ -341,17 +349,19 @@ class RecurrentKoopmanLM(nn.Module):
             self._conv_caches[idx] = win[:, 1:].detach() # slide cache forward
 
         # --- WRITE LAST: fold token t into the state for future positions ---
-        st.G = st.G + torch.einsum('bhr,bhs->bhrs', zb1, z1)
-        if st.z_last is not None:
-            st.M = st.M + torch.einsum('bhr,bhs->bhrs', zb1, st.z_last)
-        st.C_v = st.C_v + torch.einsum('bhp,bhr->bhpr', v1, zb1)
-        st.z_last = z1
-        # rank-1 cholupdate of the carried factor: beta z z^T = w w^T with
-        # w = sqrt(beta) z. Since z1 is unit-norm, beta == ||zb1||.
+        # Symmetric key x1 = sqrt(beta)*z in BOTH slots: G,C own-weight beta
+        # (invariant), M cross-weight sqrt(beta_t beta_{t-1}) (contractive).
+        st.G = st.G + torch.einsum('bhr,bhs->bhrs', x1, x1)
+        if st.x_last is not None:
+            st.M = st.M + torch.einsum('bhr,bhs->bhrs', x1, st.x_last)
+        st.C_v = st.C_v + torch.einsum('bhp,bhr->bhpr', vbar1, x1)
+        st.x_last = x1
+        # rank-1 cholupdate by the SAME symmetric key: w = x1 = sqrt(beta)*z, so
+        # w w^T = beta z z^T = the G increment. Carried EXPLICITLY -- do NOT
+        # re-derive beta from ||x1|| (that yields beta^{1/4}, desyncing L from G:
+        # the train/decode divergence trap).
         from koopman_lm.globals.modules.ska.factor_scan import rank1_chol_update_
-        beta1 = zb1.norm(dim=-1, keepdim=True)
-        w1 = beta1.clamp_min(1e-12).sqrt() * z1
-        rank1_chol_update_(st.L.reshape(N, r, r), w1.reshape(N, r))
+        rank1_chol_update_(st.L.reshape(N, r, r), x1.reshape(N, r))
         return out
 
     def _mamba_step(self, mamba_block, x, idx):

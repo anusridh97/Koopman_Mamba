@@ -201,6 +201,77 @@ def test_chunk_boundary_combine_sqrt_beta():
     assert rel(0.5 * (beta[c] + beta[c - 1]) * np.outer(Z[c], Z[c - 1])) > 1e-4  # arithmetic mean
 
 
+def test_decode_w1_trap_L_divergence():
+    """Cross-path L-parity that would have caught the decode `w1` trap.
+
+    Decode carries L via rank-1 Cholesky updates. The update vector MUST be the
+    symmetric key x = sqrt(beta) z, so w wᵀ = beta zzᵀ matches G = eps I + sum
+    beta zzᵀ. The trap: re-deriving beta from a norm -- beta_hat = ||x|| = sqrt(beta)
+    (z unit), then w = sqrt(beta_hat) z = beta^{1/4} z -- adds sqrt(beta) zzᵀ, so
+    L stops being the factor of the G the rest of the pipeline uses. Decode stays
+    internally self-consistent, so only THIS cross-path check (decode L vs fresh
+    chol(G)) catches it -- not a single-recurrence residual.
+
+    Non-constant beta so the geometric/arithmetic-mean forms cannot coincide."""
+    rng = np.random.default_rng(3)
+    r, T, eps = 32, 60, 1e-3
+    L_ok = np.sqrt(eps) * np.eye(r)
+    L_bug = np.sqrt(eps) * np.eye(r)
+    G = eps * np.eye(r)
+    for _ in range(T):
+        z = rng.standard_normal(r); z /= np.linalg.norm(z)      # unit key
+        beta = rng.uniform(0.1, 1.0)
+        x = np.sqrt(beta) * z                                    # symmetric key
+        G = G + np.outer(x, x)
+        L_ok, *_ = phase1_chol_update(L_ok, x)                   # correct: w = x
+        beta_hat = np.linalg.norm(x)                             # = sqrt(beta)  (trap)
+        w_bug = np.sqrt(beta_hat) * z                            # = beta^{1/4} z
+        L_bug, *_ = phase1_chol_update(L_bug, w_bug)
+    # correct decode L is the factor of the pipeline's G, at machine precision
+    assert np.linalg.norm(L_ok @ L_ok.T - G) / np.linalg.norm(G) < 1e-10
+    # the trap desyncs L from G -- the check has teeth
+    assert np.linalg.norm(L_bug @ L_bug.T - G) / np.linalg.norm(G) > 1e-2
+
+
+def test_alpha_identity_under_sqrt_beta():
+    """Acceptance-spec (D): under the √β-symmetric cumulative stats, σ(A) ≤ 1,
+    so the spectral-norm scale α = 1/max(σ,1) is EXACTLY 1 -- the 20-iter power
+    iteration applies a scale of 1, i.e. it is a no-op. This is the evidence that
+    removing it (step 2) is exactly equivalent, established ON the symmetrized
+    state with the clamp still notionally live.
+
+    Teeth: under the OLD asymmetric-β stats (M weighted by βₜ alone), σ(A) can
+    exceed 1, so α < 1 occurs -- the clamp WAS load-bearing there. Same streamed
+    data, same own-weight G; only M's cross-term differs. If the asymmetric α
+    never dropped below 1, this test would be vacuous."""
+    rng = np.random.default_rng(11)
+    r, T, eps = 48, 150, 1e-3
+    G = eps * np.eye(r)
+    M_sym = np.zeros((r, r)); M_asym = np.zeros((r, r))
+    x_prev = z_prev = None
+    alpha_sym_min = 1.0; alpha_asym_min = 1.0
+
+    def alpha(L, M):
+        A = np.linalg.solve(L, np.linalg.solve(L, M.T).T)      # L^{-1} M L^{-T}
+        return 1.0 / max(np.linalg.norm(A, 2), 1.0)
+
+    for _ in range(T):
+        z = rng.standard_normal(r); z /= np.linalg.norm(z)
+        beta = rng.uniform(0.1, 1.0)
+        x = np.sqrt(beta) * z
+        G = G + np.outer(x, x)                                  # own-weight β (both)
+        if x_prev is not None:
+            M_sym = M_sym + np.outer(x, x_prev)                 # √(βₜβₜ₋₁)  (symmetric)
+            M_asym = M_asym + beta * np.outer(z, z_prev)        # βₜ         (asymmetric)
+        L = np.linalg.cholesky(G)
+        alpha_sym_min = min(alpha_sym_min, alpha(L, M_sym))
+        alpha_asym_min = min(alpha_asym_min, alpha(L, M_asym))
+        x_prev = x; z_prev = z
+
+    assert alpha_sym_min == 1.0, alpha_sym_min      # clamp is EXACTLY a no-op under √β
+    assert alpha_asym_min < 1.0, alpha_asym_min     # clamp was load-bearing under asymmetric β
+
+
 if __name__ == "__main__":
     all_ok = True
     for r in (16, 64, 128):
@@ -216,4 +287,8 @@ if __name__ == "__main__":
     print("chunk-boundary combine (unweighted): PASS")
     test_chunk_boundary_combine_sqrt_beta()
     print("chunk-boundary combine (sqrt-beta, per-endpoint): PASS")
+    test_decode_w1_trap_L_divergence()
+    print("decode w1-trap L-divergence (cross-path): PASS")
+    test_alpha_identity_under_sqrt_beta()
+    print("alpha identity under sqrt-beta (§D, power-iter is a no-op): PASS")
     print("ALL PASS" if all_ok else "SOME FAILED")

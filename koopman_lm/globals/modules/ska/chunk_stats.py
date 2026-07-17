@@ -8,16 +8,45 @@ ska.py. Every statistic at chunk c depends only on tokens in chunks < c
 training, prefix recurrence, and per-token decode all coincide.
 
 Inputs (already projected + per-token L2-normalized by the caller):
-  z  : (B,T,H,r)   L2-normalized key   (lagged / right factor)
-  zb : (B,T,H,r)   beta-weighted key = beta * z   (current / write factor)
+  z  : (B,T,H,r)   key, right factor of G/M
+  zb : (B,T,H,r)   key, left factor of G/M
   zq : (B,T,H,r)   L2-normalized query
-  v  : (B,T,H,P)   value (no L2)
+  v  : (B,T,H,P)   value
+  NOTE (v1.1 sqrt-beta convention): the caller now passes the SYMMETRIC key
+  x = sqrt(beta) * z in BOTH the z and zb slots (see symmetric_key_value), and
+  vbar = sqrt(beta) * v as v. With z==zb==x this kernel is UNCHANGED yet yields
+  G = beta z z^T, C = beta v z^T (own-weight, invariant) and the corrected
+  cross-weight M = sqrt(beta_t beta_{t-1}) z_t z_{t-1}^T. (The legacy asymmetric
+  zb=beta*z / z=raw calling convention still works mechanically but is not
+  contractive; v1.1 callers use the symmetric form.)
 Returns flattened (BCH=B*nchunks*H) tensors ready for the whitened core:
   Gf (BCH,r,r), Mf (BCH,r,r), Cf (BCH,P,r), qf (BCH,r,CS), shapes
 """
 
 import torch
 import torch.nn.functional as F
+
+
+def symmetric_key_value(z_n, beta, v):
+    """Symmetric sqrt(beta) weighting (v1.1). Returns (x, vbar) with
+    x = sqrt(beta) * z_n  and  vbar = sqrt(beta) * v.
+
+    Feed x into BOTH key slots of chunk_stats / exact_stats (and use it as the
+    single carried key in decode). Then:
+      G  = sum x x^T           = beta * z z^T          (own-weight; INVARIANT)
+      C  = sum vbar x^T        = beta * v z^T          (own-weight; INVARIANT)
+      M  = sum x_t x_{t-1}^T   = sqrt(beta_t beta_{t-1}) z_t z_{t-1}^T   (cross-weight)
+    i.e. only M (and its cross-chunk boundary term) change vs the old asymmetric
+    zb=beta*z convention; G and C are numerically unchanged. The symmetric
+    cross-weight sqrt(beta_t beta_{t-1}) is what makes A_w = L^-1 M L^-T
+    contractive (||A_w||_2 <= 1), removing the need for spectral normalization.
+
+    beta: (...,) per-token write weight in [0,1]; z_n: (...,r) unit key (post-L2);
+    v: (...,P) value. Use this ONE helper at every accumulation site so the
+    weighting convention is provably identical (no path re-derives beta from a
+    vector norm -- that is the train/decode divergence trap)."""
+    sb = beta.clamp_min(0).sqrt().unsqueeze(-1)
+    return sb * z_n, sb * v
 
 
 def _excl_prefix(x):
