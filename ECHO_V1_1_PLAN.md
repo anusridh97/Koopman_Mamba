@@ -418,6 +418,21 @@ the grep pins usage); `w`/`w1` G-increments keep the raw key; `w_λ, b_λ` off
 the decay list; one new learnable at a time; provisional commits carry the
 `Gated-By:` trailer and the verdict file is the merge check's input.
 
+**Document drift-guards** (the same discipline, applied to this doc — else the
+authoritative reference is the one artifact exempt from the drift-guards it
+describes):
+
+1. **Ledger updates couple mechanically to gate promotions.** The commit that
+   promotes a provisional component (resolving its `Gated-By` state per the
+   verdict file) MUST update this plan's §5 ledger row *in the same commit*, so
+   verdict, trailer resolution, and ledger travel together and cannot diverge.
+   Applies to every future promotion, not just `√β`.
+2. **The pins in §1, §2, and §6 are the contract the diffs are reviewed
+   against.** Edits to them are convention changes and get diff-review
+   treatment (same bar as a code convention change), not drive-by edits.
+   Reconciling §5 *status/hash* facts to the committed tree is maintenance, not
+   a convention change — but changing a *pin* is.
+
 ---
 
 ## 7. Open questions, stated honestly
