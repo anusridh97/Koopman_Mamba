@@ -4,5 +4,6 @@ vocab_size: 32000
 d_state: 128
 ska_n_heads: 12
 ska_rank: 48
+ska_power_K: 2               # paper K=2; pinned (was implicit dataclass default)
 ska_layer_indices: [8, 16]
 mlp_gated: false
