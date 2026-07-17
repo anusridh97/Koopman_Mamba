@@ -62,9 +62,9 @@ Defaults target **one 80 GB GPU** (H100/A100). The knobs are all env-overridable
 
 | Size | Params | Tokens | Steps | Seq | Eff. batch (PDBS×GA) | LR | Warmup | Provenance |
 |---|---|---|---|---|---|---|---|---|
-| `50m`  | ~50M  | 3B   [paper] | 15000 | 2048 | 96  (16×6)  | 6e-4 | 300  | [paper] |
-| `180m` | ~180M | 10B  [paper] | 51000 | 2048 | 96  (8×12)  | 6e-4 | 1000 | tokens [paper]; batch/lr [eng] |
-| `440m` | ~440M | 15B  [eng]   | 57000 | 2048 | 128 (4×32)  | 4e-4 | 1000 | [eng] — not a paper config |
+| `50m`  | ~51M  | 3B   [paper] | 15000 | 2048 | 96  (16×6)  | 6e-4 | 300  | [paper] |
+| `180m` | ~191M | 10B  [paper] | 51000 | 2048 | 96  (8×12)  | 6e-4 | 1000 | tokens [paper]; batch/lr [eng] |
+| `440m` | ~444M | 20B  [eng]   | 76000 | 2048 | 128 (4×32)  | 4e-4 | 1000 | [eng] — not a paper config; 20B ≈ the paper's ~55 tok/param regime, "more" than 180M |
 
 `steps ≈ tokens / (eff_batch × seq_len)`. **Effective batch = PDBS × GA ×
 world_size** — keep the product at the target when you change per-device batch
@@ -121,6 +121,7 @@ commented list). The knobs that matter:
 | `ska_power_K` (**now pinned = 2**) | power-filter order. Paper K=2; **pin it — it is not a learned weight, and an unpinned default drifts silently between train and eval** |
 | `ska_backend` | `auto` / `triton` / `pytorch` |
 | `ska_exact_intrachunk` | exact per-token stats vs chunked (default chunked) |
+| `ska_norm_clip` / `ska_norm_clip_c` | **default off** (per-token ℓ2). On → causal norm-clip `k/max(1,‖k‖/c)`, `c=√rank` if unset. Behavior change with its own before/after eval; **must precede the Gate-2 gate arms** (`ECHO_V1_1_PLAN.md §6`). A/B it by training with a config that sets `ska_norm_clip: true` vs the default |
 
 **SKA scale-parameter policy — differs by size (documented, not a bug):**
 | Key | 50m | 180m | 440m |

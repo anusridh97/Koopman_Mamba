@@ -27,6 +27,24 @@ import torch
 import torch.nn.functional as F
 
 
+def causal_normalize(u, clip_c=None, eps=1e-12):
+    """Per-token causal key/query normalization (memo §6).
+
+      clip_c is None -> per-token L2 (unit norm; legacy). Every token forced to
+        unit norm, which inflates low-norm distractors (Appendix E Remark 5).
+      clip_c given  -> norm-CLIP: u <- u / max(1, ||u||/clip_c). ||u|| <= clip_c,
+        but a token already below the threshold keeps its magnitude -- causal
+        (no sequence-max), leverage-bounded, and does NOT inflate low-norm tokens.
+
+    Both are per-token and state-independent, so the gate that reads the
+    normalized query sees the same value train and decode. Contractivity of
+    A = L^-1 M L^-T is unaffected (it needs only G = eps I + Σ x xᵀ, not unit x)."""
+    if clip_c is None:
+        return u * torch.rsqrt((u * u).sum(-1, keepdim=True) + eps)
+    n = torch.sqrt((u * u).sum(-1, keepdim=True) + eps)
+    return u / torch.clamp(n / clip_c, min=1.0)
+
+
 def symmetric_key_value(z_n, beta, v):
     """Symmetric sqrt(beta) weighting (v1.1). Returns (x, vbar) with
     x = sqrt(beta) * z_n  and  vbar = sqrt(beta) * v.

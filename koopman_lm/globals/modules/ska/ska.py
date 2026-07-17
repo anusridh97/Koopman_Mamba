@@ -28,7 +28,7 @@ from contextlib import nullcontext
 #   chunk_stats -- beta-gated, strictly-causal sufficient statistics
 from koopman_lm.globals.modules.ska.core import ska_core
 from koopman_lm.globals.modules.ska.chunk_stats import (
-    chunk_stats as _causal_chunk_stats, symmetric_key_value)
+    chunk_stats as _causal_chunk_stats, symmetric_key_value, causal_normalize)
 
 # ============================================================================
 # Backend detection
@@ -321,12 +321,14 @@ class SKAModule(nn.Module):
                  gamma_learnable=False, gamma_value=1.0, gamma_clamp=None,
                  gamma_bounds=None,
                  layerscale=True, layerscale_init=1e-4, out_proj_std=0.02,
-                 exact_intrachunk=False):
+                 exact_intrachunk=False, norm_clip_c=None):
         super().__init__()
         self.rank = rank
         self.exact_intrachunk = exact_intrachunk
         self.ridge_eps = ridge_eps
         self.power_K = power_K
+        # None -> per-token L2 (legacy); float -> causal norm-clip threshold c
+        self.norm_clip_c = norm_clip_c
         self.H = n_heads
         self.P = head_dim or (d_model // n_heads)
         self.d_model = d_model
@@ -484,8 +486,8 @@ class SKAModule(nn.Module):
 
             # Causal normalization (matches echo_jax.py): per-token L2 on
             # key/query. NO non-causal sequence-max.
-            z_n = z_f * torch.rsqrt((z_f * z_f).sum(-1, keepdim=True) + 1e-12)
-            zq_n = zq_f * torch.rsqrt((zq_f * zq_f).sum(-1, keepdim=True) + 1e-12)
+            z_n = causal_normalize(z_f, self.norm_clip_c)
+            zq_n = causal_normalize(zq_f, self.norm_clip_c)
             # v1.1 SYMMETRIC sqrt(beta) key/value: x=sqrt(beta)*z fed into BOTH
             # key slots, vbar=sqrt(beta)*v. G,C invariant; M/boundary become the
             # contractive cross-weight sqrt(beta_t beta_{t-1}). One helper, every

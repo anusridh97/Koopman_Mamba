@@ -115,12 +115,12 @@ def patch_ska_module(ska):
         beta = torch.sigmoid(self.beta_proj(hidden_states))
         ctx = torch.amp.autocast('cuda', enabled=False) if hidden_states.is_cuda else nullcontext()
         from koopman_lm.globals.modules.ska.chunk_stats import (
-            chunk_stats as _cs, symmetric_key_value)
+            chunk_stats as _cs, symmetric_key_value, causal_normalize)
         from koopman_lm.globals.modules.ska.core import ska_core
         with ctx:
             z_f = z.float(); zq_f = zq.float(); v_f = v.float(); beta_f = beta.float()
-            z_n = z_f * torch.rsqrt((z_f * z_f).sum(-1, keepdim=True) + 1e-12)
-            zq_n = zq_f * torch.rsqrt((zq_f * zq_f).sum(-1, keepdim=True) + 1e-12)
+            z_n = causal_normalize(z_f, self.norm_clip_c)
+            zq_n = causal_normalize(zq_f, self.norm_clip_c)
             # v1.1 symmetric sqrt(beta): x into both key slots, vbar as value.
             x_n, v_w = symmetric_key_value(z_n, beta_f, v_f)
             Gf, Mf, Cf, qf, shp = _cs(x_n, x_n, zq_n, v_w, self.ridge_eps, self.chunk_size)

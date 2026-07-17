@@ -26,7 +26,7 @@ from contextlib import nullcontext
 
 from koopman_lm.models.koopman_lm import KoopmanLM, Mamba2Block, SKABlock
 from koopman_lm.globals.modules.ska.core import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
-from koopman_lm.globals.modules.ska.chunk_stats import symmetric_key_value
+from koopman_lm.globals.modules.ska.chunk_stats import symmetric_key_value, causal_normalize
 
 
 def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
@@ -98,8 +98,8 @@ class RecurrentKoopmanLM(nn.Module):
         zq = ska.query_proj(h).reshape(B, t, H, r).float()
         v = ska.value_proj(h).reshape(B, t, H, P).float()
         beta = torch.sigmoid(ska.beta_proj(h)).float()           # (B,t,H)
-        z_n = z * torch.rsqrt((z * z).sum(-1, keepdim=True) + 1e-12)
-        zq_n = zq * torch.rsqrt((zq * zq).sum(-1, keepdim=True) + 1e-12)
+        z_n = causal_normalize(z, ska.norm_clip_c)
+        zq_n = causal_normalize(zq, ska.norm_clip_c)
         x, vbar = symmetric_key_value(z_n, beta, v)
         return x, zq_n, vbar
 

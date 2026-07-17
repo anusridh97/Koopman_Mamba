@@ -26,7 +26,7 @@ SIZE="${1:?usage: scripts/pretrain.sh <50m|180m|440m>}"
 case "$SIZE" in
   50m)   : "${TOKENS:=3000000000}";  : "${STEPS:=15000}"; : "${PDBS:=16}"; : "${GA:=6}";  : "${LR:=6e-4}"; : "${WARMUP:=300}"  ;;
   180m)  : "${TOKENS:=10000000000}"; : "${STEPS:=51000}"; : "${PDBS:=8}";  : "${GA:=12}"; : "${LR:=6e-4}"; : "${WARMUP:=1000}" ;;
-  440m)  : "${TOKENS:=15000000000}"; : "${STEPS:=57000}"; : "${PDBS:=4}";  : "${GA:=32}"; : "${LR:=4e-4}"; : "${WARMUP:=1000}" ;;
+  440m)  : "${TOKENS:=20000000000}"; : "${STEPS:=76000}"; : "${PDBS:=4}";  : "${GA:=32}"; : "${LR:=4e-4}"; : "${WARMUP:=1000}" ;;
   *) echo "unknown size '$SIZE' (expected 50m|180m|440m)"; exit 1 ;;
 esac
 

@@ -64,6 +64,16 @@ class KoopmanLMConfig:
     # --- Exact intra-chunk causal stats ---
     ska_exact_intrachunk: bool = False
 
+    # --- Causal key/query normalization (memo §6) ---
+    # False: per-token L2 (unit norm; legacy). True: causal norm-CLIP
+    #   k <- k / max(1, ||k||/c) -- bounds leverage, causal, does NOT inflate
+    #   low-norm distractors to unit norm (Appendix E Remark 5 warns L2 does).
+    #   Behavior change (not exact) -> its own before/after eval; MUST precede
+    #   the Gate-2 gate arms (the gate reads the post-normalization query, so a
+    #   gate trained under L2 does not transfer to clip). Default off.
+    ska_norm_clip: bool = False
+    ska_norm_clip_c: Optional[float] = None   # threshold c; None -> sqrt(rank)
+
     # SKA adaptive chunking
     ska_chunk_strategy: str = 'standard'
     ska_overlap_fraction: float = 0.5
