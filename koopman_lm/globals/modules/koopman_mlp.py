@@ -3,11 +3,35 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _radius_scale(gamma, omega, norm_preserving):
+    """Scale factor applied to a (gamma, omega) eigenvalue pair.
+
+    The 2x2 block [[g, o], [-o, g]] equals radius * R(theta) with
+    radius = sqrt(g^2 + o^2), so its two singular values BOTH equal radius.
+
+      norm_preserving=True  -> project onto the unit CIRCLE (scale = 1/radius):
+          radius becomes exactly 1, so sigma_min = sigma_max = 1 -- the exact
+          norm-preserving orthogonal rotation the paper (S3.3 "Gradient
+          preservation") claims. Smooth in (gamma, omega) for radius > 0.
+      norm_preserving=False -> clamp to the unit DISK (scale = min(radius,1)/radius):
+          |lambda| <= 1 (non-expansive) but NOT norm-preserving once radius < 1.
+          Legacy behavior; kept for checkpoint/behavior compatibility.
+    """
+    radius = torch.sqrt(gamma * gamma + omega * omega).clamp(min=1e-8)
+    if norm_preserving:
+        scale = 1.0 / radius
+    else:
+        scale = torch.clamp(radius, max=1.0) / radius
+    return gamma * scale, omega * scale
+
+
 class SpectralKoopmanMLP(nn.Module):
-    def __init__(self, d, expand=2.667, spectral_norm_gamma=True):
+    def __init__(self, d, expand=2.667, spectral_norm_gamma=True,
+                 norm_preserving=False):
         super().__init__()
         self.d_k = ((int(d * expand) + 63) // 64) * 64
         self.spectral_norm_gamma = spectral_norm_gamma
+        self.norm_preserving = norm_preserving
 
         self.norm = nn.LayerNorm(d)
         self.lift = nn.Linear(d, self.d_k, bias=False)
@@ -29,10 +53,7 @@ class SpectralKoopmanMLP(nn.Module):
         gamma = self.gamma
         omega = self.omega
         if self.spectral_norm_gamma:
-            radius = torch.sqrt(gamma * gamma + omega * omega).clamp(min=1e-8)
-            scale = torch.clamp(radius, max=1.0) / radius
-            gamma = gamma * scale
-            omega = omega * scale
+            gamma, omega = _radius_scale(gamma, omega, self.norm_preserving)
 
         z1 = gamma * g1 + omega * g2
         z2 = -omega * g1 + gamma * g2
@@ -42,10 +63,12 @@ class SpectralKoopmanMLP(nn.Module):
 
 
 class SpectralKoopmanMLPGated(nn.Module):
-    def __init__(self, d, expand=2.667, spectral_norm_gamma=True):
+    def __init__(self, d, expand=2.667, spectral_norm_gamma=True,
+                 norm_preserving=False):
         super().__init__()
         self.d_k = ((int(d * expand) + 63) // 64) * 64
         self.spectral_norm_gamma = spectral_norm_gamma
+        self.norm_preserving = norm_preserving
 
         self.norm = nn.LayerNorm(d)
         self.lift = nn.Linear(d, self.d_k, bias=False)
@@ -68,10 +91,7 @@ class SpectralKoopmanMLPGated(nn.Module):
 
         gamma, omega = self.gamma, self.omega
         if self.spectral_norm_gamma:
-            radius = torch.sqrt(gamma * gamma + omega * omega).clamp(min=1e-8)
-            scale = torch.clamp(radius, max=1.0) / radius
-            gamma = gamma * scale
-            omega = omega * scale
+            gamma, omega = _radius_scale(gamma, omega, self.norm_preserving)
 
         z1 = gamma * p1 + omega * p2
         z2 = -omega * p1 + gamma * p2

@@ -114,6 +114,7 @@ class KoopmanLM(nn.Module):
                 d=cfg.d_model,
                 expand=cfg.mlp_expand,
                 spectral_norm_gamma=cfg.mlp_spectral_norm,
+                norm_preserving=getattr(cfg, 'mlp_norm_preserving', False),
             ))
 
         self.norm_f = nn.LayerNorm(cfg.d_model)

@@ -72,6 +72,11 @@ class KoopmanLMConfig:
     # Koopman MLP config
     mlp_expand: float = 2.667
     mlp_spectral_norm: bool = True
+    # False: eigenvalue modulus clamped to the unit DISK (|lambda|<=1, non-expansive,
+    #   legacy/back-compat). True: projected onto the unit CIRCLE (sigma_min=sigma_max=1),
+    #   an exact norm-preserving rotation (paper S3.3 "Gradient preservation").
+    #   Changes the forward pass -> only meaningful for a fresh training run.
+    mlp_norm_preserving: bool = False
     mlp_gated: bool = False
 
     # Layer layout
