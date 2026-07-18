@@ -49,6 +49,24 @@ koopman-train = "koopman_lm.training.train:main"
 [tool.setuptools.packages.find]
 include = ["koopman_lm", "koopman_lm.*"]
 
+[tool.uv]
+# The two things that break a naive `uv sync` for this project:
+#  1. torch must come from the CUDA wheel index (see [tool.uv.sources] below);
+#  2. mamba-ssm / causal-conv1d compile CUDA kernels AGAINST the installed
+#     torch, so they must build with torch already present -- no isolated build
+#     env. uv installs torch first, then builds these without isolation.
+# With this config: `uv sync --extra cuda` (or `uv run --extra cuda ...`) works
+# end to end; no manual torch-first dance.
+no-build-isolation-package = ["mamba-ssm", "causal-conv1d"]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true                      # only used by packages that opt in below
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+
 [tool.pytest.ini_options]
 testpaths = ["code-tests"]
 markers = [

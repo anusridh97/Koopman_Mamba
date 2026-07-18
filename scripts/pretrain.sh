@@ -40,6 +40,7 @@ esac
 : "${RUN_ROOT:=${SCRATCH:-.}/runs}"
 : "${VAL_TOKENS:=20000000}"
 : "${NUM_WORKERS:=4}"
+: "${NPROC:=1}"                                  # GPUs for DDP; >1 -> torchrun + --ddp
 : "${EXTRA_TRAIN_ARGS:=}"                        # e.g. "--no_compile --wandb_project echo"
 
 TRAIN_DIR="$DATA_ROOT/fineweb_${SIZE}_train"
@@ -77,17 +78,26 @@ else
   echo "--- val shard exists, skipping tokenization ---"
 fi
 
-# ---- 3. train ----
-echo "--- training ---"
-python -m koopman_lm.training.train \
+# ---- 3. train (single-GPU python, or torchrun DDP when NPROC>1) ----
+# DDP multiplies effective batch by NPROC, so divide grad-accum to hold it fixed.
+if [ "$NPROC" -gt 1 ]; then
+  GA_USE=$(( GA / NPROC )); [ "$GA_USE" -lt 1 ] && GA_USE=1
+  LAUNCH="torchrun --standalone --nproc_per_node=$NPROC -m koopman_lm.training.train"
+  DDP_ARGS="--ddp"
+  echo "--- training (DDP, $NPROC GPUs; ga $GA -> $GA_USE, eff_batch held at $((PDBS*GA_USE*NPROC))) ---"
+else
+  GA_USE=$GA; LAUNCH="python -m koopman_lm.training.train"; DDP_ARGS=""
+  echo "--- training (single GPU) ---"
+fi
+$LAUNCH \
   --model_type koopman --model_size "$SIZE" \
   --data_dir "$TRAIN_DIR" --tokenizer "$TOKENIZER" --max_seq_len "$SEQ_LEN" \
-  --per_device_train_batch_size "$PDBS" --gradient_accumulation_steps "$GA" \
+  --per_device_train_batch_size "$PDBS" --gradient_accumulation_steps "$GA_USE" \
   --max_steps "$STEPS" --learning_rate "$LR" --warmup_steps "$WARMUP" \
   --weight_decay "$WEIGHT_DECAY" --max_grad_norm "$GRAD_CLIP" \
   --bf16 --compile --num_workers "$NUM_WORKERS" \
   --logging_steps 10 --save_steps 1000 \
-  --output_dir "$RUN_DIR" --seed "$SEED" $EXTRA_TRAIN_ARGS
+  --output_dir "$RUN_DIR" --seed "$SEED" $DDP_ARGS $EXTRA_TRAIN_ARGS
 
 # ---- 4. evaluate (commands to run; eval needs the [lmharness] extra) ----
 CKPT="$RUN_DIR/final/model.pt"

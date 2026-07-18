@@ -4,9 +4,14 @@ One entrypoint, three sizes. This file explains **everything you need to
 install**, **how to run**, and **every knob** that matters.
 
 ```bash
-scripts/pretrain.sh 50m       # tokenize (if needed) → train → print eval commands
-scripts/pretrain.sh 180m
-scripts/pretrain.sh 440m
+bash scripts/setup_env.sh                 # one-time: uv sync (torch + CUDA kernels + project)
+
+sbatch scripts/slurm_pretrain.sh 50m      # SLURM: tokenize → train → print eval commands
+sbatch --time=96:00:00  scripts/slurm_pretrain.sh 180m
+sbatch --time=168:00:00 --gres=gpu:h100:4 scripts/slurm_pretrain.sh 440m   # 4-GPU DDP
+
+# no SLURM? run the same pipeline directly (uv picks the env from pyproject):
+uv run --extra cuda bash scripts/pretrain.sh 50m
 ```
 
 > **Convention note (read once).** This branch trains under the v1.1 `√β`
@@ -21,21 +26,23 @@ scripts/pretrain.sh 440m
 
 ## 1. Install
 
-Order matters: **install torch first** for your platform/CUDA, then the package,
-then the CUDA extra (it must match your torch+CUDA build).
+**Recommended (uv, one command).** `pyproject.toml`'s `[tool.uv]` pins torch to
+the CUDA wheel index and builds the CUDA kernels with no build isolation, so the
+old torch-first dance is not needed:
 
 ```bash
-# 1. torch — pick the build for your CUDA (example: CUDA 12.1)
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+bash scripts/setup_env.sh                      # installs uv if missing, then:
+#   uv sync --extra cuda                        # torch + mamba-ssm + causal-conv1d + triton + project
+#   uv sync --extra cuda --extra lmharness      # + zero-shot eval harness (later)
+```
+Then run anything under the env with `uv run` (no manual activation), e.g.
+`uv run --extra cuda bash scripts/pretrain.sh 50m` or `uv run pytest -m correctness code-tests/`.
 
-# 2. the package (CPU-importable core: numpy, transformers, datasets, pyyaml, wandb)
-pip install -e .
-
-# 3. CUDA extra — REQUIRED to build the Mamba-2 backbone + Triton Cholesky kernel
+**Plain pip (fallback).** Install torch FIRST for your CUDA, then the extras:
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu124
 pip install -e '.[cuda]'         # mamba-ssm>=2.2.2, causal-conv1d>=1.4.0, triton>=2.2
-
-# 4. eval extra — only for the zero-shot lm-eval-harness benchmarks
-pip install -e '.[lmharness]'    # lm-eval>=0.4.4
+pip install -e '.[lmharness]'    # zero-shot benchmarks only
 ```
 
 **Environment / auth:**
