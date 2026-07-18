@@ -220,12 +220,41 @@ python -m koopman_lm.evaluation.lm_harness_eval --model koopman --model_args che
 
 | Symptom | Fix |
 |---|---|
-| `mamba-ssm` / `causal-conv1d` build fails | CUDA toolkit must match torch's CUDA; install torch first, confirm `nvcc` matches `torch.version.cuda`, then `pip install -e '.[cuda]'` |
+| `mamba-ssm` / `causal-conv1d` install slow or failing | These are the CUDA-kernel deps for the Mamba-2 backbone (`mamba_ssm.Mamba2`; `causal-conv1d` is mamba's conv kernel). See the dedicated notes just below this table. |
 | Gated-repo 401 on the tokenizer | use the default `NousResearch/Llama-2-7b-hf` mirror, or `huggingface-cli login` |
 | OOM | halve `PDBS`, double `GA` (same eff. batch); ensure `--gradient_checkpointing`; 440M may need `PDBS=2 GA=64` |
 | `torch.compile` errors on your stack | `EXTRA_TRAIN_ARGS="--no_compile"` |
 | CUDA unavailable | training requires a GPU (Mamba-2 kernels); the CPU path is import/oracle-test only |
 | No `train.bin` | tokenization didn't finish — rerun `pretrain.sh` (it resumes/ skips completed shards) |
+
+### `mamba-ssm` / `causal-conv1d` — the one genuinely fragile install
+
+`mamba_ssm.Mamba2` is the backbone sequence layer; `causal-conv1d` is the conv
+kernel it calls; both compile CUDA against your installed torch. What the setup
+does and how to unstick it:
+
+- **Prebuilt wheel first (fast path).** Their `setup.py` tries to download a
+  prebuilt wheel from GitHub releases matching your `(torch minor, CUDA major,
+  python, cxx11abi)` **before** compiling. So on a node with network + a
+  published combo (we target **cu124** via `[tool.uv.sources]`), `uv sync
+  --extra cuda` fetches a wheel and never runs `nvcc`. Keep torch on the cu124
+  index so the combo matches a published wheel.
+- **Source compile (fallback path).** No network / no matching combo → it
+  compiles. Then: `nvcc` must be on `PATH` and its CUDA major must match
+  `python -c "import torch;print(torch.version.cuda)"`; set `MAX_JOBS=4` (or
+  lower) to cap compile RAM (default parallelism can OOM the login node); expect
+  10–30 min. Force this path with `MAMBA_FORCE_BUILD=TRUE`.
+- **Build deps are handled.** `[tool.uv.extra-build-dependencies]` injects
+  `torch/setuptools/wheel/ninja/packaging` into the (isolation-off) build, so a
+  clean `uv sync --extra cuda` has what the compile needs. Without uv, install
+  torch first, then `pip install -e '.[cuda]'`.
+- **If `uv sync` still won't build them**, use the explicit sequence in
+  `scripts/setup_env.sh` (commented at the bottom): torch first, then
+  `uv pip install mamba-ssm causal-conv1d triton --no-build-isolation`.
+- **Version match.** We pin `mamba-ssm>=2.2.2`, `causal-conv1d>=1.4.0`,
+  `triton>=2.2` (mamba-2's SSD scan uses triton). If a wheel/ABI mismatch
+  surfaces (`undefined symbol`, `cxx11abi`), pin `mamba-ssm`/`causal-conv1d` to
+  the exact versions whose wheels match your torch build.
 
 ---
 
