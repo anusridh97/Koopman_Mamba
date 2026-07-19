@@ -53,6 +53,32 @@ def enable_gradient_checkpointing(model):
             layer.forward = make_ckpt_forward(original_forward)
 
 
+def _param_groups(raw_model, weight_decay):
+    """AdamW param groups splitting off params that must skip weight decay.
+
+    The Koopman-MLP v2 options introduce params where decay is harmful: the
+    WeightNorm lift direction (scale-invariant -> 1/||v|| gradient blowup), the
+    per-row utilization gains (decay pushes neurons dead), and the geometric
+    rotation-decay / Cayley-mixer params. KoopmanLM.no_weight_decay_param_names()
+    names them. Models without that method -- baselines, or v1 with no v2 options
+    enabled (empty set) -- fall back to the original single decayed group, so
+    existing training is byte-for-byte unchanged.
+    """
+    fn = getattr(raw_model, 'no_weight_decay_param_names', None)
+    skip = fn() if fn is not None else set()
+    if not skip:
+        return raw_model.parameters()
+    decay, no_decay = [], []
+    for name, p in raw_model.named_parameters():
+        if not p.requires_grad:
+            continue
+        (no_decay if name in skip else decay).append(p)
+    return [
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+
 def build_model(args, tokenizer):
     # frozen config: derive runtime fields via dataclasses.replace, not assignment
     cfg = build_config(args.model_size)
@@ -158,7 +184,8 @@ def train(args):
         generator=data_gen, worker_init_fn=seed_worker)
 
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.learning_rate, betas=(0.9, 0.95),
+        _param_groups(raw_model, args.weight_decay),
+        lr=args.learning_rate, betas=(0.9, 0.95),
         weight_decay=args.weight_decay, fused=True)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps,

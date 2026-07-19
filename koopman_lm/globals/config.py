@@ -89,6 +89,29 @@ class KoopmanLMConfig:
     mlp_norm_preserving: bool = False
     mlp_gated: bool = False
 
+    # --- Koopman MLP utilization / structure options (Aurora-inspired v2) ---
+    # All default to reproducing v1 exactly (param names/shapes unchanged).
+    # See globals/modules/koopman_mlp.py for the full rationale.
+    #
+    # (1) Row-normalized lift with explicit per-row gains (WeightNorm over rows):
+    #     W[i,:] = g_i * v_i / ||v_i||. "How much a neuron matters" collapses to
+    #     one scalar g_i; dead neurons surface as g_i -> 0. Requires the WeightNorm
+    #     direction params to skip weight decay (KoopmanLM.no_weight_decay_param_names).
+    mlp_row_norm_lift: bool = False
+    # (2) Rotation parameterization. None -> back-compat (resolve from
+    #     mlp_norm_preserving: True->'angle', False->'legacy'). Explicit:
+    #     'legacy' (learned gamma,omega disk-clamped), 'angle' (cos/sin, rho=1),
+    #     'logrho_theta' (gamma=e^-softplus(s) cos t, omega=e^-softplus(s) sin t:
+    #     decay rate and angle decoupled, |lambda|<=1 built in smoothly).
+    mlp_rotation_param: Optional[str] = None
+    # Depth-grade the logrho_theta decay init (aggressive decay early, gentle late).
+    mlp_decay_depth_grade: bool = False
+    # (3) Orthogonal pair mixer between lift and rotation. None/'none' -> off.
+    #     'perm' (fixed random permutation), 'ortho' (fixed block-diag random
+    #     orthogonal), 'learned' (learnable block-diag Cayley orthogonal).
+    mlp_pair_mixer: Optional[str] = None
+    mlp_mixer_block: int = 64
+
     # Layer layout
     ska_layer_indices: Optional[Tuple[int, ...]] = None
 
@@ -159,7 +182,21 @@ class KoopmanLMConfig:
 
         d_k = ((int(d * self.mlp_expand) + 63) // 64) * 64
         n_mlp_proj = 3 if self.mlp_gated else 2
-        per_mlp = d * d_k * n_mlp_proj + d_k
+        per_mlp = d * d_k * n_mlp_proj                    # lift + readout (+ gate)
+        # (2) rotation params: legacy/logrho_theta store d_k coeffs
+        #     (gamma+omega, or s+theta); angle stores d_k/2 (theta only). The
+        #     legacy d_k is the estimate's historical `+ d_k` term.
+        rp = self.mlp_rotation_param or ('angle' if self.mlp_norm_preserving else 'legacy')
+        per_mlp += (d_k // 2) if rp == 'angle' else d_k
+        # (1) row-norm lift adds the per-row gain vector g (d_k) on top of the
+        #     direction v (same d*d_k as the plain lift weight).
+        if self.mlp_row_norm_lift:
+            per_mlp += d_k
+        # (3) learnable block-diag mixer: A_raw is (d_k/b, b, b) = d_k*b params
+        #     (fixed 'perm'/'ortho' mixers are buffers -> not counted here).
+        if self.mlp_pair_mixer == 'learned':
+            b = min(self.mlp_mixer_block, d_k)
+            per_mlp += d_k * b
         mlp_total = per_mlp * n
 
         norms = n * d * 2 + d
@@ -206,6 +243,7 @@ CONFIG_REGISTRY = {
     "50m":        "50m.yaml",
     "180m":       "180m.yaml",
     "180m_gated": "180m_gated.yaml",
+    "180m_v2":    "180m_v2.yaml",
     "370m":       "370m.yaml",
     "440m":       "440m.yaml",
     "880m":       "880m.yaml",

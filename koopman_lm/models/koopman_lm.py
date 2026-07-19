@@ -119,6 +119,14 @@ class KoopmanLM(nn.Module):
                 expand=cfg.mlp_expand,
                 spectral_norm_gamma=cfg.mlp_spectral_norm,
                 norm_preserving=getattr(cfg, 'mlp_norm_preserving', False),
+                # --- Koopman MLP utilization / structure options (v2) ---
+                rotation_param=getattr(cfg, 'mlp_rotation_param', None),
+                row_norm_lift=getattr(cfg, 'mlp_row_norm_lift', False),
+                pair_mixer=getattr(cfg, 'mlp_pair_mixer', None),
+                mixer_block=getattr(cfg, 'mlp_mixer_block', 64),
+                depth_grade=getattr(cfg, 'mlp_decay_depth_grade', False),
+                layer_idx=i,
+                n_layers=cfg.n_layers,
             ))
 
         self.norm_f = nn.LayerNorm(cfg.d_model)
@@ -164,7 +172,13 @@ class KoopmanLM(nn.Module):
                     nn.init.zeros_(ska.out_proj.weight)
                 # layerscale_gate is left exactly as constructed (small const).
         for layer in self.mlp_layers:
-            if hasattr(layer, 'lift'):
+            # The MLP owns its projection init (row-norm lift, rotation, and mixer
+            # params are not nn.Linear, so _init_weights leaves them alone; only
+            # the plain Linears -- readout, and lift/gate on the legacy path --
+            # need xavier restored after the generic normal(0, 0.02) pass).
+            if hasattr(layer, 'reset_projection_params'):
+                layer.reset_projection_params()
+            elif hasattr(layer, 'lift'):
                 nn.init.xavier_uniform_(layer.lift.weight)
                 nn.init.xavier_uniform_(layer.readout.weight)
                 if hasattr(layer, 'gate'):
@@ -377,6 +391,25 @@ class KoopmanLM(nn.Module):
         self._stream_last_h = h
         self._stream_last_exp = p @ E.float()
         return {"logits": self.lm_head(h + mem.stream_read(h))}
+
+    def no_weight_decay_param_names(self):
+        """Parameter names (as in named_parameters) that MUST skip weight decay.
+
+        The WeightNorm lift direction ``lift_v`` is scale-invariant -- decaying it
+        drives ``||v|| -> 0`` and the 1/||v|| gradient in the normalized weight
+        blows up. The per-row gain ``lift_g`` is the utilization knob: decaying it
+        toward 0 would actively push neurons dead, the opposite of the intent.
+        The rotation decay logit ``s`` and the Cayley mixer params ``A_raw`` are
+        geometric parameterizations, not linear weights; decay would pull them to
+        arbitrary reference points (rho -> 0.5, mix -> identity). Empty set unless
+        the v2 MLP options are enabled, so v1 training is byte-for-byte unchanged.
+        """
+        skip = set()
+        for name, _ in self.named_parameters():
+            leaf = name.rsplit('.', 1)[-1]
+            if leaf in ('lift_v', 'lift_g', 's', 'A_raw'):
+                skip.add(name)
+        return skip
 
     def param_summary(self):
         total = sum(p.numel() for p in self.parameters())
