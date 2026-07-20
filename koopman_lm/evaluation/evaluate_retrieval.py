@@ -64,55 +64,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
 
 import dataclasses
-from koopman_lm.config import build_config
-from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
+from koopman_lm.evaluation import loader as _loader
+from koopman_lm.evaluation.tasks.niah import _FILLER_SENTENCES, _build_niah_examples
 
 
 # ============================================================================
-# Model loading (same as evaluate.py, supports all 3 types)
+# Model loading (delegates to loader.load_model; unlike evaluate.py this
+# never tries the checkpoint-local tokenizer, only `tokenizer_name` --
+# use_ckpt_tokenizer=False preserves that existing behavior).
 # ============================================================================
 
 def load_model(checkpoint, model_size="180m",
                tokenizer_name="mistralai/Mistral-7B-v0.1",
                model_type=None):
     """Load model from checkpoint, auto-detecting model_type from meta.pt."""
-    meta_path = checkpoint.replace("model.pt", "meta.pt")
-    meta = {}
-    if os.path.exists(meta_path):
-        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
-
-    if model_type is None:
-        model_type = meta.get("model_type", "koopman")
-
-    if "cfg" in meta:
-        cfg = meta["cfg"]
-    else:
-        cfg = build_config(model_size)
-
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    cfg = dataclasses.replace(cfg, vocab_size=len(tokenizer))   # frozen: use replace
-
-    if model_type == "mamba_attn":
-        model = build_mamba_attention(cfg)
-    elif model_type == "mamba_only":
-        model = build_mamba_only(cfg)
-    else:
-        model = KoopmanLM(cfg)
-
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-
-    print(f"Loaded {model_type} model from {checkpoint}")
-    total = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters: {total:,}")
-
-    return model, cfg, tokenizer, model_type
+    return _loader.load_model(checkpoint, model_size, tokenizer_name,
+                              model_type, use_ckpt_tokenizer=False)
 
 
 # ============================================================================
@@ -129,25 +99,6 @@ def load_model(checkpoint, model_size="180m",
 # we avoid BPE cross-boundary merges that would shift the prefix mask.
 # ============================================================================
 
-_FILLER_SENTENCES = [
-    "The weather was pleasant and the birds sang in the trees.",
-    "Markets opened higher on expectations of strong earnings.",
-    "The committee reviewed the quarterly budget and approved changes.",
-    "Research indicates that regular exercise improves cognitive function.",
-    "The project timeline was adjusted to accommodate new requirements.",
-    "Several participants noted the improvement in overall performance.",
-    "Historical records show similar patterns in previous decades.",
-    "The analysis revealed unexpected correlations in the dataset.",
-    "Community members gathered to discuss plans for the upcoming event.",
-    "Technical specifications were updated to reflect current standards.",
-    "The landscape stretched endlessly toward the distant mountains.",
-    "Preliminary results suggest a positive trend in user engagement.",
-    "The infrastructure upgrade proceeded according to the revised plan.",
-    "New policies were implemented to address emerging challenges.",
-    "The observation period concluded with encouraging findings.",
-    "Supply chain adjustments led to improved delivery timelines.",
-]
-
 _FIRST_NAMES = [
     "Alice", "Bob", "Carol", "David", "Eve", "Frank", "Grace", "Henry",
     "Iris", "Jack", "Karen", "Leo", "Mia", "Noah", "Olivia", "Paul",
@@ -159,64 +110,6 @@ _LAST_NAMES = [
     "Garcia", "Miller", "Davis", "Wilson", "Anderson", "Thomas", "Taylor",
     "Moore", "Jackson", "Martin", "Lee", "Thompson", "White",
 ]
-
-
-def _build_niah_examples(tokenizer, context_len, n_examples, seed,
-                         use_distractors=False, paraphrase_query=False):
-    """Unified NIAH builder with BPE-safe separate tokenization."""
-    rng = random.Random(seed)
-    adjectives = ["regular", "normal", "common", "typical", "standard",
-                  "ordinary", "usual", "general", "basic", "default"]
-
-    if paraphrase_query:
-        query = "Recall the unique designated number."
-    else:
-        query = "What is the special number?"
-
-    examples = []
-    for _ in range(n_examples):
-        target_num = rng.randint(1000, 9999)
-        needle = f"The special number is {target_num}."
-        budget = context_len - 30
-        parts = []
-        tok_count = 0
-        dist_idx = 0
-
-        while tok_count < budget:
-            if use_distractors and rng.random() < 0.33 and dist_idx < len(adjectives):
-                adj = adjectives[dist_idx]
-                dist_idx += 1
-                fake = rng.randint(1000, 9999)
-                sent = f"The {adj} number is {fake}."
-            else:
-                sent = rng.choice(_FILLER_SENTENCES)
-            sent_toks = len(tokenizer.encode(sent, add_special_tokens=False))
-            if tok_count + sent_toks > budget:
-                break
-            parts.append(sent)
-            tok_count += sent_toks
-
-        insert_pos = rng.randint(
-            max(1, len(parts) // 10), max(1, 9 * len(parts) // 10))
-        parts.insert(insert_pos, needle)
-        context = " ".join(parts)
-
-        query_text = f"\n\nQuestion: {query}\nAnswer:"
-        target_text = f" {target_num}"
-
-        # Tokenize context and query SEPARATELY to avoid BPE boundary merges
-        context_ids = tokenizer.encode(context, add_special_tokens=False)
-        query_ids = tokenizer.encode(query_text, add_special_tokens=False)
-        target_ids = tokenizer.encode(target_text, add_special_tokens=False)
-
-        examples.append({
-            "context_ids": context_ids,
-            "query_ids": query_ids,
-            "target_ids": target_ids,
-            "target_str": target_text.strip(),
-            "depth": insert_pos / len(parts),
-        })
-    return examples
 
 
 def _build_kv_retrieval(tokenizer, context_len, n_examples, seed):
