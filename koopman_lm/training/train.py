@@ -79,6 +79,44 @@ def _param_groups(raw_model, weight_decay):
     ]
 
 
+def _load_init_weights(model, path):
+    """Weights-only warm start for continued pretraining.
+
+    Loads a base checkpoint's ``state_dict`` into a freshly built model (before
+    any ska_fast fusion / compile). This is a WARM START, not a resume: the
+    optimizer, LR schedule, and step counter are all fresh, so training runs a
+    new cosine schedule over the continued-pretraining token budget. Loaded with
+    strict=False so a mismatched head (e.g. a different tokenizer vocab) surfaces
+    as a clear error rather than a raw RuntimeError, and benign missing/unexpected
+    keys are reported instead of aborting.
+    """
+    if not os.path.exists(path):
+        raise SystemExit(f"--init_from checkpoint not found: {path}")
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    # _save_checkpoint writes a raw state_dict; tolerate a {'state_dict': ...} wrap.
+    if isinstance(state, dict) and "state_dict" in state and \
+            not any(k.endswith(".weight") for k in state):
+        state = state["state_dict"]
+    model_sd = model.state_dict()
+    mismatched = [(k, tuple(v.shape), tuple(model_sd[k].shape))
+                  for k, v in state.items()
+                  if k in model_sd and tuple(v.shape) != tuple(model_sd[k].shape)]
+    if mismatched:
+        lines = "\n".join(f"    {k}: ckpt{a} vs model{b}"
+                          for k, a, b in mismatched[:10])
+        raise SystemExit(
+            "--init_from shape mismatch (wrong --model_size, or a tokenizer with "
+            "a different vocab than the base checkpoint?):\n" + lines)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    print(f"  Warm-started (weights only) from {path}")
+    if missing:
+        print(f"    [init_from] {len(missing)} missing keys kept at init, "
+              f"e.g. {list(missing)[:3]}")
+    if unexpected:
+        print(f"    [init_from] {len(unexpected)} unexpected keys ignored, "
+              f"e.g. {list(unexpected)[:3]}")
+
+
 def build_model(args, tokenizer):
     # frozen config: derive runtime fields via dataclasses.replace, not assignment
     cfg = build_config(args.model_size)
@@ -91,6 +129,19 @@ def build_model(args, tokenizer):
     if args.model_type == "koopman":
         print(f"Building Koopman LM ({args.model_size}): {n_mamba} Mamba-2 + {n_ska} SKA")
         model = KoopmanLM(cfg)
+    elif args.model_type == "mamba_attn":
+        model = build_mamba_attention(cfg)
+    elif args.model_type == "mamba_only":
+        model = build_mamba_only(cfg)
+    else:
+        raise ValueError(f"Unknown model_type: {args.model_type}")
+
+    # Warm start BEFORE ska_fast fusion / gradient checkpointing / compile, so
+    # weights load into the plain module the checkpoint was saved from.
+    if getattr(args, "init_from", None):
+        _load_init_weights(model, args.init_from)
+
+    if args.model_type == "koopman":
         if args.ska_fast:
             from koopman_lm.globals.modules.ska.fast import patch_ska_module
             for layer in model.seq_layers:
@@ -99,12 +150,6 @@ def build_model(args, tokenizer):
             print("  Applied SKA fast patches (fused proj / bf16 einsums)")
         else:
             print("  SKA uses the custom autograd core (no fast-patch needed)")
-    elif args.model_type == "mamba_attn":
-        model = build_mamba_attention(cfg)
-    elif args.model_type == "mamba_only":
-        model = build_mamba_only(cfg)
-    else:
-        raise ValueError(f"Unknown model_type: {args.model_type}")
 
     if args.gradient_checkpointing:
         enable_gradient_checkpointing(model)
@@ -289,6 +334,12 @@ def parse_args():
                    choices=["koopman", "mamba_attn", "mamba_only"])
     p.add_argument("--model_size", type=str, default="440m",
                    help="model size name (e.g. 440m) or path to a custom YAML config")
+    p.add_argument("--init_from", type=str, default=None,
+                   help="path to a base checkpoint model.pt for a WEIGHTS-ONLY "
+                        "warm start (continued pretraining). Loads weights only; "
+                        "optimizer/schedule/step are fresh (new cosine over "
+                        "--max_steps). Must match --model_size architecture and "
+                        "the tokenizer vocab of the base checkpoint.")
     p.add_argument("--data_dir", type=str, default=None)
     p.add_argument("--tokenizer", type=str, default="meta-llama/Llama-2-7b-hf")
     p.add_argument("--max_seq_len", type=int, default=2048)

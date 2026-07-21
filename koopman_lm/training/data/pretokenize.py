@@ -6,25 +6,33 @@ PARALLEL per-token recall-weight stream (dual-stream format).
   * Tokenizer default -> Llama-2 (meta-llama/Llama-2-7b-hf, 32000 vocab; use
     NousResearch/Llama-2-7b-hf for an ungated mirror with the identical
     tokenizer). uint16 packing still valid (vocab < 65536).
-  * Three sources, flat-mixed by token budget: 55% FineWeb-Edu, 15% PG-19,
-    30% SCROLLS.
   * SCROLLS examples are reformatted as context -> query -> answer; the ANSWER
     span (short answer for QA subtasks, the full summary for summarization
     subtasks) is up-weighted in the recall-weight stream. Everything else gets
     weight 1.0. This is the "recall pressure" that forces SKA to turn on
     (the MoE-load-balancing analogue) without changing the LM objective shape.
 
+Source mixes (two ways to specify):
+  * Legacy 3-float ``--mix f p s`` -> {fineweb, pg19, scrolls}. Default
+    [0.55, 0.15, 0.30]. Kept so pretrain.sh and older docs are unchanged.
+  * General ``--sources name=frac ...`` -> any subset of the registry in
+    ``mix.py`` (fineweb, pg19, scrolls, code, math, cosmopedia). Fractions are
+    renormalized to sum to 1. This is the path for the 4-bucket continued-
+    pretraining corpus, e.g.
+      --sources fineweb=0.40 code=0.125 math=0.125 cosmopedia=0.20 scrolls=0.15
+
 Outputs (in --output_dir):
   train.bin     uint16  flat token ids
   weights.bin   uint8   per-token recall weight (1 normal, RECALL_W on answers)
   meta.json     {n_tokens, vocab_size, tokenizer, dtype, weight_dtype, mix, ...}
 
-The weight stream is read by MemmapPackedDataset (train_fast.py) and consumed
-by KoopmanLM.forward(loss_weights=...).
+The weight stream is read by MemmapPackedDataset (dataset.py) and consumed by
+KoopmanLM.forward(loss_weights=...).
 
 Usage:
   python pretokenize.py --output_dir ./tok_440m --max_tokens 30_000_000_000
-  python pretokenize.py --output_dir ./tok_440m --tokenizer NousResearch/Llama-2-7b-hf
+  python pretokenize.py --output_dir ./cpt --sources fineweb=0.40 code=0.125 \
+      math=0.125 cosmopedia=0.20 scrolls=0.15 --max_tokens 2_500_000_000
 """
 
 import argparse
@@ -32,18 +40,13 @@ import json
 import os
 import numpy as np
 
+from koopman_lm.training.data.mix import (
+    SOURCE_SPECS, parse_sources, normalize_mix, resolve_specs,
+    interleave_quota as _interleave_quota,
+)
+
 RECALL_W = 4          # up-weight factor for SCROLLS answer-span tokens
 WEIGHT_DTYPE = np.uint8
-
-
-def _interleave_quota(mix, chunk_tokens):
-    """Given fractional mix, return how many tokens to pull from each source
-    per round-robin cycle (integers summing ~chunk_tokens). A source with
-    weight exactly 0 gets quota 0 (not the max(1, ...) floor) so a pure
-    single-source mix (e.g. --mix 1.0 0.0 0.0) doesn't still pull a whole
-    document from the zero-weighted sources every shard."""
-    return {k: (max(1, int(round(v * chunk_tokens))) if v > 0 else 0)
-            for k, v in mix.items()}
 
 
 def _scrolls_format(ex, subset):
@@ -106,7 +109,25 @@ def main():
                    default=["gov_report", "summ_screen_fd", "qasper",
                             "narrative_qa", "quality", "contract_nli"])
     p.add_argument("--mix", type=float, nargs=3, default=[0.55, 0.15, 0.30],
-                   help="fractions for [fineweb, pg19, scrolls]")
+                   help="legacy fractions for [fineweb, pg19, scrolls] "
+                        "(ignored when --sources is given)")
+    p.add_argument("--sources", type=str, nargs="+", default=None,
+                   help="general mix 'name=frac ...' (renormalized to sum 1; "
+                        "OVERRIDES --mix). Known names: "
+                        + ", ".join(sorted(SOURCE_SPECS)))
+    p.add_argument("--skip_source", type=str, default="fineweb",
+                   help="which source --skip_docs applies to (val-shard carving)")
+    # per-source HF-coordinate overrides for the code / math / QA buckets
+    p.add_argument("--code_path", type=str, default=None,
+                   help="override HF path for the 'code' source (default StarCoder)")
+    p.add_argument("--starcoder_data_dir", type=str, default=None,
+                   help="data_dir/language subset for StarCoder (e.g. 'python')")
+    p.add_argument("--math_path", type=str, default=None,
+                   help="override HF path for the 'math' source (default OpenWebMath)")
+    p.add_argument("--cosmopedia_path", type=str, default=None,
+                   help="override HF path for the 'cosmopedia' source")
+    p.add_argument("--cosmopedia_subset", type=str, default=None,
+                   help="cosmopedia config (default web_samples_v2)")
     p.add_argument("--recall_weight", type=int, default=RECALL_W)
     p.add_argument("--max_tokens", type=int, default=None)
     p.add_argument("--shard_size", type=int, default=50_000_000)
@@ -140,64 +161,80 @@ def main():
     eos = tok.eos_token_id if tok.eos_token_id is not None else 0
     assert len(tok) <= 65535, f"vocab {len(tok)} too big for uint16"
 
-    mix = {"fineweb": a.mix[0], "pg19": a.mix[1], "scrolls": a.mix[2]}
+    # ---- resolve the source mix (general --sources overrides legacy --mix) ----
+    if a.sources:
+        mix = normalize_mix(parse_sources(a.sources))
+    else:
+        mix = {"fineweb": a.mix[0], "pg19": a.mix[1], "scrolls": a.mix[2]}
+    overrides = {
+        "fineweb":    {"path": a.fineweb, "name": a.fineweb_subset},
+        "pg19":       {"path": a.pg19},
+        "scrolls":    {"path": a.scrolls, "subsets": a.scrolls_subsets},
+        "code":       {"path": a.code_path, "data_dir": a.starcoder_data_dir},
+        "math":       {"path": a.math_path},
+        "cosmopedia": {"path": a.cosmopedia_path, "name": a.cosmopedia_subset},
+    }
+    specs = resolve_specs(mix, overrides)
     quota = _interleave_quota(mix, a.shard_size)
+    docs_consumed = {name: 0 for name in mix}
 
-    # streaming iterators. .skip() must precede .shuffle() (shuffle only
-    # locally reorders a rolling window, so it does not by itself make two
-    # differently-seeded runs draw disjoint documents from the ~10B-token
-    # source -- skip_docs carves out a val shard past everything a prior
-    # train run consumed).
-    fw_stream = load_dataset(a.fineweb, name=a.fineweb_subset, split="train",
-                             streaming=True)
-    if a.skip_docs:
-        fw_stream = fw_stream.skip(a.skip_docs)
-    fw = iter(fw_stream.shuffle(seed=a.seed, buffer_size=10000))
-    fw_docs_consumed = 0
+    # streaming iterators. .skip() must precede .shuffle() (shuffle only locally
+    # reorders a rolling window, so it does not by itself make two differently-
+    # seeded runs draw disjoint documents -- --skip_docs carves out a val shard
+    # past everything a prior train run consumed, applied to --skip_source).
+    def make_plain_stream(name, spec):
+        kw = dict(split=spec["split"], streaming=True)
+        if spec.get("name"):
+            kw["name"] = spec["name"]
+        if spec.get("data_dir"):
+            kw["data_dir"] = spec["data_dir"]
+        if spec.get("trust_remote_code"):
+            kw["trust_remote_code"] = True
+        ds = load_dataset(spec["path"], **kw)
+        if name == a.skip_source and a.skip_docs:
+            ds = ds.skip(a.skip_docs)
+        buf = 10000 if name == "fineweb" else 1000
+        return iter(ds.shuffle(seed=a.seed, buffer_size=buf))
 
-    pg = None
-    if quota.get("pg19", 0) > 0:
-        pg = iter(load_dataset(a.pg19, split="train", streaming=True,
-                               trust_remote_code=True)
-                  .shuffle(seed=a.seed, buffer_size=1000))
+    def make_scrolls_stream(spec):
+        # chain the chosen SCROLLS subsets into one stream of (subset, example)
+        def gen():
+            for sub in spec["subsets"]:
+                try:
+                    ds = load_dataset(spec["path"], sub, split=spec["split"],
+                                      streaming=True)
+                except Exception as e:
+                    print(f"  [scrolls:{sub}] skipped ({e})")
+                    continue
+                for ex in ds:
+                    yield sub, ex
+        return iter(gen())
 
-    # SCROLLS: chain the chosen subsets
-    def scrolls_stream():
-        for sub in a.scrolls_subsets:
-            try:
-                ds = load_dataset(a.scrolls, sub, split="train", streaming=True)
-            except Exception as e:
-                print(f"  [scrolls:{sub}] skipped ({e})")
-                continue
-            for ex in ds:
-                yield sub, ex
-    sc = iter(scrolls_stream()) if quota.get("scrolls", 0) > 0 else None
+    streams = {}
+    for name, spec in specs.items():
+        if quota.get(name, 0) <= 0:
+            continue
+        streams[name] = (make_scrolls_stream(spec) if spec["kind"] == "scrolls"
+                         else make_plain_stream(name, spec))
 
-    def pull_fineweb(n):
-        nonlocal fw_docs_consumed
+    def pull_plain(name, n):
+        it, tf = streams[name], specs[name]["text_field"]
         toks, w = [], []
         while len(toks) < n:
-            try: ex = next(fw)
+            try: ex = next(it)
             except StopIteration: break
-            fw_docs_consumed += 1
-            ids = tok(ex.get("text", ""), add_special_tokens=False)["input_ids"]
+            docs_consumed[name] += 1
+            ids = tok(ex.get(tf, "") or "", add_special_tokens=False)["input_ids"]
             ids.append(eos); toks += ids; w += [1] * len(ids)
         return toks, w
 
-    def pull_pg19(n):
+    def pull_scrolls(name, n):
+        it = streams[name]
         toks, w = [], []
         while len(toks) < n:
-            try: ex = next(pg)
+            try: sub, ex = next(it)
             except StopIteration: break
-            ids = tok(ex.get("text", ""), add_special_tokens=False)["input_ids"]
-            ids.append(eos); toks += ids; w += [1] * len(ids)
-        return toks, w
-
-    def pull_scrolls(n):
-        toks, w = [], []
-        while len(toks) < n:
-            try: sub, ex = next(sc)
-            except StopIteration: break
+            docs_consumed[name] += 1
             ctx, q, ans = _scrolls_format(ex, sub)
             # tokenize segments SEPARATELY -> exact answer boundary (no BPE drift)
             cids = tok(ctx, add_special_tokens=False)["input_ids"]
@@ -208,18 +245,21 @@ def main():
             toks += ids; w += wt
         return toks, w
 
-    pullers = {"fineweb": pull_fineweb, "pg19": pull_pg19, "scrolls": pull_scrolls}
+    def pull(name, n):
+        fn = pull_scrolls if specs[name]["kind"] == "scrolls" else pull_plain
+        return fn(name, n)
 
     total = 0
     fbin = open(bin_path, "wb"); fw_ = open(w_path, "wb")
-    print(f"Tokenizer: {a.tokenizer} (vocab {len(tok)}) | mix {mix} | recall_w={a.recall_weight}")
+    print(f"Tokenizer: {a.tokenizer} (vocab {len(tok)}) | mix {mix} | "
+          f"recall_w={a.recall_weight}")
     try:
         while True:
             shard_toks, shard_w = [], []
             for src, qn in quota.items():
-                if qn == 0:
+                if qn <= 0 or src not in streams:
                     continue
-                t, w = pullers[src](qn)
+                t, w = pull(src, qn)
                 shard_toks += t; shard_w += w
             if not shard_toks:
                 break
@@ -232,7 +272,7 @@ def main():
             arr.tofile(fbin); warr.tofile(fw_)
             total += arr.size
             print(f"  wrote {total/1e6:.1f}M tokens "
-                  f"(scrolls answer-weighted={int((warr>1).sum())/1e3:.1f}K in shard)")
+                  f"(answer-weighted={int((warr>1).sum())/1e3:.1f}K in shard)")
             if a.max_tokens and total >= a.max_tokens:
                 break
     finally:
@@ -241,8 +281,12 @@ def main():
     meta = {
         "n_tokens": total, "vocab_size": len(tok), "tokenizer": a.tokenizer,
         "dtype": "uint16", "weight_dtype": "uint8", "recall_weight": a.recall_weight,
-        "mix": mix, "scrolls_subsets": a.scrolls_subsets,
-        "skip_docs": a.skip_docs, "fineweb_docs_consumed": fw_docs_consumed,
+        "mix": mix, "sources": {k: specs[k]["path"] for k in specs},
+        "scrolls_subsets": specs.get("scrolls", {}).get("subsets"),
+        "skip_docs": a.skip_docs, "skip_source": a.skip_source,
+        "docs_consumed": docs_consumed,
+        # back-compat: pretrain.sh reads fineweb_docs_consumed for val carving
+        "fineweb_docs_consumed": docs_consumed.get("fineweb", 0),
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)

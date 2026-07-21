@@ -258,7 +258,55 @@ does and how to unstick it:
 
 ---
 
-## 8. Optional / off-by-default capabilities
+## 8. Continued pretraining (warm start on a new mix)
+
+Take an already-trained checkpoint and keep training it for ~2–3B tokens on a
+different data mix (e.g. adding code/math + structured reasoning). One driver:
+
+```bash
+scripts/continued_pretrain.sh            # warm-start 180m_v2 on the 4-bucket mix
+```
+
+**Data mix** (`--sources name=frac …`, renormalized to sum 1; see the source
+registry in `koopman_lm/training/data/mix.py`):
+
+| bucket | share | source(s) |
+|---|---|---|
+| FineWeb-Edu | 40% | `fineweb` (`HuggingFaceFW/fineweb-edu`) |
+| code / math | 25% | `code` (`bigcode/starcoderdata`, 12.5%) + `math` (`open-web-math/open-web-math`, 12.5%) |
+| structured QA / reasoning | 20% | `cosmopedia` (`HuggingFaceTB/cosmopedia`) |
+| retrieval-oriented LM | 15% | `scrolls` (`tau/scrolls`; ctx→query→answer, **answer spans up-weighted** in the recall stream) |
+
+`pretokenize.py` grows a general `--sources` path alongside the legacy 3-float
+`--mix` (unchanged, so `pretrain.sh` is unaffected). HF coordinates are
+overridable — `--starcoder_data_dir python` (StarCoder language), `--cosmopedia_subset`,
+`--code_path`/`--math_path`/`--cosmopedia_path`. `bigcode/starcoderdata` is
+gated (needs `huggingface-cli login` + accepting its terms).
+
+**Warm start = weights only.** `train.py --init_from <base>/model.pt` loads the
+base weights into a freshly built model, then runs a **new** short-warmup cosine
+at a **reduced peak LR** over the continued budget — the optimizer, schedule, and
+step counter are all fresh (this is a data-mix change, not a resume of the base
+run's schedule). It must match the base checkpoint's `--model_size` architecture
+and tokenizer vocab, or `--init_from` aborts with a shape-mismatch error naming
+the offending tensors. (To *resume an interrupted run* with optimizer+step
+intact instead, that's `experiments/table2.py --resume_from`, a different thing.)
+
+Every knob is env-overridable, same convention as `pretrain.sh`:
+
+```bash
+TOKENS=3000000000 LR=1.5e-4 scripts/continued_pretrain.sh          # 3B tokens, lower LR
+INIT_FROM=runs/echo-440m/final/model.pt SIZE=440m scripts/continued_pretrain.sh
+NPROC=4 scripts/continued_pretrain.sh                              # 4-GPU DDP
+```
+
+Defaults: `SIZE=180m_v2`, `INIT_FROM=runs/echo-180m_v2/final/model.pt`,
+`TOKENS=2.5e9` (≈12.7k steps at eff-batch 96 × 2048), `LR=2e-4`, `WARMUP=250`.
+`steps = tokens / (PDBS·GA·world_size · seq_len)` unless you set `STEPS=…`.
+
+---
+
+## 9. Optional / off-by-default capabilities
 
 These exist on the branch but do **not** affect a default run:
 - **`mlp_norm_preserving`** (config, default off) — exact norm-preserving Koopman
