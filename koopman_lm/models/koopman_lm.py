@@ -224,6 +224,29 @@ class KoopmanLM(nn.Module):
                 loss = (ce * w).sum() / w.sum().clamp(min=1.0)
         return {"loss": loss, "logits": logits}
 
+    def encode(self, input_ids, attention_mask=None, pool="mean"):
+        """Pool the backbone to one (B, d) embedding for dense retrieval.
+
+        Runs embed -> seq/mlp layers -> norm_f (NO lm_head) and pools the
+        per-token hidden states. Independent of forward(), so LM training/eval
+        is byte-for-byte unchanged. The Phase-2 retrieval adapter
+        (koopman_lm/retrieval) wraps this with a projection head + L2 norm.
+
+        The backbone is causal, so RIGHT-padding is safe: pad positions sit after
+        the real tokens and cannot leak into their hidden states. Pass the
+        attention_mask so pooling ignores pad positions.
+
+        pool: 'mean' -> mask-weighted mean over real tokens (robust default).
+              'last' -> hidden at the last real token (the causal summary slot).
+        """
+        from koopman_lm.retrieval.encoder import pool_sequence
+        h = self.embed(input_ids)
+        for seq_layer, mlp_layer in zip(self.seq_layers, self.mlp_layers):
+            h = seq_layer(h)
+            h = mlp_layer(h)
+        h = self.norm_f(h)                                   # (B, T, d)
+        return pool_sequence(h, attention_mask, pool)
+
     @contextlib.contextmanager
     def ablate(self, zero_ska=False, zero_mamba=False):
         """Temporarily zero the contribution of SKA and/or Mamba sequence layers.

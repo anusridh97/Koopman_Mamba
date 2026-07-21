@@ -260,12 +260,18 @@ does and how to unstick it:
 
 ## 8. Continued pretraining (warm start on a new mix)
 
-Take an already-trained checkpoint and keep training it for ~2–3B tokens on a
-different data mix (e.g. adding code/math + structured reasoning). One driver:
+Take an already-trained checkpoint and keep training it for ~1–2B tokens on a
+different data mix (e.g. adding code/math + structured reasoning + retrieval
+evidence). One driver:
 
 ```bash
 scripts/continued_pretrain.sh            # warm-start 180m_v2 on the 4-bucket mix
 ```
+
+> **This is Phase 1 of a two-phase plan.** Phase 2 (retrieval adaptation — turn
+> the model into a dense dual-encoder with a short contrastive run) is documented
+> in **`RETRIEVAL.md`**, along with the full rationale, the eval cadence, and
+> `scripts/eval_sweep.sh` (rank checkpoints by zero-shot benchmark, not PPL).
 
 **Data mix** (`--sources name=frac …`, renormalized to sum 1; see the source
 registry in `koopman_lm/training/data/mix.py`):
@@ -275,7 +281,7 @@ registry in `koopman_lm/training/data/mix.py`):
 | FineWeb-Edu | 40% | `fineweb` (`HuggingFaceFW/fineweb-edu`) |
 | code / math | 25% | `code` (`bigcode/starcoderdata`, 12.5%) + `math` (`open-web-math/open-web-math`, 12.5%) |
 | structured QA / reasoning | 20% | `cosmopedia` (`HuggingFaceTB/cosmopedia`) |
-| retrieval-oriented LM | 15% | `scrolls` (`tau/scrolls`; ctx→query→answer, **answer spans up-weighted** in the recall stream) |
+| retrieval-oriented LM | 15% | `wikipedia` 9% + `hotpotqa` 3% + `musique` 3% (evidence flattened to plain LM text; NQ evidence ⊂ Wikipedia) |
 
 `pretokenize.py` grows a general `--sources` path alongside the legacy 3-float
 `--mix` (unchanged, so `pretrain.sh` is unaffected). HF coordinates are
@@ -301,8 +307,11 @@ NPROC=4 scripts/continued_pretrain.sh                              # 4-GPU DDP
 ```
 
 Defaults: `SIZE=180m_v2`, `INIT_FROM=runs/echo-180m_v2/final/model.pt`,
-`TOKENS=2.5e9` (≈12.7k steps at eff-batch 96 × 2048), `LR=2e-4`, `WARMUP=250`.
-`steps = tokens / (PDBS·GA·world_size · seq_len)` unless you set `STEPS=…`.
+`TOKENS=1.5e9` (≈7.6k steps at eff-batch 96 × 2048), `LR=2.5e-4` (~½–⅓ of the
+base 6e-4), `WARMUP`≈1.5% of steps, `SAVE_STEPS`≈every 100M tokens.
+`steps = tokens / (PDBS·GA·world_size · seq_len)` unless you set `STEPS=…`. Point
+`INIT_FROM` at the best base checkpoint by *benchmark* (`scripts/eval_sweep.sh`),
+which is often not the final (lowest-PPL) one.
 
 ---
 

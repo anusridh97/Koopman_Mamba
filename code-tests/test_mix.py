@@ -68,3 +68,20 @@ def test_malformed_sources_raise(bad):
 def test_empty_mix_normalize_raises():
     with pytest.raises(ValueError):
         normalize_mix({"fineweb": 0.0})
+
+
+def test_retrieval_sources_registered():
+    for name in ("wikipedia", "hotpotqa", "musique", "nq"):
+        assert name in SOURCE_SPECS
+    # the QA-evidence sources are qa_context; wikipedia is plain LM text
+    assert SOURCE_SPECS["hotpotqa"]["kind"] == "qa_context"
+    assert SOURCE_SPECS["musique"]["kind"] == "qa_context"
+    assert SOURCE_SPECS["wikipedia"]["kind"] == "plain"
+
+
+def test_phase1_retrieval_bucket_is_15pct():
+    # the continued_pretrain.sh default retrieval bucket
+    n = normalize_mix(parse_sources(
+        "fineweb=0.40 code=0.125 math=0.125 cosmopedia=0.20 "
+        "wikipedia=0.09 hotpotqa=0.03 musique=0.03".split()))
+    assert abs((n["wikipedia"] + n["hotpotqa"] + n["musique"]) - 0.15) < 1e-9

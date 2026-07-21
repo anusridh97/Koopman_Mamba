@@ -10,8 +10,13 @@ load it (``load_dataset`` coordinates) and how to read text from it:
 
   path / name / split / data_dir : passed straight to ``datasets.load_dataset``
   text_field                     : the column holding raw text (``kind='plain'``)
-  kind                           : 'plain' (LM text) | 'scrolls' (ctx->query->answer,
-                                   answer span up-weighted in the recall stream)
+  kind                           : 'plain'   (LM text; read ``text_field``)
+                                   'scrolls' (ctx->query->answer, answer span
+                                              up-weighted in the recall stream)
+                                   'qa_context' (evidence-bearing QA example ->
+                                              question + flattened evidence/
+                                              distractor paragraphs as LM text;
+                                              the retrieval-oriented LM bucket)
   trust_remote_code              : forwarded to ``load_dataset`` when True
   subsets                        : (scrolls only) the sub-configs to chain
 
@@ -19,7 +24,9 @@ The 4-bucket continued-pretraining mix maps onto these sources as:
   40% FineWeb-Edu        -> fineweb
   25% code / math        -> code (StarCoder) + math (OpenWebMath)   (12.5% each)
   20% structured QA/reas -> cosmopedia
-  15% retrieval-oriented -> scrolls   (long ctx->query->answer, answer-weighted)
+  15% retrieval-oriented -> wikipedia + hotpotqa + musique (evidence text; the
+                            same corpora Phase-2 retrieval adaptation trains on,
+                            but here consumed as plain causal-LM text)
 """
 
 from copy import deepcopy
@@ -48,7 +55,23 @@ SOURCE_SPECS = {
     # --- structured QA / reasoning bucket ---
     "cosmopedia": dict(path="HuggingFaceTB/cosmopedia", name="web_samples_v2",
                        split="train", text_field="text", kind="plain"),
+    # --- retrieval-oriented LM bucket (evidence-bearing corpora as plain LM) ---
+    "wikipedia": dict(path="wikimedia/wikipedia", name="20231101.en",
+                      split="train", text_field="text", kind="plain"),
+    "hotpotqa": dict(path="hotpot_qa", name="distractor", split="train",
+                     kind="qa_context", trust_remote_code=True),
+    "musique": dict(path="dgslibisey/MuSiQue", name=None, split="train",
+                    kind="qa_context"),
+    # NQ full (`natural_questions`) is very heavy to stream and its evidence is
+    # Wikipedia-derived (covered by `wikipedia`). Kept here for completeness /
+    # explicit --sources use, but off the default continued-pretraining mix.
+    "nq": dict(path="google-research-datasets/natural_questions", name="default",
+               split="train", kind="qa_context", trust_remote_code=True),
 }
+
+# Sources whose examples are evidence-bearing QA records (``kind='qa_context'``);
+# pretokenize.py flattens them to "question + evidence paragraphs" LM text.
+QA_CONTEXT_SOURCES = ("hotpotqa", "musique", "nq")
 
 
 def parse_sources(pairs):

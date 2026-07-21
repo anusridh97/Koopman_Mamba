@@ -66,6 +66,46 @@ def _scrolls_format(ex, subset):
     return context, query, answer
 
 
+def _qa_context_text(name, ex):
+    """Flatten an evidence-bearing QA example into plain causal-LM text.
+
+    The retrieval-oriented LM bucket (Phase 1) trains on the natural
+    co-occurrence of a question with its evidence + distractor paragraphs, so
+    the model sees "question -> supporting passages" as ordinary text. It does
+    NOT use the contrastive objective (that is Phase 2 / retrieval adaptation).
+
+    Schemas differ per dataset; unknown/empty fields degrade to whatever text is
+    present, so a schema drift yields shorter documents rather than a crash.
+    """
+    q = (ex.get("question") or "").strip()
+    paras = []
+    if name == "hotpotqa":
+        ctx = ex.get("context") or {}
+        titles = ctx.get("title") or []
+        sents = ctx.get("sentences") or []
+        for t, ss in zip(titles, sents):
+            paras.append((f"{t}. " if t else "") + " ".join(ss or []))
+    elif name == "musique":
+        for p in (ex.get("paragraphs") or []):
+            title = (p.get("title") or "").strip()
+            body = (p.get("paragraph_text") or "").strip()
+            paras.append((f"{title}. " if title else "") + body)
+    elif name == "nq":
+        # natural_questions: the document text is heavy/nested; best-effort pull
+        # of the title + long-answer HTML-stripped tokens if present.
+        doc = ex.get("document") or {}
+        title = (doc.get("title") or "").strip()
+        if title:
+            paras.append(title)
+        toks = (doc.get("tokens") or {}).get("token") or []
+        if toks:
+            paras.append(" ".join(toks[:4000]))   # cap: NQ docs can be enormous
+    else:
+        paras.append((ex.get("text") or "").strip())
+    body = "\n".join(p for p in paras if p).strip()
+    return (q + "\n" + body).strip() if q else body
+
+
 def write_synthetic_corpus(output_dir, n_tokens=200_000, vocab_size=32000,
                            recall_weight=4, seed=0):
     """Write a tiny self-contained dual-stream corpus (NO network/tokenizer).
@@ -245,8 +285,24 @@ def main():
             toks += ids; w += wt
         return toks, w
 
+    def pull_qa(name, n):
+        # evidence-bearing QA record -> "question + evidence paragraphs" LM text
+        it = streams[name]
+        toks, w = [], []
+        while len(toks) < n:
+            try: ex = next(it)
+            except StopIteration: break
+            docs_consumed[name] += 1
+            text = _qa_context_text(name, ex)
+            if not text:
+                continue
+            ids = tok(text, add_special_tokens=False)["input_ids"]
+            ids.append(eos); toks += ids; w += [1] * len(ids)
+        return toks, w
+
     def pull(name, n):
-        fn = pull_scrolls if specs[name]["kind"] == "scrolls" else pull_plain
+        kind = specs[name]["kind"]
+        fn = {"scrolls": pull_scrolls, "qa_context": pull_qa}.get(kind, pull_plain)
         return fn(name, n)
 
     total = 0
