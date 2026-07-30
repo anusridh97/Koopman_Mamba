@@ -64,6 +64,15 @@ class KoopmanLMConfig:
     # --- Exact intra-chunk causal stats ---
     ska_exact_intrachunk: bool = False
 
+    # --- Small-rank exact per-token path (inverse-Cholesky representation) ---
+    # Replaces chunk-64 stats + cross-chunk boundary AND the factor-scan exact
+    # path: exact per-token exclusive-prefix stats, one batched Cholesky over
+    # all prefixes, whitened core as pure matmul against P = L^{-1}, no
+    # spectral power iteration (sqrt-beta symmetric keys => contractive A_w).
+    # Per-token stats are (B,T,H,r,r): use with a SMALLER ska_rank (<= 32
+    # recommended, hard cap 64). Takes precedence over ska_exact_intrachunk.
+    ska_inverse_cholesky: bool = False
+
     # --- Causal key/query normalization (memo §6) ---
     # False: per-token L2 (unit norm; legacy). True: causal norm-CLIP
     #   k <- k / max(1, ||k||/c) -- bounds leverage, causal, does NOT inflate

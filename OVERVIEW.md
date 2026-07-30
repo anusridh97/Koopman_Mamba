@@ -58,6 +58,19 @@ operator fit on chunks `0..c-1`. This is the streaming / language-modeling regim
 later chunks and a query of earlier ones. No supervised context/query boundary is
 ever handed to the model in Phase 1 or Phase 2 LM training.
 
+**Small-rank exact per-token alternative** (`ska_inverse_cholesky=True`):
+replaces the chunk-64 statistics + cross-chunk boundary term with exact
+per-token exclusive-prefix statistics processed via the inverse-Cholesky
+representation (`ska/inverse_cholesky.py`). Every token reads all earlier
+tokens *including t−1* (chunk-causal stats never see the current chunk, so a
+query is blind to up to 63 recent tokens), the whitened core runs as pure
+batched matmul against P = L⁻¹, and the spectral power iteration is dropped
+entirely — the symmetric √β keys make the whitened operator contractive by
+construction. Training semantics then coincide exactly with the per-token
+decode recurrence; the fused CUDA decode kernel for the same representation is
+vendored at `ska/csrc/small_rank_ext.cu`. Per-token stats are `(B,T,H,r,r)`,
+so this mode targets a smaller rank (r ≤ 32 recommended).
+
 ### 2c. Padding attention mask — what the Phase-2 encoder uses
 The retrieval encoder pools token hidden states into one embedding. Because the
 backbone is causal, sequences are **right-padded** and an `attention_mask` marks

@@ -44,6 +44,7 @@ class SKABlock(nn.Module):
             layerscale_init=cfg.ska_layerscale_init,
             out_proj_std=cfg.ska_out_proj_std,
             exact_intrachunk=getattr(cfg, 'ska_exact_intrachunk', False),
+            inverse_cholesky=getattr(cfg, 'ska_inverse_cholesky', False),
             # causal norm-clip (memo §6): None -> L2 (legacy). Resolve c=sqrt(rank)
             # when the flag is on and no explicit threshold is given.
             norm_clip_c=((cfg.ska_norm_clip_c or (cfg.ska_rank ** 0.5))

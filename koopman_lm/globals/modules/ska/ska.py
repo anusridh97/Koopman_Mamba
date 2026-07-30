@@ -321,10 +321,26 @@ class SKAModule(nn.Module):
                  gamma_learnable=False, gamma_value=1.0, gamma_clamp=None,
                  gamma_bounds=None,
                  layerscale=True, layerscale_init=1e-4, out_proj_std=0.02,
-                 exact_intrachunk=False, norm_clip_c=None):
+                 exact_intrachunk=False, inverse_cholesky=False,
+                 norm_clip_c=None):
         super().__init__()
         self.rank = rank
         self.exact_intrachunk = exact_intrachunk
+        # Small-rank exact per-token path (inverse-Cholesky representation).
+        # Supersedes both the chunked stats + cross-chunk boundary AND the
+        # factor-scan exact path; see inverse_cholesky.py. Per-token stats are
+        # (B,T,H,r,r), so this is a SMALL-rank mode.
+        self.inverse_cholesky = inverse_cholesky
+        if inverse_cholesky:
+            assert rank <= 64, (
+                f"inverse_cholesky path stores per-token (r x r) stats; "
+                f"rank={rank} > 64 is not supported (use rank <= 32).")
+            if rank > 32:
+                import warnings
+                warnings.warn(
+                    f"inverse_cholesky with rank={rank}: per-token stats are "
+                    "(B,T,H,r,r); rank <= 32 is recommended for memory.",
+                    RuntimeWarning)
         self.ridge_eps = ridge_eps
         self.power_K = power_K
         # None -> per-token L2 (legacy); float -> causal norm-clip threshold c
@@ -494,7 +510,26 @@ class SKAModule(nn.Module):
             # site -> no norm-based beta re-inference (the train/decode trap).
             x_n, v_w = symmetric_key_value(z_n, beta_f, v_f)
 
-            if self.exact_intrachunk:
+            if self.inverse_cholesky:
+                # EXACT per-token processing via the inverse-Cholesky
+                # representation (small rank). Every token reads the full
+                # exclusive prefix -- including t-1, which the chunked path
+                # never sees -- and the whitened core is pure batched matmul
+                # against P = L^{-1} with NO spectral power iteration (the
+                # symmetric sqrt(beta) keys make A_w contractive). This
+                # replaces chunk-64 stats + the cross-chunk boundary term.
+                from koopman_lm.globals.modules.ska.inverse_cholesky import (
+                    ska_exact_inverse_cholesky)
+                Y = ska_exact_inverse_cholesky(
+                    x_n, zq_n, v_w, self.ridge_eps, self.power_K)  # (B,T,H,P)
+                gamma_apply = self._resolve_gamma()
+                if isinstance(gamma_apply, float):
+                    if gamma_apply != 1.0:
+                        Y = Y * (gamma_apply ** self.power_K)
+                else:
+                    Y = Y * (gamma_apply ** self.power_K)
+                y_hat = Y
+            elif self.exact_intrachunk:
                 # EXACT per-token causal stats (across + within chunk). Fixes
                 # within-chunk staleness; reuses the same verified ska_core.
                 # Cost: B*T*H solves instead of B*nchunks*H.
@@ -553,6 +588,7 @@ class SKAModule(nn.Module):
             f'eta={eta_val:.4f}', f'gamma={gamma_val:.4f}',
             f'eta_bounds={self.eta_bounds}', f'gamma_bounds={self.gamma_bounds}',
             f'layerscale={self.layerscale}',
+            f'inverse_cholesky={self.inverse_cholesky}',
         ]
         if self.chunk_strategy == 'overlap':
             parts.append(f'overlap_fraction={self.overlap_fraction}')
