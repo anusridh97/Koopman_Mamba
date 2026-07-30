@@ -40,11 +40,32 @@ lmharness = [
 dev = [
     "pytest>=7.0",
 ]
+nas = [
+    "optuna>=4.1,<5",
+    "scikit-learn>=1.3,<2",
+    "alembic>=1.13",
+    "Mako>=1.2",
+    "psycopg[binary]>=3.1",
+]
 
 [project.scripts]
 koopman-table2 = "koopman_lm.experiments.table2:main"
 koopman-mqar-finetune = "koopman_lm.experiments.mqar_finetune:main"
 koopman-train = "koopman_lm.training.train:main"
+koopman-phase2-dry-run = "koopman_lm.experiments.phase2.dry_run:main"
+koopman-phase2-preflight = "koopman_lm.experiments.phase2.preflight:main"
+koopman-phase2-runtime = "koopman_lm.experiments.phase2.runtime_fingerprint:main"
+koopman-phase2-calibration = "koopman_lm.experiments.phase2.calibration:main"
+koopman-phase2-pilot = "koopman_lm.experiments.phase2.pilot:main"
+koopman-phase2-audit-pilot = "koopman_lm.experiments.phase2.pilot_audit:main"
+koopman-phase2-controls = "koopman_lm.experiments.phase2.controls:main"
+koopman-phase2-promotions = "koopman_lm.experiments.phase2.promotions:main"
+koopman-phase2-analyze = "koopman_lm.experiments.phase2.analysis:main"
+koopman-phase2-finalize-report = "koopman_lm.experiments.phase2.reporting_receipts:main"
+koopman-phase2-study = "koopman_lm.experiments.phase2.run_study:main"
+koopman-phase2-run-manifest = "koopman_lm.experiments.phase2.run_manifest:main"
+koopman-phase2-status = "koopman_lm.experiments.phase2.study_status:main"
+koopman-phase2-storage-receipt = "koopman_lm.experiments.phase2.storage_snapshot:main"
 
 [tool.setuptools.packages.find]
 include = ["koopman_lm", "koopman_lm.*"]

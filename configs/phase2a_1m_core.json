@@ -1,0 +1,40 @@
+{
+  "d_model": 64,
+  "n_layers": 16,
+  "vocab_size": 32000,
+  "d_state": 16,
+  "d_conv": 4,
+  "mamba_expand": 2,
+  "ska_n_heads": 4,
+  "ska_rank": 48,
+  "ska_ridge": 0.001,
+  "ska_scale": 1.5,
+  "ska_power_K": 2,
+  "ska_chunk_size": 64,
+  "ska_eta_learnable": true,
+  "ska_eta_value": 1.5,
+  "ska_gamma_learnable": true,
+  "ska_gamma_clamp": [
+    1.0,
+    1.5
+  ],
+  "ska_gamma_value": 1.0,
+  "ska_layerscale": true,
+  "ska_layerscale_init": 0.0001,
+  "ska_out_proj_std": 0.02,
+  "ska_short_conv": true,
+  "ska_short_conv_kernel": 8,
+  "ska_short_conv_gate_init": 0.01,
+  "ska_exact_intrachunk": false,
+  "ska_layer_indices": [
+    1,
+    5,
+    10,
+    14
+  ],
+  "mlp_expand": 2.667,
+  "mlp_spectral_norm": true,
+  "mlp_gated": false,
+  "max_seq_len": 2048,
+  "tie_embeddings": true
+}

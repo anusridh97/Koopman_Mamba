@@ -1,14 +1,14 @@
 ﻿"""Decode-vs-prefill parity (scaling plan Phase 0, test 2).
 
-CPU (pure-torch, runs here): the carried-factor decode path (stream stats,
+CPU (pure-torch, runs here): the carried-factor recurrent path (stream stats,
 carry L via rank-1 cholupdate, read with ska_core_given_L) must produce the
-SAME SKA operator output as a from-scratch prefill (fresh Cholesky via
-ska_core) over the identical accumulated statistics.
+same SKA operator output as a fresh factorization over identical accumulated
+statistics.
 
-GPU (written, not run here): the full KoopmanLM streaming decode (prefill +
-per-token step, which includes the Mamba2 backbone) must match the parallel
-forward to <= 1e-4 max abs diff across output tokens (the repo's own comment in
-recurrent._ska_step reports 4.8e-5).
+GPU (written, not run here): with strict chunk-causal training, full-model
+parallel and recurrent outputs are hard-gated only for the first continuation
+position after a chunk-aligned prompt. Within-chunk drift is expected and is a
+separate required Phase 2 diagnostic.
 """
 import dataclasses
 import math
@@ -75,14 +75,19 @@ def test_ska_operator_decode_equals_prefill():
 
 @pytest.mark.gpu
 def test_full_model_decode_prefill_parity():
-    """Full KoopmanLM: streaming decode == parallel forward (<= 1e-4)."""
+    """Chunk-boundary parallel output == recurrent decode (<= 1e-4)."""
     from koopman_lm.globals.config import build_config
     from koopman_lm.models.koopman_lm import KoopmanLM
     from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
 
     torch.manual_seed(0)
-    V, T, P = 512, 24, 12          # tiny vocab, short seq, prompt length P
-    cfg = dataclasses.replace(build_config("50m"), vocab_size=V, max_seq_len=64)
+    V, T, CS, P = 512, 24, 8, 16
+    cfg = dataclasses.replace(
+        build_config("50m"),
+        vocab_size=V,
+        max_seq_len=64,
+        ska_chunk_size=CS,
+    )
     model = KoopmanLM(cfg).cuda().float().eval()
     ids = torch.randint(0, V, (1, T), device="cuda")
 
@@ -92,10 +97,8 @@ def test_full_model_decode_prefill_parity():
 
         rec = RecurrentKoopmanLM(model)
         rec.prefill(ids[:, :P])                       # consumes tokens 0..P-1
-        max_err = 0.0
-        for t in range(P, T):
-            lg = rec.step(ids[:, t:t + 1])            # consume token t -> predict t+1
-            lg = lg[:, 0] if lg.dim() == 3 else lg
-            max_err = max(max_err, (lg - parallel[:, t]).abs().max().item())
+        assert P % CS == 0
+        lg = rec.step(ids[:, P:P + 1])  # first continuation at a chunk boundary
+        lg = lg[:, 0] if lg.dim() == 3 else lg
+        max_err = (lg - parallel[:, P]).abs().max().item()
     assert max_err < 1e-4, f"full-model decode-vs-prefill err {max_err:.2e}"
-

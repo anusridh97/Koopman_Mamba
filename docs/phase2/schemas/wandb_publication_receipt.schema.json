@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "echo.phase2.wandb_publication_receipt.schema.json",
+  "title": "Echo Phase 2a W&B publication receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "publication_status",
+    "analysis_artifact",
+    "storage_snapshot_receipt_artifact",
+    "wandb_payload_artifact",
+    "wandb_verification_artifact",
+    "study_identity",
+    "study_identity_sha256",
+    "wandb_report_url",
+    "wandb_run_count",
+    "wandb_run_ids",
+    "wandb_verified_by",
+    "wandb_verified_at_utc",
+    "publisher",
+    "published_at_utc"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "wandb_publication_receipt"
+    },
+    "publication_status": {
+      "const": "published"
+    },
+    "analysis_artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "storage_snapshot_receipt_artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "wandb_payload_artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "wandb_verification_artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "study_identity": {
+      "$ref": "#/$defs/studyIdentity"
+    },
+    "study_identity_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "wandb_report_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://wandb[.]ai/(?:[^/]+/)+reports/.+$"
+    },
+    "wandb_run_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "wandb_run_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "wandb_verified_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wandb_verified_at_utc": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1
+    },
+    "published_at_utc": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "sha256",
+        "byte_size"
+      ],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "studyIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "study_name",
+        "spec_hash",
+        "code_commit",
+        "code_dirty",
+        "data_hash",
+        "capability_hash"
+      ],
+      "properties": {
+        "study_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spec_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "code_commit": {
+          "type": "string",
+          "minLength": 7
+        },
+        "code_dirty": {
+          "const": false
+        },
+        "data_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "capability_hash": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

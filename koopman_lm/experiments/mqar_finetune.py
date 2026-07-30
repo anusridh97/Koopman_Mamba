@@ -174,7 +174,7 @@ def run_eval(model, seq_len, num_kv_pairs, vocab_size, eval_batch, device, step,
     if eval_seq_lens:
         print(f"  [step {step}] length-generalization eval (kv={num_kv_pairs}):")
         for T in eval_seq_lens:
-            if 4 * num_kv_pairs >= T:
+            if 4 * num_kv_pairs > T:
                 continue
             acc = eval_mqar(model, batch=eval_batch, seq_len=T,
                             num_kv_pairs=num_kv_pairs, vocab_size=vocab_size,

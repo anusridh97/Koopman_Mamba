@@ -115,7 +115,7 @@ def eval_mqar_grid(model, vocab_size, device, batch=64,
     for T in seq_lens:
         grid[T] = {}
         for P in kv_pairs:
-            if 4 * P >= T:                   # need 2P KV tokens + filler + 2P query tokens < T
+            if 4 * P > T:                    # equality is a valid exact-fit cell
                 continue
             grid[T][P] = eval_mqar(model, batch, T, P, vocab_size, device, seed=seed)
     return grid

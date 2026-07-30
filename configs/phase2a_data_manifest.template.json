@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "tokenizer": {
+    "name": "mistralai/Mistral-7B-v0.1",
+    "revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "vocab_size": 32000,
+    "fingerprint_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+  },
+  "training": {
+    "dataset": "FineWeb-Edu",
+    "revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "split": "train",
+    "document_range": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "packing": {
+      "sequence_length": 2048,
+      "eos_between_documents": true,
+      "drop_remainder": true
+    },
+    "stream": {
+      "sampler": "deterministic_global_sequence_index",
+      "sampler_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "shuffle_seed": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "shard_order_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "shard_order_manifest_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "epoch_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "repeat_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "worker_partitioning": "global_sequence_index modulo world_size after deterministic ordering"
+    },
+    "token_file": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "token_count": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+  },
+  "wikitext_validation": {
+    "dataset": "WikiText-103",
+    "revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "split": "validation",
+    "maximum_tokens": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "packing": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "token_file": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+  },
+  "mqar_screening": {
+    "generator": "pinned Zoology-compatible implementation",
+    "generator_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "oracle_fixture_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "sequence_lengths": [
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "key_value_pairs": [
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "samples_per_cell": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "seed": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "sample_ids_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "artifact_file": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "vocabulary": {
+      "size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "identity_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "token_map": {
+      "revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    }
+  },
+  "birdie_training_objectives": {
+    "mixer_semantics": "static Optuna mixture fixed for the whole trial",
+    "mixer_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "selective_copy": {
+      "generator": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "generator_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "seed_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "fixture_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "infilling": {
+      "generator": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "generator_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "seed_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "fixture_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "sample_identity_manifest_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "loss_normalization": "mean_over_supervised_tokens_then_weighted_objective_sum",
+    "equal_token_accounting": true
+  },
+  "auxiliary_artifacts": {
+    "tokenizer_fingerprint": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "training_shard_order_manifest": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "mqar_oracle_fixture": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "mqar_sample_ids": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "mqar_vocabulary_identity": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "mqar_token_map": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "birdie_selective_copy_fixture": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "birdie_infilling_fixture": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "birdie_sample_identity_manifest": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "byte_size": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    }
+  }
+}

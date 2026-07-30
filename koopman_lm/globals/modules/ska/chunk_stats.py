@@ -4,8 +4,10 @@ chunk_stats_torch.py -- PyTorch port of echo_jax.py::chunk_stats.
 Beta-gated, strictly-causal chunk statistics (Echo Eq.7-10, exclusive boundary).
 Replaces the leaky non-causal sequence-max normalization in the original
 ska.py. Every statistic at chunk c depends only on tokens in chunks < c
-(exclusive prefix) plus the cross-chunk boundary term, so chunk-causal
-training, prefix recurrence, and per-token decode all coincide.
+(exclusive prefix) plus the cross-chunk boundary term. Chunk-causal training
+therefore matches token-recurrent inference at chunk boundaries; within a
+chunk, training intentionally holds the prefix statistics fixed while
+token-recurrent inference incorporates each preceding token.
 
 Inputs (already projected + per-token L2-normalized by the caller):
   z  : (B,T,H,r)   key, right factor of G/M

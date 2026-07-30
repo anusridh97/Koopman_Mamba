@@ -28,3 +28,16 @@ mqar-*/
 koopman-*-fast/
 results*.json
 paper-out/
+phase2a-runs/
+phase2a-data/
+optuna*.db
+optuna*.sqlite*
+optuna*.journal
+
+# Logs
+*.log
+
+# uv lockfile — kept local for now. If the team standardizes on `uv` as the
+# pinned toolchain for reproduction runs, DELETE this line and commit uv.lock
+# (a committed lockfile is the pro-reproducibility choice for a fresh clone).
+uv.lock

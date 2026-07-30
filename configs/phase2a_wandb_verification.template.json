@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "kind": "phase2a_wandb_report_verification",
+  "verification_status": "verified",
+  "verification_method": "manual_wandb_report_run_set_audit",
+  "analysis_artifact": {
+    "filename": "phase2a_analysis.json",
+    "sha256": "REQUIRED_AFTER_FINAL_ANALYSIS",
+    "byte_size": "REQUIRED_AFTER_FINAL_ANALYSIS"
+  },
+  "study_identity": {
+    "study_name": "REQUIRED_AFTER_FINAL_ANALYSIS",
+    "spec_hash": "REQUIRED_AFTER_FINAL_ANALYSIS",
+    "code_commit": "REQUIRED_AFTER_FINAL_ANALYSIS",
+    "code_dirty": false,
+    "data_hash": "REQUIRED_AFTER_FINAL_ANALYSIS",
+    "capability_hash": "REQUIRED_AFTER_FINAL_ANALYSIS"
+  },
+  "wandb_report_url": "REQUIRED_AFTER_AUTHORIZED_PUBLICATION",
+  "wandb_run_count": "REQUIRED_AFTER_REPORT_AUDIT",
+  "wandb_run_ids": [
+    "REPLACE_WITH_SORTED_UNIQUE_RUN_IDS_FROM_OFFLINE_PAYLOAD"
+  ],
+  "verified_by": "REQUIRED_TEAM_IDENTITY",
+  "verified_at_utc": "REQUIRED_RFC3339_UTC_TIMESTAMP"
+}

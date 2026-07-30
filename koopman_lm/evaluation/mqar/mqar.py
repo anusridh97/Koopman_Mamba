@@ -1,17 +1,24 @@
-"""MQAR (Multi-Query Associative Recall), Arora et al. 2024 / Zoology setup.
+"""MQAR (Multi-Query Associative Recall), repo-local provisional generator.
 
 Token-id-level synthetic: keys and values live in disjoint halves of the vocab.
 A sequence lists key-value pairs, then re-presents a subset of keys as queries;
 the model must predict each queried key's value at the following position.
 
 The grid sweeps sequence length x number of KV pairs, the axes the scaling plan
-calls out (256/512/1K/2K x 4/8/16/32/64), to compare against published Mamba-2
-and Transformer numbers.
+calls out (256/512/1K/2K x 4/8/16/32/64). This implementation has not yet
+passed a pinned Zoology oracle test and must not be described as exact Zoology
+parity in scientific Phase 2 results.
 
 ``make_mqar`` is a pure generator (CPU-testable, no model). ``eval_mqar`` /
 ``eval_mqar_grid`` run a model (teacher-forced, argmax at the answer positions).
 """
 import torch
+
+
+def mqar_cell_fits(seq_len, num_kv_pairs, num_queries=None):
+    """Whether the repo-local KV and query blocks fit, including exact fits."""
+    num_queries = num_kv_pairs if num_queries is None else num_queries
+    return 2 * num_kv_pairs + 2 * num_queries <= seq_len
 
 
 def make_mqar(batch, seq_len, num_kv_pairs, vocab_size,
@@ -29,7 +36,7 @@ def make_mqar(batch, seq_len, num_kv_pairs, vocab_size,
     """
     num_queries = num_queries or num_kv_pairs
     assert vocab_size >= 4, "need room for disjoint key/value halves"
-    assert 2 * num_kv_pairs + 2 * num_queries <= seq_len, \
+    assert mqar_cell_fits(seq_len, num_kv_pairs, num_queries), \
         f"seq_len={seq_len} too short for {num_kv_pairs} pairs + {num_queries} queries"
     half = vocab_size // 2
     assert num_kv_pairs <= half, "not enough distinct keys/values for num_kv_pairs"
@@ -96,7 +103,7 @@ def eval_mqar_grid(model, vocab_size, device, batch=64,
     for T in seq_lens:
         grid[T] = {}
         for P in kv_pairs:
-            if 4 * P >= T:                   # need 2P KV tokens + filler + 2P query tokens < T
+            if not mqar_cell_fits(T, P):
                 continue
             grid[T][P] = eval_mqar(model, batch, T, P, vocab_size, device, seed=seed)
     return grid

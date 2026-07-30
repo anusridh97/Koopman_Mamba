@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "spec_hash": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+  "integration_commit": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+  "approved_data_manifest_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+  "capabilities": {
+    "paper_sequence_max_control": false,
+    "exclusive_cross_chunk_boundary": false,
+    "two_sided_whitening": false,
+    "beta_init_probability": false,
+    "qk_norm": false,
+    "chunk_size_effective_in_selected_backend": false,
+    "per_group_learning_rates": false,
+    "birdie_objective_mix": false,
+    "step_500_mqar_callback": false,
+    "zoology_mqar_oracle": false,
+    "exact_resume": false,
+    "phase1_diagnostics": false,
+    "effective_jacobian_rank_not_gradient_proxy": false,
+    "actual_parameter_and_flop_accounting": false,
+    "optimizer_group_audit": false,
+    "literal_requested_ridge_operator": false,
+    "environment_fingerprint": false,
+    "config_and_data_hashes": false
+  },
+  "approvals": {
+    "one_million_core_scale_definition": false,
+    "base_learning_rate": false,
+    "survivor_step_budget": false,
+    "tokenizer_and_data_protocol": false,
+    "distributed_storage_backend": false,
+    "qknorm_semantics": false,
+    "training_protocol": false,
+    "compute_budget": false
+  },
+  "approval_metadata": {
+    "approved_by": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "approved_at_utc": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+  },
+  "evidence": {
+    "correctness_report": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "resume_parity_report": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "data_validation_report": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "storage_concurrency_report": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "environment_lock": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    },
+    "pilot_report": {
+      "path": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"
+    }
+  }
+}

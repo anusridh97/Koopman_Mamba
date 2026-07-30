@@ -5,7 +5,7 @@ invariants are pure and tested here.
 """
 import pytest
 
-from koopman_lm.experiments.curricula import make_mqar
+from koopman_lm.evaluation.mqar import make_mqar, mqar_cell_fits
 
 pytestmark = pytest.mark.correctness
 
@@ -45,3 +45,12 @@ def test_make_mqar_kv1_is_niah():
         for b in range(4):
             sup = (labels[b] != -100).nonzero().flatten().tolist()
             assert len(sup) == 1                  # exactly one needle/answer
+
+
+def test_scaling_grid_exact_fit_256_by_64_is_valid():
+    assert mqar_cell_fits(seq_len=256, num_kv_pairs=64)
+    inputs, labels = make_mqar(
+        batch=2, seq_len=256, num_kv_pairs=64, vocab_size=128, seed=0
+    )
+    assert inputs.shape == labels.shape == (2, 256)
+    assert (labels != -100).sum().item() == 128

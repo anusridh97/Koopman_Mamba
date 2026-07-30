@@ -1,0 +1,549 @@
+{
+  "schema_version": 1,
+  "study_name": "echo-phase2a-1m-v1",
+  "status": "premerge_infrastructure_only",
+  "base_model_config": "configs/phase2a_1m_core.json",
+  "scale": {
+    "label": "1m-core",
+    "accounting": "non_embedding_trainable_parameters",
+    "target": 1000000,
+    "accepted_min": 800000,
+    "accepted_max": 1150000,
+    "note": "A real 32000-token tied embedding adds 2.048M parameters. Total model size is therefore approximately 2.90M-3.15M. Both counts must be logged."
+  },
+  "protocol": {
+    "tokenizer": "mistralai/Mistral-7B-v0.1",
+    "tokenizer_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "train_dataset": "FineWeb-Edu",
+    "train_dataset_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "validation_dataset": "WikiText-103",
+    "validation_dataset_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "sequence_length": 2048,
+    "effective_batch_sequences": 96,
+    "seed": 42,
+    "precision": "bf16",
+    "optimizer": "AdamW",
+    "adam_betas": [
+      0.9,
+      0.95
+    ],
+    "adam_epsilon": 1e-08,
+    "fused_adamw": true,
+    "base_learning_rate": 0.00001,
+    "learning_rate_status": "provisional_team_confirmation_required",
+    "weight_decay": 0.1,
+    "weight_decay_exclusions": [
+      "bias",
+      "normalization_scale",
+      "layerscale",
+      "scalar_gate",
+      "koopman_eigenvalue",
+      "gamma_eta"
+    ],
+    "warmup_fraction": 0.02,
+    "scheduler": "cosine",
+    "minimum_learning_rate_ratio": 0.0,
+    "max_gradient_norm": 1.0,
+    "world_size": 1,
+    "per_device_microbatch_sequences": 24,
+    "gradient_accumulation_steps": 4,
+    "gradient_checkpointing": false,
+    "data_stream": {
+      "sampler": "deterministic_global_sequence_index",
+      "sampler_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "shuffle_seed": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "shard_order_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "shard_order_manifest_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "epoch_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "repeat_policy": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "worker_partitioning": "global_sequence_index modulo world_size after deterministic ordering"
+    },
+    "loss_normalization": "mean_over_supervised_tokens_then_weighted_objective_sum",
+    "optimizer_step_order": "clip_then_optimizer_then_scheduler",
+    "training_protocol_status": "provisional_team_confirmation_required"
+  },
+  "fidelity": {
+    "prune_step": 500,
+    "max_steps": 6000,
+    "checkpoint_steps": [
+      500,
+      2000,
+      6000
+    ],
+    "pruner": "completed_trial_median",
+    "prune_metric": "mqar_accuracy",
+    "minimum_completed_trials": 20,
+    "comparison_scope": "same_fidelity_and_architecture_mode"
+  },
+  "study": {
+    "sampler": "TPESampler",
+    "sampler_options": {
+      "multivariate": true,
+      "group": true
+    },
+    "sampler_seed": 42,
+    "requested_trials": 2000,
+    "controller_objective": {
+      "name": "mqar_accuracy",
+      "direction": "maximize",
+      "reason": "Optuna native pruning is single-objective; WikiText PPL is retained as a user attribute and artifact."
+    },
+    "analysis_objectives": [
+      {
+        "name": "mqar_accuracy",
+        "direction": "maximize"
+      },
+      {
+        "name": "wikitext_ppl",
+        "direction": "minimize"
+      }
+    ],
+    "promotion_seeds": [
+      42,
+      43,
+      44
+    ],
+    "compute_budget": {
+      "maximum_total_gpu_hours": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "maximum_full_trial_gpu_hours": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "maximum_concurrent_trials": 16,
+      "required_gpu_type": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+      "failure_retry_reserve_fraction": 0.2,
+      "status": "provisional_team_confirmation_required"
+    }
+  },
+  "architecture_modes": {
+    "updated_sweep": {
+      "searched": true,
+      "description": "The Scaling Echo updated beta-gated, LayerScale, short-conv architecture. This is the only mode in which beta_init is meaningful."
+    },
+    "paper_control": {
+      "searched": false,
+      "description": "Paper-semantics control at the 1M-core scale: paper_sequence_max normalization, no beta gate, two-sided whitening, K=2, epsilon=1e-3, with the explicitly frozen 25% middle-clustered layout below. This is not a literal Table 4 model-size/topology reproduction. Schedule separately at matched seeds."
+    },
+    "mamba_only": {
+      "searched": false,
+      "description": "No-SKA control with the same 16-layer 1M-core backbone and Koopman MLP channel mixers. Schedule separately at matched seeds."
+    }
+  },
+  "axes": {
+    "ska_rank": {
+      "kind": "categorical",
+      "values": [
+        32,
+        48,
+        64,
+        96,
+        128
+      ]
+    },
+    "ska_fraction": {
+      "kind": "categorical",
+      "values": [
+        0.15,
+        0.2,
+        0.25,
+        0.33
+      ]
+    },
+    "ska_placement": {
+      "kind": "categorical",
+      "values": [
+        "uniform",
+        "late_biased",
+        "middle_clustered"
+      ]
+    },
+    "ska_chunk_size": {
+      "kind": "categorical",
+      "values": [
+        32,
+        64,
+        96,
+        128
+      ]
+    },
+    "ska_ridge": {
+      "kind": "categorical",
+      "values": [
+        0.0001,
+        0.001,
+        0.01
+      ]
+    },
+    "beta_init_probability": {
+      "kind": "categorical",
+      "values": [
+        0.1,
+        0.3,
+        0.5
+      ]
+    },
+    "layerscale_init": {
+      "kind": "categorical",
+      "values": [
+        0.00001,
+        0.0001,
+        0.001
+      ]
+    },
+    "short_conv_kernel": {
+      "kind": "categorical",
+      "values": [
+        4,
+        8,
+        16
+      ]
+    },
+    "short_conv_gate_init": {
+      "kind": "categorical",
+      "values": [
+        0.001,
+        0.01,
+        0.1
+      ]
+    },
+    "qk_norm": {
+      "kind": "categorical",
+      "values": [
+        false,
+        true
+      ]
+    },
+    "ska_projection_lr_multiplier": {
+      "kind": "categorical",
+      "values": [
+        2.5,
+        5.0,
+        10.0
+      ],
+      "note": "Provisional log-scale grid centered on the Scaling Echo reference ratio of 5x base."
+    },
+    "gamma_eta_lr_multiplier": {
+      "kind": "categorical",
+      "values": [
+        5,
+        10,
+        25,
+        50
+      ]
+    },
+    "koopman_eigen_lr_multiplier": {
+      "kind": "categorical",
+      "values": [
+        5,
+        10,
+        20
+      ],
+      "note": "Provisional grid centered on the Scaling Echo reference ratio of 10x base."
+    },
+    "norm_lr_multiplier": {
+      "kind": "categorical",
+      "values": [
+        0.25,
+        0.5,
+        1.0
+      ],
+      "note": "Provisional grid centered on the Scaling Echo reference ratio of 0.5x base."
+    },
+    "mlp_lr_multiplier": {
+      "kind": "categorical",
+      "values": [
+        0.75,
+        1.5,
+        3.0
+      ],
+      "note": "Provisional grid centered on the Scaling Echo reference ratio of 1.5x base."
+    },
+    "backbone_lr_multiplier": {
+      "kind": "categorical",
+      "values": [
+        0.5,
+        1.0,
+        2.0
+      ],
+      "note": "Applies to Mamba parameters. DeltaNet uses this grid only in a future arm that actually contains DeltaNet."
+    },
+    "objective_arm": {
+      "kind": "categorical",
+      "values": [
+        "next_token_only",
+        "birdie_mix"
+      ]
+    },
+    "birdie_retrieval_fraction": {
+      "kind": "categorical",
+      "values": [
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5
+      ],
+      "active_when": {
+        "objective_arm": "birdie_mix"
+      }
+    },
+    "birdie_copy_share": {
+      "kind": "categorical",
+      "values": [
+        0.25,
+        0.5,
+        0.75
+      ],
+      "active_when": {
+        "objective_arm": "birdie_mix"
+      }
+    }
+  },
+  "fixed_controls": [
+    {
+      "name": "paper_control",
+      "architecture_mode": "paper_control",
+      "ska_rank": 48,
+      "ska_fraction": 0.25,
+      "ska_placement": "middle_clustered",
+      "ska_chunk_size": 64,
+      "ska_ridge": 0.001,
+      "qk_norm": false,
+      "objective_arm": "next_token_only"
+    },
+    {
+      "name": "updated_default_control",
+      "architecture_mode": "updated_sweep",
+      "ska_rank": 48,
+      "ska_fraction": 0.25,
+      "ska_placement": "uniform",
+      "ska_chunk_size": 64,
+      "ska_ridge": 0.001,
+      "beta_init_probability": 0.3,
+      "layerscale_init": 0.0001,
+      "short_conv_kernel": 8,
+      "short_conv_gate_init": 0.01,
+      "qk_norm": false,
+      "objective_arm": "next_token_only"
+    },
+    {
+      "name": "mamba_only_control",
+      "architecture_mode": "mamba_only",
+      "ska_fraction": 0.0,
+      "objective_arm": "next_token_only"
+    }
+  ],
+  "screen_required_diagnostics": [
+    "spectral_radius_raw_preclamp",
+    "spectral_radius_normalized_pre_gamma",
+    "spectral_radius_applied_post_gamma",
+    "clamp_factor_mean",
+    "clamp_fraction",
+    "spectral_gap_mean",
+    "spectral_gap_max",
+    "lambda_min_gram",
+    "ridge_condition_number",
+    "ridge_escalation_count",
+    "ridge_requested",
+    "effective_ridge_min",
+    "effective_ridge_max",
+    "beta_mean",
+    "beta_saturation_fraction",
+    "layerscale_magnitude_mean",
+    "ska_branch_norm_ratio",
+    "ska_gradient_to_mamba_ratio",
+    "effective_jacobian_rank",
+    "step_time_ms",
+    "peak_memory_bytes"
+  ],
+  "required_diagnostics": [
+    "spectral_radius_raw_preclamp",
+    "spectral_radius_normalized_pre_gamma",
+    "spectral_radius_applied_post_gamma",
+    "clamp_factor_mean",
+    "clamp_fraction",
+    "spectral_gap_mean",
+    "spectral_gap_max",
+    "lambda_min_gram",
+    "ridge_condition_number",
+    "ridge_escalation_count",
+    "ridge_requested",
+    "effective_ridge_min",
+    "effective_ridge_max",
+    "beta_mean",
+    "beta_saturation_fraction",
+    "layerscale_magnitude_mean",
+    "ska_branch_norm_ratio",
+    "ska_gradient_to_mamba_ratio",
+    "effective_jacobian_rank",
+    "step_time_ms",
+    "peak_memory_bytes",
+    "ppl_full",
+    "ppl_ska_zero",
+    "ppl_mamba_zero",
+    "ppl_both_zero",
+    "ska_zero_ppl_delta",
+    "state_rebuild_decode_prefill_max_abs_error",
+    "chunk_boundary_parallel_decode_max_abs_error",
+    "within_chunk_parallel_decode_drift_max_abs_error"
+  ],
+  "diagnostic_structure": {
+    "per_layer_head_metrics": [
+      "spectral_radius_raw_preclamp_mean",
+      "spectral_radius_raw_preclamp_max",
+      "spectral_radius_normalized_pre_gamma_mean",
+      "spectral_radius_normalized_pre_gamma_max",
+      "spectral_radius_applied_post_gamma_mean",
+      "spectral_radius_applied_post_gamma_max",
+      "clamp_factor_mean",
+      "clamp_fraction",
+      "spectral_gap_mean",
+      "spectral_gap_max",
+      "lambda_min_gram_mean",
+      "lambda_min_gram_min",
+      "ridge_condition_number_mean",
+      "ridge_condition_number_max",
+      "ridge_escalation_count",
+      "effective_ridge_min",
+      "effective_ridge_max"
+    ],
+    "per_layer_metrics": [
+      "residual_norm_ratio",
+      "gradient_norm_ratio",
+      "effective_jacobian_rank",
+      "beta_mean",
+      "beta_saturation_fraction",
+      "layerscale_magnitude_mean"
+    ]
+  },
+  "hard_failure_rules": {
+    "nonfinite_loss": true,
+    "nonfinite_diagnostic": true,
+    "normalized_pre_gamma_spectral_radius_max": 1.0001,
+    "lambda_min_over_ridge_min": 0.999,
+    "state_rebuild_decode_prefill_max_abs_error": 0.0001,
+    "chunk_boundary_parallel_decode_max_abs_error": 0.0001,
+    "parameter_estimator_relative_error_max": 0.05,
+    "flop_estimator_relative_error_max": 0.15,
+    "missing_required_metric": true
+  },
+  "required_capabilities": [
+    "paper_sequence_max_control",
+    "exclusive_cross_chunk_boundary",
+    "two_sided_whitening",
+    "beta_init_probability",
+    "qk_norm",
+    "chunk_size_effective_in_selected_backend",
+    "per_group_learning_rates",
+    "birdie_objective_mix",
+    "step_500_mqar_callback",
+    "zoology_mqar_oracle",
+    "exact_resume",
+    "phase1_diagnostics",
+    "effective_jacobian_rank_not_gradient_proxy",
+    "actual_parameter_and_flop_accounting",
+    "optimizer_group_audit",
+    "literal_requested_ridge_operator",
+    "environment_fingerprint",
+    "config_and_data_hashes"
+  ],
+  "required_approvals": [
+    "one_million_core_scale_definition",
+    "base_learning_rate",
+    "survivor_step_budget",
+    "tokenizer_and_data_protocol",
+    "distributed_storage_backend",
+    "qknorm_semantics",
+    "training_protocol",
+    "compute_budget"
+  ],
+  "required_evidence_checks": {
+    "correctness_report": [
+      "appendix_f_paper_mode_parity",
+      "exclusive_cross_chunk_boundary",
+      "two_sided_whitening",
+      "rank_96_decode_parity",
+      "rank_128_decode_parity",
+      "causal_no_future_leak",
+      "cholesky_update_tolerance",
+      "newton_schulz_vs_cholesky_bf16",
+      "spectral_stability_500_fp32_cases",
+      "spectral_stability_500_bf16_cases",
+      "beta_initialization_probabilities",
+      "mode_aware_phase1_diagnostics",
+      "state_rebuild_decode_prefill_parity",
+      "chunk_boundary_parallel_decode_parity",
+      "within_chunk_parallel_decode_drift_reported",
+      "literal_requested_ridge_reaches_operator",
+      "ridge_escalations_explicitly_counted",
+      "diagnostic_overhead_below_3_percent",
+      "chunk_size_reaches_active_backend",
+      "actual_parameter_and_flop_accounting",
+      "optimizer_coverage_exclusivity_digest"
+    ],
+    "resume_parity_report": [
+      "interrupted_vs_uninterrupted_state_parity",
+      "optimizer_scheduler_rng_data_offset_restored",
+      "identical_manifest_first_1000_steps"
+    ],
+    "data_validation_report": [
+      "tokenizer_revision_and_checksum",
+      "fineweb_revision_range_and_checksum",
+      "wikitext_revision_subset_and_checksum",
+      "zoology_mqar_oracle_fixture",
+      "all_20_mqar_cells_frozen",
+      "frozen_train_wikitext_mqar_artifact_hashes",
+      "mqar_vocabulary_and_token_map_identity",
+      "birdie_selective_copy_fixture",
+      "birdie_infilling_fixture",
+      "objective_loss_normalization_and_token_accounting"
+    ],
+    "storage_concurrency_report": [
+      "approved_backend_parallel_worker_smoke",
+      "optuna_report_prune_integration",
+      "atomic_duplicate_claim",
+      "mixed_runner_global_concurrency_ceiling",
+      "stale_claim_recovery_reuses_checkpoint",
+      "fixed_manifest_excluded_from_optuna_recovery",
+      "recovery_rows_excluded_from_fresh_trial_quota",
+      "hard_preemption_heartbeat_gpu_accounting",
+      "terminal_claim_not_reclaimed",
+      "terminal_summary_claim_binding",
+      "systemic_failure_releases_claim"
+    ],
+    "pilot_report": [
+      "fixed_matrix_coverage",
+      "all_planned_screen_arms_complete",
+      "required_full_survivors_complete",
+      "trial_hash_integrity",
+      "validated_step_and_final_metrics",
+      "validated_model_optimizer_gpu_accounting",
+      "checkpoint_resume_provenance",
+      "wandb_run_crosslinks"
+    ]
+  },
+  "storage": {
+    "backend": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
+    "shared_sqlite_allowed": false,
+    "claim_stale_after_seconds": 600,
+    "acceptable_backends": [
+      "postgresql",
+      "scg_validated_journal_storage"
+    ]
+  },
+  "outputs": [
+    "trial_manifest.json",
+    "model_config.json",
+    "metrics/step_500.json",
+    "metrics/final.json",
+    "analysis_report.json",
+    "pareto_front.json",
+    "fanova_importance.json",
+    "promotion_shortlist.json",
+    "seeded_stability.json",
+    "confirmed_promotion_shortlist.json",
+    "falsified_hypotheses.json",
+    "retrospective_control_false_pruning_risk.json",
+    "wandb_report_payload.json",
+    "storage_snapshot_receipt.json",
+    "reviewed_falsified_hypotheses.json",
+    "wandb_publication_receipt.json"
+  ]
+}
