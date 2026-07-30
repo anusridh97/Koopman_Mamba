@@ -61,11 +61,8 @@ koopman-phase2-audit-pilot = "koopman_lm.experiments.phase2.pilot_audit:main"
 koopman-phase2-controls = "koopman_lm.experiments.phase2.controls:main"
 koopman-phase2-promotions = "koopman_lm.experiments.phase2.promotions:main"
 koopman-phase2-analyze = "koopman_lm.experiments.phase2.analysis:main"
-koopman-phase2-finalize-report = "koopman_lm.experiments.phase2.reporting_receipts:main"
 koopman-phase2-study = "koopman_lm.experiments.phase2.run_study:main"
 koopman-phase2-run-manifest = "koopman_lm.experiments.phase2.run_manifest:main"
-koopman-phase2-status = "koopman_lm.experiments.phase2.study_status:main"
-koopman-phase2-storage-receipt = "koopman_lm.experiments.phase2.storage_snapshot:main"
 
 [tool.setuptools.packages.find]
 include = ["koopman_lm", "koopman_lm.*"]

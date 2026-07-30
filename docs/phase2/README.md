@@ -17,12 +17,10 @@ Machine-readable inputs:
 - `configs/phase2a_search.json`
 - `configs/phase2a_capabilities.template.json`
 - `configs/phase2a_data_manifest.template.json`
-- `configs/phase2a_hypothesis_decisions.template.json`
-- `configs/phase2a_wandb_verification.template.json`
 
-Machine-readable output contracts live in `docs/phase2/schemas/`, including
-`analysis_report.schema.json` for the aggregate post-run artifact and
-`wandb_report_verification.schema.json` for the required publication audit.
+The executable validators in `koopman_lm/experiments/phase2/results.py`,
+`preflight.py`, and `analysis.py` are the current output contracts. Standalone
+JSON Schemas are deferred until the architecture and metric payload are final.
 
 Portable tools:
 
@@ -89,28 +87,6 @@ koopman-phase2-analyze \
   --shortlist-cap 10 \
   --output "$PHASE2_OUTPUT_ROOT/analysis/phase2a_analysis.json" \
   --artifact-dir "$PHASE2_OUTPUT_ROOT/analysis/artifacts"
-
-# After the storage snapshot, scientist review, and a verified W&B publication
-koopman-phase2-finalize-report \
-  --analysis "$PHASE2_OUTPUT_ROOT/analysis/phase2a_analysis.json" \
-  --decisions /path/to/reviewed_hypothesis_decisions.json \
-  --wandb-payload "$PHASE2_OUTPUT_ROOT/analysis/artifacts/wandb_report_payload.json" \
-  --storage-snapshot-receipt "$PHASE2_OUTPUT_ROOT/analysis/storage_snapshot_receipt.json" \
-  --wandb-verification /path/to/final_wandb_report_verification.json \
-  --reviewer TEAM_IDENTITY \
-  --reviewed-at-utc 2026-01-01T00:00:00Z \
-  --publisher TEAM_IDENTITY \
-  --published-at-utc 2026-01-01T00:05:00Z \
-  --output-dir "$PHASE2_OUTPUT_ROOT/analysis/reporting-receipts-v1"
-
-# Inspect target/concurrency/GPU-hour state before each scientific array batch
-koopman-phase2-status \
-  --spec configs/phase2a_search.json \
-  --storage "$PHASE2_STORAGE_URL" \
-  --study-name "$PHASE2_STUDY_NAME" \
-  --capabilities /path/to/final_capabilities.json \
-  --data-manifest /path/to/final_data_manifest.json \
-  --output-root "$PHASE2_OUTPUT_ROOT"
 ```
 
 The dry-run, calibration, and pilot materializers do not launch training. That
@@ -143,11 +119,16 @@ When both results and an Optuna study are supplied, it joins trial summaries to
 their Optuna parameters strictly by trial hash; trial-number-only fallback is
 rejected. Health evidence from the trial summary remains authoritative.
 Publishing remains an explicitly authorized manual action. The finalization
-tool records the reviewed hypothesis decisions and the published W&B URL in
-hash-bound receipts; those receipts are required before Phase 2a is considered
-reported.
+workflow should be chosen after the pilot, when the team has settled the
+canonical architecture and reporting process.
 Promotion requires explicit passing stability evidence by default. The
 `--allow-missing-stability-evidence` escape hatch is only for exploratory
 preparation reports and labels missing evidence `not_recorded`.
 All scientific analysis inputs must carry the same manifest-derived study
 identity; trial-number-only joins and cross-study result mixing are rejected.
+
+Deferred until after the pilot: an automatic next-batch planner, Optuna storage
+snapshot receipts, reviewed-hypothesis receipts, and W&B publication
+verification receipts. These are end-of-study operational hardening, not part
+of the initial 1M sweep or its required Pareto/fANOVA analysis, and can be
+reintroduced once the canonical architecture and team workflow are fixed.

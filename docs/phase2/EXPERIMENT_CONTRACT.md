@@ -258,25 +258,14 @@ Every trial directory contains:
 - W&B run ID, Optuna trial ID, exit status, and structured failure reason;
 - checkpoint only for controls, survivors, or promoted configurations.
 
-Study-level outputs are the Optuna storage snapshot plus its quiescence-bound
-receipt, an offline W&B publication payload, Pareto table, per-objective fANOVA
-results, control false-pruning-risk report, promotion manifest, reviewed
-falsified-hypotheses receipt, a W&B report-verification artifact, and W&B
-publication receipt. Final reporting requires the storage receipt to bind the
-exact analysis bytes and the W&B verification to bind the same study/analysis,
-the published report URL, and exactly the run-ID set referenced by the offline
-payload. The actual W&B upload remains a separate authorized publication step;
-tooling records and validates its evidence but does not perform a network
-write. At finalization, the ledger/status artifacts are re-hashed and their
-identity chain is checked, and the live terminal claim-file hash set must
-exactly equal the analysis index. The storage receipt's live Optuna query and
-same-backend snapshot provenance remain operator-attested because the
-standard-library-only finalizer has neither database credentials nor drivers.
-The snapshot receipt records exactly one completion disposition: the 2,000
-approved fresh sampled configurations were reached, or an identified lead
-explicitly approved an early stop after the frozen GPU-hour budget fell below
-one full-trial reservation. Concurrent target-guard rows remain visible in
-Optuna and in the receipt but never count toward the approved fresh quota.
+Study-level outputs are the offline W&B payload, Pareto table, per-objective
+fANOVA results, control false-pruning-risk report, promotion manifest, seeded
+stability report, confirmed shortlist, and falsified-hypotheses scaffold.
+Optuna storage snapshot receipts, W&B publication-verification receipts,
+reviewed-hypothesis receipts, and an automatic next-batch planner are deferred
+until after the pilot. They are operational reporting hardening rather than
+inputs to the initial 1M sweep. Concurrent target-guard rows remain visible in
+Optuna but never count toward the approved fresh quota.
 Checkpoints, datasets, token caches, databases, and Slurm logs remain untracked.
 
 ## Promotion

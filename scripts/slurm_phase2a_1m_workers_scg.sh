@@ -9,12 +9,12 @@
 #   export PHASE2_STORAGE_URL='postgresql+psycopg://...'
 #   export PHASE2_STUDY_NAME=echo-phase2a-1m-v1
 #   export PHASE2_OUTPUT_ROOT=/labs/mpsnyder/cody1212/phase2a-runs
-#   scripts/slurm_phase2a_submit_next_scg.sh
+#   sbatch --array=0-15 scripts/slurm_phase2a_1m_workers_scg.sh
 #
 # Do not use this study-worker script for the fixed pilot; pilot manifests run
-# through koopman-phase2-run-manifest in a separate allocation/array. Submit
-# scientific study batches through the submit-next wrapper so target,
-# concurrency, recovery, and GPU-hour state are checked before every batch.
+# through koopman-phase2-run-manifest in a separate allocation/array. Before
+# each scientific batch, inspect Optuna and the shared claim ledger; keep the
+# array no larger than maximum_concurrent_trials.
 
 #SBATCH --job-name=echo-p2a-1m
 #SBATCH --account=mpsnyder

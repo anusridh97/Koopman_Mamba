@@ -154,8 +154,8 @@ advance it.
 
 ## Result mapping
 
-Output follows `docs/phase2/schemas/step_metrics.schema.json` and is additionally
-checked by `validate_step_metrics`.
+Output is checked by `validate_step_metrics`. A standalone JSON Schema is
+intentionally deferred until the architecture and metric payload are final.
 
 Every healthy screen/final payload contains `model_accounting`,
 `optimizer_group_audit`, `gpu_seconds_actual`, and the canonical

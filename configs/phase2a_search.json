@@ -541,9 +541,6 @@
     "confirmed_promotion_shortlist.json",
     "falsified_hypotheses.json",
     "retrospective_control_false_pruning_risk.json",
-    "wandb_report_payload.json",
-    "storage_snapshot_receipt.json",
-    "reviewed_falsified_hypotheses.json",
-    "wandb_publication_receipt.json"
+    "wandb_report_payload.json"
   ]
 }

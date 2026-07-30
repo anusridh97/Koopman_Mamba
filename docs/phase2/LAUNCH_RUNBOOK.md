@@ -71,12 +71,12 @@ koopman-phase2-preflight \
 The canonical data-manifest hash is distinct from each artifact checksum inside
 the manifest and from the raw-byte checksum of an evidence report.
 
-Each evidence report follows
-`docs/phase2/schemas/evidence_report.schema.json`: schema version 1,
-`status=pass`, the exact evidence type, integration commit, spec hash, and all
-required named checks. Data-validation and pilot reports also carry the
-approved canonical data-manifest hash. The capability manifest stores each
-report's absolute path and raw-file SHA-256; existence alone is never enough.
+Each evidence report uses schema version 1, `status=pass`, the exact evidence
+type, integration commit, spec hash, and all required named checks enforced by
+preflight. Data-validation and pilot reports also carry the approved canonical
+data-manifest hash. The capability manifest stores each report's absolute path
+and raw-file SHA-256; existence alone is never enough. Standalone JSON Schemas
+are deferred until the architecture and payloads are final.
 
 ## 3. Freeze and verify the worker runtime
 
@@ -300,30 +300,13 @@ koopman-phase2-study \
   -- koopman-phase2-trial-worker
 ```
 
-For the full study, submit one bounded batch at a time rather than hard-coding
-125 arrays:
-
-```bash
-koopman-phase2-status \
-  --spec configs/phase2a_search.json \
-  --storage "$PHASE2_STORAGE_URL" \
-  --study-name "$PHASE2_STUDY_NAME" \
-  --capabilities path/to/final_capabilities.json \
-  --data-manifest path/to/final_data_manifest.json \
-  --output-root "$PHASE2_OUTPUT_ROOT"
-
-scripts/slurm_phase2a_submit_next_scg.sh
-```
-
-The status command joins Optuna state with content-addressed claims and reports
-terminal actual GPU-hours, active full-trial reservations, remaining target,
-the number of tail-concurrency target-guard rows, and the safe next array
-width. Target-guard rows are retained as Optuna audit evidence but are not
-counted among the 2,000 approved fresh sampled configurations. The submit-next
-wrapper refuses to submit when
-the target, concurrency ceiling, or remaining unreserved GPU-hours hold the
-study. The controller repeats the reservation check under a shared atomic lock,
-so a planner/submission race cannot overspend the approved ceiling.
+For the full study, submit bounded Slurm-array batches no larger than
+`study.compute_budget.maximum_concurrent_trials`. Before each batch, inspect
+the Optuna dashboard and the claim files under
+`$PHASE2_OUTPUT_ROOT/.phase2_claims/`; stop when the approved fresh-trial target
+or GPU-hour ceiling is reached. The controller repeats the reservation check
+under a shared atomic lock, so concurrent workers cannot overspend the
+approved ceiling.
 
 The finalized `koopman-phase2-trial-worker` adapter must accept:
 
@@ -436,114 +419,12 @@ standard deviation, range, and descriptive 95% interval.
 Promote approximately 8-12 diverse candidates plus controls to Phase 2b at 5M
 and 20M. Do not infer a single winner from a scalarized score.
 
-After the final analysis, stop all workers and snapshot the Optuna backend.
-First save a quiescent status artifact:
-
-```bash
-koopman-phase2-status \
-  --spec configs/phase2a_search.json \
-  --storage "$PHASE2_STORAGE_URL" \
-  --study-name "$PHASE2_STUDY_NAME" \
-  --capabilities path/to/final_capabilities.json \
-  --data-manifest path/to/final_data_manifest.json \
-  --output-root "$PHASE2_OUTPUT_ROOT" \
-  --output "$PHASE2_OUTPUT_ROOT/analysis/storage_snapshot_status.json"
-```
-
-For PostgreSQL, create a backend-native custom-format dump with `pg_dump`
-using a standard `postgresql://` equivalent of the approved
-`postgresql+psycopg://` URL. Do not commit the URL or credentials. For
-JournalStorage, keep all workers stopped and archive the complete validated
-journal directory into one regular snapshot file. Then issue an immutable
-receipt:
-
-```bash
-koopman-phase2-storage-receipt \
-  --spec configs/phase2a_search.json \
-  --snapshot /absolute/path/to/optuna-storage.snapshot \
-  --backend postgresql \
-  --created-by TEAM_IDENTITY \
-  --created-at-utc 2026-01-01T00:00:00Z \
-  --status-evidence "$PHASE2_OUTPUT_ROOT/analysis/storage_snapshot_status.json" \
-  --analysis "$PHASE2_OUTPUT_ROOT/analysis/phase2a_analysis.json" \
-  --output "$PHASE2_OUTPUT_ROOT/analysis/storage_snapshot_receipt.json"
-```
-
-The receipt command never performs the backup. It rejects a non-scientific
-spec, backend mismatch, running/recovery claims, active reservations, budget
-violations, changing/empty files, or an existing output, and binds the
-snapshot, final analysis, status, and immutable shared-ledger hashes to the
-exact study/spec/storage-instance identity. It also runs `pg_restore --list`
-for PostgreSQL or a safe tar inventory for JournalStorage. Its normal
-completion disposition is `requested_trial_target_reached`.
-
-This is an operator-attested same-backend snapshot receipt, not an
-independent restore proof: the command cannot atomically lock a remote
-database or prove that a separately supplied dump came from that locator.
-Keep every worker stopped from status capture through backup completion, use
-the exact approved storage URL, and perform a restore drill before Phase 2b.
-
-If the frozen total GPU-hour budget genuinely has less than one full-trial
-reservation remaining before 2,000 approved fresh trials, stop all workers,
-rerun status and final analysis, and obtain an explicit lead decision. The
-same receipt command may then add both:
-
-```bash
-  --budget-exhausted-approved-by TEAM_LEAD_IDENTITY \
-  --budget-exhausted-approved-at-utc 2026-01-01T00:00:00Z
-```
-
-That produces the alternative
-`approved_budget_exhausted_early_stop` disposition. Both approval arguments
-are required together and are rejected when the target was reached, when the
-remaining budget can still reserve a full trial, or when any claim/Optuna row
-is nonterminal. Do not use this approval to waive a budget violation,
-readiness failure, or concurrency hold.
-
 `wandb_report_payload.json` is an offline publication payload, not a published
-W&B report. A lead or a future publisher must create the report and then copy
-`configs/phase2a_wandb_verification.template.json`. Populate its exact analysis
-artifact identity and study identity, the final report URL, and the sorted
-unique union of every nonempty `wandb_run_id` referenced by the offline
-payload's tables. A named auditor must verify that the published report
-contains exactly that run set—no missing or unrelated runs—and record the
-verification identity and UTC timestamp. The finalizer recomputes the expected
-set from the offline payload and rejects any mismatch.
-
-Copy `configs/phase2a_hypothesis_decisions.template.json`, review all ten
-hypotheses, and replace each placeholder with a rationale and one or more
-claim-bound trial hashes from the final analysis index. After an authorized
-manual W&B publication and run-set verification, create both completion
-receipts:
-
-```bash
-koopman-phase2-finalize-report \
-  --analysis "$PHASE2_OUTPUT_ROOT/analysis/phase2a_analysis.json" \
-  --decisions /absolute/path/reviewed_hypothesis_decisions.json \
-  --wandb-payload "$PHASE2_OUTPUT_ROOT/analysis/artifacts/wandb_report_payload.json" \
-  --storage-snapshot-receipt "$PHASE2_OUTPUT_ROOT/analysis/storage_snapshot_receipt.json" \
-  --wandb-verification /absolute/path/final_wandb_report_verification.json \
-  --reviewer TEAM_IDENTITY \
-  --reviewed-at-utc 2026-01-01T00:00:00Z \
-  --publisher TEAM_IDENTITY \
-  --published-at-utc 2026-01-01T00:05:00Z \
-  --output-dir "$PHASE2_OUTPUT_ROOT/analysis/reporting-receipts-v1"
-```
-
-This command performs no network write. It requires successful, nonempty
-study-bound MQAR/PPL fANOVA in every declared conditional view, successful
-global capacity-adjusted fANOVA, exact analysis/payload equality, a clean
-frozen code identity, all ten review decisions, evidence hashes present in the
-claim-bound analysis index, a completed storage receipt bound to the exact
-analysis path/size/SHA-256, and a W&B verification artifact bound to the same
-analysis and study identity. It re-hashes the receipt's ledger and status
-artifacts, checks their storage-instance/ledger hashes, and requires the
-currently readable terminal claim-file hash set to equal the analysis index.
-This is a second local evidence check, not a fresh database query: the
-receipt operator remains responsible for running status against the approved
-live Optuna locator and for preserving quiescence through the snapshot. The verified
-`https://wandb.ai/.../reports/...` URL and sorted run-ID set are copied into the
-publication receipt. Its versioned output directory must not already exist.
+W&B report. Publication, reviewed-hypothesis sign-off, automatic batch
+planning, and storage/publication receipts are deferred until after the pilot.
+They do not affect trial sampling, pruning, required metrics, Pareto analysis,
+fANOVA, or promotion selection. Revisit them once the canonical architecture
+and the team's operational reporting process are fixed.
 
 ## Compute accounting
 

@@ -46,8 +46,8 @@ Appendix-F paper-mode test.
 | environment fingerprint | READY in prep tooling; lock BLOCKED | `koopman-phase2-runtime` captures and strictly verifies Python, OS kernel, package imports/extensions, PyTorch/CUDA/cuDNN, driver, GPU identity, and a CUDA smoke op; generate the approved lock in the final one-GPU worker allocation |
 | finalized data hashes | READY in prep tooling; artifacts BLOCKED | preflight streams and verifies distinct, read-only regular bulk train/WikiText/MQAR plus tokenizer, shard-order, MQAR oracle/sample/vocabulary/token-map, and Birdie JSON auxiliary artifacts; immutable paths and checksums remain placeholders |
 | distributed study storage | BLOCKED | approve PostgreSQL or validate Optuna JournalStorage on SCG |
-| storage snapshot receipt | READY in prep tooling; snapshot BLOCKED | after workers stop, bind the backend-native snapshot to final analysis plus quiescent status/spec/backend/immutable-ledger identity; final reporting re-hashes ledger/status evidence and rechecks the terminal claim hash set, while live Optuna query and dump provenance remain operator-attested; record either target reached or an explicitly approved genuine budget-exhausted early stop, excluding tail target-guard rows from the fresh quota |
-| W&B report publication | BLOCKED after offline analysis | every healthy metrics file must cross-link a unique W&B run; after snapshot, analysis emits the payload and a separate verification artifact must bind the exact analysis/study, report URL, and payload run-ID set before the no-network finalizer records publication and reviewed hypothesis decisions |
+| W&B report publication | DEFERRED after offline analysis | every healthy metrics file must cross-link a unique W&B run and analysis emits an offline payload; choose the publication/review workflow after the pilot |
+| archival receipts and automatic batch planner | DEFERRED | operational hardening can be reintroduced after the architecture and team workflow are fixed; it is not needed to validate the 1M sweep |
 
 `BLOCKED` means do not launch a scientific trial. It does not prevent schema,
 materialization, analysis, or synthetic orchestration tests.

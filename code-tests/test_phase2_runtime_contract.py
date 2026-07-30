@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,6 @@ from koopman_lm.experiments.phase2.run_study import (
     release_trial_claim,
     run_adapter_stage,
 )
-from koopman_lm.experiments.phase2.study_status import build_status_report
 from koopman_lm.experiments.phase2.manifest import (
     build_trial_manifest,
     reference_parameters,
@@ -41,148 +39,6 @@ from koopman_lm.experiments.phase2.spec import load_spec, stable_hash
 pytestmark = pytest.mark.correctness
 
 _TRIAL_HASH = "f" * 64
-
-
-def test_status_planner_bounds_next_array_by_budget_and_concurrency(
-    tmp_path: Path,
-) -> None:
-    claims = tmp_path / "claims"
-    claims.mkdir()
-    (claims / ("a" * 64 + ".json")).write_text(
-        json.dumps(
-            {
-                "state": "terminal",
-                "outcome": "COMPLETE",
-                "gpu_hours_actual": 0.5,
-            }
-        )
-    )
-    (claims / ("b" * 64 + ".json")).write_text(
-        json.dumps(
-            {
-                "state": "running",
-                "gpu_hours_reserved": 1.0,
-            }
-        )
-    )
-    spec = {
-        "status": "scientific_ready",
-        "study_name": "test-study",
-        "study": {
-            "requested_trials": 20,
-            "compute_budget": {
-                "status": "approved",
-                "maximum_total_gpu_hours": 10.0,
-                "maximum_full_trial_gpu_hours": 1.0,
-                "maximum_concurrent_trials": 4,
-            },
-        },
-    }
-
-    report = build_status_report(
-        spec,
-        optuna_trials=[object()] * 5,
-        output_root=tmp_path,
-    )
-
-    assert report["launch_allowed"] is True
-    assert report["recommended_next_array_tasks"] == 3
-    assert report["recommended_slurm_array"] == "0-2"
-
-
-def test_status_planner_prioritizes_reserved_recovery_at_fresh_target(
-    tmp_path: Path,
-) -> None:
-    claims = tmp_path / "claims"
-    claims.mkdir()
-    (claims / ("c" * 64 + ".json")).write_text(
-        json.dumps(
-            {
-                "state": "recovery_queued",
-                "gpu_hours_reserved": 1.0,
-            }
-        )
-    )
-    spec = {
-        "status": "scientific_ready",
-        "study_name": "test-study",
-        "study": {
-            "requested_trials": 1,
-            "compute_budget": {
-                "status": "approved",
-                "maximum_total_gpu_hours": 1.0,
-                "maximum_full_trial_gpu_hours": 1.0,
-                "maximum_concurrent_trials": 1,
-            },
-        },
-    }
-
-    report = build_status_report(
-        spec,
-        optuna_trials=[object()],
-        output_root=tmp_path,
-    )
-
-    assert report["fresh_optuna_trial_count"] == 1
-    assert report["recommended_recovery_tasks"] == 1
-    assert report["recommended_fresh_tasks"] == 0
-    assert report["recommended_next_array_tasks"] == 1
-    assert report["launch_allowed"] is True
-
-
-def test_status_planner_excludes_tail_concurrency_target_guard_rows(
-    tmp_path: Path,
-) -> None:
-    spec = {
-        "status": "scientific_ready",
-        "study_name": "tail-concurrency-test",
-        "study": {
-            "requested_trials": 2_000,
-            "compute_budget": {
-                "status": "approved",
-                "maximum_total_gpu_hours": 3_000.0,
-                "maximum_full_trial_gpu_hours": 1.0,
-                "maximum_concurrent_trials": 16,
-            },
-        },
-    }
-    initially_approved = [
-        SimpleNamespace(
-            user_attrs={"phase2_trial_kind": "fresh"},
-            state=SimpleNamespace(name="COMPLETE"),
-        )
-        for _ in range(1_999)
-    ]
-    approved_tail_row = SimpleNamespace(
-        user_attrs={
-            "phase2_trial_kind": "fresh",
-            "phase2_fresh_trial_ordinal": 2_000,
-        },
-        state=SimpleNamespace(name="COMPLETE"),
-    )
-    tail_guards = [
-        SimpleNamespace(
-            user_attrs={
-                "phase2_trial_kind": "fresh",
-                "compute_budget_guard": "fresh_trial_target_reached",
-            },
-            state=SimpleNamespace(name="PRUNED"),
-        )
-        for _ in range(15)
-    ]
-
-    report = build_status_report(
-        spec,
-        optuna_trials=initially_approved + [approved_tail_row] + tail_guards,
-        output_root=tmp_path,
-    )
-
-    assert report["optuna_trial_count"] == 2_015
-    assert report["fresh_optuna_trial_count"] == 2_000
-    assert report["fresh_trial_target_guard_count"] == 15
-    assert report["recommended_next_array_tasks"] == 0
-    assert report["launch_allowed"] is False
-    assert "requested_trial_target_reached" in report["hold_reasons"]
 
 
 _ROOT = Path(__file__).resolve().parents[1]
