@@ -7,7 +7,7 @@ launchable.
 Use one environment vocabulary throughout:
 
 ```bash
-export PHASE2_STUDY_NAME=echo-phase2a-1m-v1
+export PHASE2_STUDY_NAME=echo-phase2a-3m-v1
 export PHASE2_STORAGE_URL='postgresql+psycopg://...'
 export PHASE2_OUTPUT_ROOT=/absolute/path/phase2a-scientific-runs
 export PHASE2_CALIBRATION_ROOT=/absolute/path/phase2a-nonscientific-calibration
@@ -24,7 +24,7 @@ The calibration root must not be inside the scientific output root.
   current HEAD, clean worktree, report context/status/check list, approval
   metadata, the environment-lock file itself, and the active runtime against
   the contents of that lock.
-- Resolve the architecture, 1M-core, base-LR, tokenizer, dataset, QKNorm, and
+- Resolve the architecture, 3M-total, base-LR, tokenizer, dataset, QKNorm, and
   training-protocol decisions needed for the non-scientific calibration.
 - Leave only the four values calibration is intended to determine unresolved:
   total GPU-hours, maximum full-trial GPU-hours, required GPU type, and storage

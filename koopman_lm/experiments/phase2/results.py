@@ -348,9 +348,19 @@ def _validate_model_accounting(
             raise Phase2ResultError(
                 f"Reported scale-band {name} differs from the manifest"
             )
-    if scale.get("accounting") != "non_embedding_trainable_parameters":
+    accounting_keys = {
+        "total_trainable_parameters": ("total", total),
+        "non_embedding_trainable_parameters": ("non_embedding_core", core),
+    }
+    accounting_rule = scale.get("accounting")
+    if accounting_rule not in accounting_keys:
         raise Phase2ResultError(
-            "This study only supports non-embedding trainable-parameter accounting"
+            f"Unsupported scale-band accounting rule: {accounting_rule!r}"
+        )
+    accounting_key, actual_scale_value = accounting_keys[accounting_rule]
+    if manifest_scale.get("parameter_count_key") != accounting_key:
+        raise Phase2ResultError(
+            "Manifest scale parameter_count_key disagrees with its accounting rule"
         )
     accepted_min = _require_positive_integer(
         manifest_scale.get("accepted_min"),
@@ -365,7 +375,7 @@ def _validate_model_accounting(
     for name, expected in (
         ("accepted_min", accepted_min),
         ("accepted_max", accepted_max),
-        ("actual_value", core),
+        ("actual_value", actual_scale_value),
     ):
         if scale.get(name) != expected:
             raise Phase2ResultError(
@@ -373,15 +383,17 @@ def _validate_model_accounting(
                 f"does not equal {expected!r}"
             )
     expected_scale_outcome = (
-        "within_band" if accepted_min <= core <= accepted_max else "outside_band"
+        "within_band"
+        if accepted_min <= actual_scale_value <= accepted_max
+        else "outside_band"
     )
     if scale.get("outcome") != expected_scale_outcome:
         raise Phase2ResultError(
-            "Reported scale-band outcome disagrees with the actual core count"
+            "Reported scale-band outcome disagrees with the accounted parameter count"
         )
     if expected_scale_outcome != "within_band":
         raise Phase2ResultError(
-            f"Actual core parameter count {core} is outside "
+            f"Actual {accounting_key} parameter count {actual_scale_value} is outside "
             f"[{accepted_min}, {accepted_max}]"
         )
 

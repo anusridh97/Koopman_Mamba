@@ -319,7 +319,7 @@ def test_analysis_cli_requires_stability_by_default():
             "--storage",
             "postgresql+psycopg://example.invalid/phase2",
             "--study-name",
-            "echo-phase2a-1m-v1",
+            "echo-phase2a-3m-v1",
             "--output",
             "out.json",
         ]
@@ -331,7 +331,7 @@ def test_analysis_cli_requires_stability_by_default():
             "--storage",
             "postgresql+psycopg://example.invalid/phase2",
             "--study-name",
-            "echo-phase2a-1m-v1",
+            "echo-phase2a-3m-v1",
             "--allow-missing-stability-evidence",
             "--output",
             "out.json",

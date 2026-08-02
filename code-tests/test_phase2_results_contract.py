@@ -178,10 +178,12 @@ def _manifest(mode: str = "updated_sweep") -> dict:
             "total": 3048,
         },
         "scale_check": {
-            "label": "1m-core",
-            "accounting": "non_embedding_trainable_parameters",
-            "accepted_min": 800,
-            "accepted_max": 1150,
+            "label": "3m-total",
+            "accounting": "total_trainable_parameters",
+            "accepted_min": 2800,
+            "accepted_max": 3250,
+            "parameter_count_key": "total",
+            "estimated_value": 3048,
             "estimated_within_band": True,
         },
         "optimizer": {
@@ -233,11 +235,11 @@ def _model_accounting() -> dict:
             "outcome": "within_tolerance",
         },
         "scale_band": {
-            "label": "1m-core",
-            "accounting": "non_embedding_trainable_parameters",
-            "accepted_min": 800,
-            "accepted_max": 1150,
-            "actual_value": 1000,
+            "label": "3m-total",
+            "accounting": "total_trainable_parameters",
+            "accepted_min": 2800,
+            "accepted_max": 3250,
+            "actual_value": 3048,
             "outcome": "within_band",
         },
     }
@@ -601,7 +603,7 @@ class Phase2ResultsContractTests(unittest.TestCase):
         accounting["parameter_estimator"]["core_relative_error"] = 0.1
         accounting["parameter_estimator"]["total_relative_error"] = 100 / 3048
         accounting["parameter_estimator"]["outcome"] = "exceeded"
-        accounting["scale_band"]["actual_value"] = 1100
+        accounting["scale_band"]["actual_value"] = 3148
         with self.assertRaisesRegex(Phase2ResultError, "estimator-drift limit"):
             _validate(_manifest(), metrics)
 

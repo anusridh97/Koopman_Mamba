@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
-  "study_name": "echo-phase2a-1m-v1",
+  "study_name": "echo-phase2a-3m-v1",
   "status": "premerge_infrastructure_only",
   "architecture_base": {
     "branch": "claude/cholesky-smaller-rank-0dcu89",
     "commit": "e69f087a7eafffcfaee0bb946f2213c87059dde0",
     "status": "upstream_work_in_progress"
   },
-  "base_model_config": "configs/phase2a_1m_core.json",
+  "base_model_config": "configs/phase2a_3m_total.json",
   "scale": {
-    "label": "1m-core",
-    "accounting": "non_embedding_trainable_parameters",
-    "target": 1000000,
-    "accepted_min": 800000,
-    "accepted_max": 1150000,
-    "note": "A real 32000-token tied embedding adds 2.048M parameters. Total model size is therefore approximately 2.90M-3.15M. Both counts must be logged."
+    "label": "3m-total",
+    "accounting": "total_trainable_parameters",
+    "target": 3000000,
+    "accepted_min": 2800000,
+    "accepted_max": 3250000,
+    "note": "Team-approved Phase 2a scale: total trainable parameters include the tied 32000-token embedding once. The current architecture range is approximately 2.90M-3.11M total; non-embedding counts remain logged as an auxiliary capacity covariate."
   },
   "protocol": {
     "tokenizer": "NousResearch/Llama-2-7b-hf",
@@ -124,7 +124,7 @@
     },
     "paper_control": {
       "searched": false,
-      "description": "Paper-semantics control at the 1M-core scale: paper_sequence_max normalization, no beta gate, two-sided whitening, K=2, epsilon=1e-3, with the explicitly frozen 25% middle-clustered layout below. This is not a literal Table 4 model-size/topology reproduction. Schedule separately at matched seeds."
+      "description": "Paper-semantics control at the 3M-total scale: paper_sequence_max normalization, no beta gate, two-sided whitening, K=2, epsilon=1e-3, with the explicitly frozen 25% middle-clustered layout below. This is not a literal Table 4 model-size/topology reproduction. Schedule separately at matched seeds."
     },
     "mamba_only": {
       "searched": false,

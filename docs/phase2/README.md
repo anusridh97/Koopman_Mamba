@@ -7,7 +7,7 @@ record that pin so later upstream changes cannot silently alter a run.
 Start here:
 
 1. `EXPERIMENT_CONTRACT.md` defines the scientific study and every initial
-   1M-core sweep axis.
+   3M-total sweep axis.
 2. `INTEGRATION_MATRIX.md` lists what the finalized codebase must provide and
    what still blocks real training.
 3. `LAUNCH_RUNBOOK.md` gives the data, preflight, pilot, launch, and promotion
@@ -17,7 +17,7 @@ Start here:
 
 Machine-readable inputs:
 
-- `configs/phase2a_1m_core.json`
+- `configs/phase2a_3m_total.json`
 - `configs/phase2a_search.json`
 - `configs/phase2a_capabilities.template.json`
 - `configs/phase2a_data_manifest.template.json`
@@ -140,5 +140,5 @@ identity; trial-number-only joins and cross-study result mixing are rejected.
 Deferred until after the pilot: an automatic next-batch planner, Optuna storage
 snapshot receipts, reviewed-hypothesis receipts, and W&B publication
 verification receipts. These are end-of-study operational hardening, not part
-of the initial 1M sweep or its required Pareto/fANOVA analysis, and can be
+of the initial 3M-total sweep or its required Pareto/fANOVA analysis, and can be
 reintroduced once the canonical architecture and team workflow are fixed.

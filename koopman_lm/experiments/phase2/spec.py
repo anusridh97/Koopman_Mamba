@@ -200,6 +200,21 @@ def validate_spec(spec: Mapping[str, Any]) -> None:
             "architecture_base.commit must be a full lowercase 40-character Git SHA"
         )
 
+    scale = spec["scale"]
+    if scale.get("label") != "3m-total":
+        raise Phase2SpecError("Initial Phase 2a scale must be labeled 3m-total")
+    if scale.get("accounting") != "total_trainable_parameters":
+        raise Phase2SpecError(
+            "Phase 2a model size must count all trainable parameters, including "
+            "the tied embedding once"
+        )
+    if int(scale.get("target", 0)) != 3_000_000:
+        raise Phase2SpecError("Initial Phase 2a target must be 3,000,000 total parameters")
+    accepted_min = int(scale.get("accepted_min", 0))
+    accepted_max = int(scale.get("accepted_max", 0))
+    if not accepted_min <= int(scale["target"]) <= accepted_max:
+        raise Phase2SpecError("Phase 2a total-parameter target lies outside its band")
+
     hard_failure_rules = spec["hard_failure_rules"]
     required_result_gates = {
         "state_rebuild_decode_prefill_max_abs_error",
@@ -276,7 +291,7 @@ def validate_spec(spec: Mapping[str, Any]) -> None:
     if int(fidelity.get("max_steps", 0)) < 500:
         raise Phase2SpecError("max_steps must reach the step-500 pruning rung")
     if fidelity.get("max_steps") != 6000:
-        raise Phase2SpecError("The initial 1M-core survivor budget must be 6,000 steps")
+        raise Phase2SpecError("The initial 3M-total survivor budget must be 6,000 steps")
     if fidelity.get("checkpoint_steps") != [500, 2000, 6000]:
         raise Phase2SpecError("Phase 2 checkpoint rungs have drifted")
     if (
@@ -333,7 +348,7 @@ def validate_spec(spec: Mapping[str, Any]) -> None:
         raise Phase2SpecError("Phase 2a optimizer-step order has drifted")
     if protocol.get("gradient_checkpointing") is not False:
         raise Phase2SpecError(
-            "Initial 1M-core runs must explicitly disable gradient checkpointing"
+            "Initial 3M-total runs must explicitly disable gradient checkpointing"
         )
     data_stream = protocol.get("data_stream")
     expected_stream_fields = {

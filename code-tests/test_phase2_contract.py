@@ -139,6 +139,21 @@ def test_architecture_base_is_exactly_pinned(spec):
     }
 
 
+def test_phase2_scale_is_three_million_total_with_frozen_tokenizer(spec):
+    assert spec["study_name"] == "echo-phase2a-3m-v1"
+    assert spec["scale"] == {
+        "label": "3m-total",
+        "accounting": "total_trainable_parameters",
+        "target": 3_000_000,
+        "accepted_min": 2_800_000,
+        "accepted_max": 3_250_000,
+        "note": spec["scale"]["note"],
+    }
+    assert spec["protocol"]["tokenizer"] == "NousResearch/Llama-2-7b-hf"
+    assert spec["protocol"]["tokenizer_revision"] == "PIN_BEFORE_RUN"
+    assert spec["study"]["requested_trials"] == 2_000
+
+
 def _diagnostic_payload(manifest, ppl=100.0):
     diagnostics = {name: 0.0 for name in manifest["required_diagnostics"]}
     diagnostics.update(
@@ -300,7 +315,7 @@ def _result_accounting(manifest):
                 "accounting": manifest["scale_check"]["accounting"],
                 "accepted_min": manifest["scale_check"]["accepted_min"],
                 "accepted_max": manifest["scale_check"]["accepted_max"],
-                "actual_value": counts["non_embedding_core"],
+                "actual_value": counts[manifest["scale_check"]["parameter_count_key"]],
                 "outcome": "within_band",
             },
         },
@@ -372,7 +387,7 @@ def test_beta_probability_materializes_as_logit_bias(spec, probability):
     assert math.isclose(1.0 / (1.0 + math.exp(-bias)), probability, abs_tol=1e-12)
 
 
-def test_every_rank_fraction_kernel_combination_stays_in_core_band(spec):
+def test_every_rank_fraction_kernel_combination_stays_in_total_band(spec):
     low, high = spec["scale"]["accepted_min"], spec["scale"]["accepted_max"]
     for rank in spec["axes"]["ska_rank"]["values"]:
         for fraction in spec["axes"]["ska_fraction"]["values"]:
@@ -387,8 +402,10 @@ def test_every_rank_fraction_kernel_combination_stays_in_core_band(spec):
                 manifest = build_trial_manifest(
                     spec, params, code_identity=CODE, data_identity=DATA
                 )
-                core = manifest["parameter_counts_estimated"]["non_embedding_core"]
-                assert low <= core <= high
+                total = manifest["parameter_counts_estimated"]["total"]
+                assert low <= total <= high
+                assert manifest["scale_check"]["parameter_count_key"] == "total"
+                assert manifest["scale_check"]["estimated_value"] == total
 
 
 def test_trial_hash_covers_non_model_inputs(spec):

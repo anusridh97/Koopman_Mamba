@@ -101,7 +101,7 @@ _HYPOTHESES = (
     },
     {
         "id": "differential_lr_ratios_transfer",
-        "statement": "The hand-tuned differential learning-rate ratios transfer to 1M-core.",
+        "statement": "The hand-tuned differential learning-rate ratios transfer to 3M-total.",
         "axes": (
             "ska_projection_lr_multiplier",
             "gamma_eta_lr_multiplier",

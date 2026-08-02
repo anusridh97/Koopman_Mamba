@@ -7,27 +7,28 @@ This contract translates Phase 2a of `reference/Scaling_Echo_3B.pdf` into one
 reproducible study. It deliberately keeps paper Echo and the proposed updated
 architecture separate.
 
-## The 1M decision
+## The 3M-total decision
 
 `configs/1m.yaml` is the four-layer, vocabulary-128 synthetic model used for the
-paper's Table 2. It cannot support a 32K-token WikiText perplexity objective, and
-15%, 20%, 25%, and 33% SKA mostly collapse to the same layer count.
+paper's Table 2. It cannot support a language-modeling WikiText objective, and
+15%, 20%, 25%, and 33% SKA all collapse to one SKA layer.
 
-Phase 2a therefore uses `configs/phase2a_1m_core.json`:
+With lead approval, Phase 2a therefore uses `configs/phase2a_3m_total.json`:
 
 - 16 sequence layers, `d_model=64`, four SKA heads, `d_state=16`
 - tied 32,000-token embedding and sequence length 2,048
 - 2, 3, 4, or 5 SKA layers for the four requested fractions
-- approximately 0.85M-1.10M non-embedding parameters over the sweep
-- approximately 2.90M-3.15M total parameters after the 2.048M tied embedding
+- approximately 2.90M-3.11M total parameters over the current estimated range
+- the same frozen Llama-2 tokenizer for Echo, Mamba, and Transformer
 
-The study label is **1M-core**, not 1M-total. Every run must log both counts and
-use core parameter count and measured FLOPs as covariates. This definition must
-be approved by the team before the first scientific run. Changing it creates a
-new study version; it must never silently alter an existing study.
+The study label is **3M-total** and total means all trainable parameters,
+including the tied token embedding exactly once. Every run must also log the
+non-embedding count and measured FLOPs as auxiliary covariates. This definition
+was approved by the lead; changing it creates a new study version and must never
+silently alter an existing study.
 The portable materializer's count excludes not-yet-integrated extension
 parameters such as beta/QKNorm. The finalized adapter must count the built
-model, enforce the same band, and fail before training if the core or total
+model, enforce the total-parameter band, and fail before training if the core or total
 estimate drifts by more than 5%. It also records analytic and profiler-measured
 training FLOPs per optimizer step; their relative drift may not exceed 15%.
 Every healthy screen/final result carries these values plus cumulative actual
@@ -43,17 +44,17 @@ The modes are not interchangeable hyperparameters.
 2. `paper_control` freezes the paper's SKA semantics: sequence-max
    normalization, no beta parameter, two-sided whitening, exclusive
    cross-chunk boundary, FP32 statistics and linear algebra, `K=2`, and ridge
-   `1e-3`. At 1M core it uses the explicitly declared 25% middle-clustered
+   `1e-3`. At 3M total it uses the explicitly declared 25% middle-clustered
    layout; it is a matched-scale mechanism control, not a literal Table 4
    model-size/topology reproduction.
 3. `mamba_only` is the canonical all-Mamba-2 + SwiGLU baseline.
 4. `transformer` is the canonical all-causal-attention + SwiGLU baseline.
 
-The two standard baselines share the Phase 2 config, tokenizer, packed data,
+The two standard baselines share the Phase 2 tokenizer, packed data,
 optimizer protocol, token budget, and evaluation harness. They contain no SKA
-or Koopman MLP modules. Their parameter counts are reported separately; the
-team must still approve whether final comparison matching uses total
-parameters, non-embedding parameters, or measured training FLOPs.
+or Koopman MLP modules. Their widths are fixed rather than swept, and each must
+fall within the same approved 3M-total band. Non-embedding parameters and
+measured training FLOPs remain visible as secondary fairness covariates.
 
 Beta initialization applies only to `updated_sweep` and means
 `beta_bias = logit(p)`, so `sigmoid(beta_bias)` equals 0.1, 0.3, or 0.5.
@@ -198,7 +199,7 @@ Because rank and SKA fraction change actual capacity, every importance report
 contains both ordinary conditional fANOVA and a capacity-adjusted view that
 residualizes each target on actual non-embedding parameter count and measured
 training FLOPs. The parameter/FLOP ranges stay visible in Pareto and W&B
-tables; the nominal “1M-core” label is not a substitute for these covariates.
+tables; the nominal “3M-total” label is not a substitute for these covariates.
 
 Diagnostics are not reduced to one model-wide scalar. Each realized SKA layer
 contains one record per head for raw/normalized/applied radius, clamp factor
@@ -271,7 +272,7 @@ stability report, confirmed shortlist, and falsified-hypotheses scaffold.
 Optuna storage snapshot receipts, W&B publication-verification receipts,
 reviewed-hypothesis receipts, and an automatic next-batch planner are deferred
 until after the pilot. They are operational reporting hardening rather than
-inputs to the initial 1M sweep. Concurrent target-guard rows remain visible in
+inputs to the initial 3M-total sweep. Concurrent target-guard rows remain visible in
 Optuna but never count toward the approved fresh quota.
 Checkpoints, datasets, token caches, databases, and Slurm logs remain untracked.
 
@@ -283,7 +284,7 @@ Checkpoints, datasets, token caches, databases, and Slurm logs remain untracked.
 4. Promote roughly 8-12 diverse configurations, plus all controls, to 5M/20M.
 5. Run fANOVA separately for MQAR and perplexity and within conditional
    subspaces where appropriate.
-6. If a top-three 1M configuration falls below the median at 20M, fix that axis
+6. If a top-three 3M-total configuration falls below the median at 20M, fix that axis
    instead of continuing to sweep it at larger scales.
 
 Phase 2a output is not a single winner. It is axis importance, a Pareto front,

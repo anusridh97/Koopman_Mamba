@@ -331,11 +331,25 @@ def build_trial_manifest(
     weights = derive_objective_weights(params)
     counts = estimate_parameter_counts(model, architecture_mode=str(mode))
     scale = spec["scale"]
-    core = counts["non_embedding_core"]
-    within_band = int(scale["accepted_min"]) <= core <= int(scale["accepted_max"])
+    accounting_keys = {
+        "total_trainable_parameters": "total",
+        "non_embedding_trainable_parameters": "non_embedding_core",
+    }
+    try:
+        accounting_key = accounting_keys[str(scale["accounting"])]
+    except KeyError as exc:
+        raise Phase2SpecError(
+            f"Unsupported parameter accounting rule: {scale.get('accounting')!r}"
+        ) from exc
+    accounted_count = counts[accounting_key]
+    within_band = (
+        int(scale["accepted_min"])
+        <= accounted_count
+        <= int(scale["accepted_max"])
+    )
     if not within_band:
         raise Phase2SpecError(
-            f"Materialized core count {core:,} is outside "
+            f"Materialized {accounting_key} count {accounted_count:,} is outside "
             f"[{int(scale['accepted_min']):,}, {int(scale['accepted_max']):,}]"
         )
 
@@ -419,6 +433,8 @@ def build_trial_manifest(
             "accounting": scale["accounting"],
             "accepted_min": scale["accepted_min"],
             "accepted_max": scale["accepted_max"],
+            "parameter_count_key": accounting_key,
+            "estimated_value": accounted_count,
             "estimated_within_band": within_band,
         },
         "optimizer": optimizer,

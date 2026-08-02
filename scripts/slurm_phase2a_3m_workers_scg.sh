@@ -7,16 +7,16 @@
 #   export PHASE2_CAPABILITIES=/absolute/path/final_capabilities.json
 #   export PHASE2_DATA_MANIFEST=/absolute/path/final_data_manifest.json
 #   export PHASE2_STORAGE_URL='postgresql+psycopg://...'
-#   export PHASE2_STUDY_NAME=echo-phase2a-1m-v1
+#   export PHASE2_STUDY_NAME=echo-phase2a-3m-v1
 #   export PHASE2_OUTPUT_ROOT=/labs/mpsnyder/cody1212/phase2a-runs
-#   sbatch --array=0-15 scripts/slurm_phase2a_1m_workers_scg.sh
+#   sbatch --array=0-15 scripts/slurm_phase2a_3m_workers_scg.sh
 #
 # Do not use this study-worker script for the fixed pilot; pilot manifests run
 # through koopman-phase2-run-manifest in a separate allocation/array. Before
 # each scientific batch, inspect Optuna and the shared claim ledger; keep the
 # array no larger than maximum_concurrent_trials.
 
-#SBATCH --job-name=echo-p2a-1m
+#SBATCH --job-name=echo-p2a-3m
 #SBATCH --account=mpsnyder
 #SBATCH --partition=gpu_normal
 #SBATCH --gres=gpu:1
@@ -24,8 +24,8 @@
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
 #SBATCH --array=0-15
-#SBATCH --output=/labs/mpsnyder/cody1212/koopman_runs/logs/phase2a_1m_%A_%a.out
-#SBATCH --error=/labs/mpsnyder/cody1212/koopman_runs/logs/phase2a_1m_%A_%a.err
+#SBATCH --output=/labs/mpsnyder/cody1212/koopman_runs/logs/phase2a_3m_%A_%a.out
+#SBATCH --error=/labs/mpsnyder/cody1212/koopman_runs/logs/phase2a_3m_%A_%a.err
 
 set -eo pipefail
 # SCG module scripts and /etc/bashrc reference unset variables.

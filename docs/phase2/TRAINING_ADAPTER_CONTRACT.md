@@ -46,8 +46,8 @@ After building the finalized model, count actual total and non-embedding
 trainable parameters, including beta/QKNorm and other extension parameters.
 Tied embeddings count once. Emit
 `model_accounting.parameter_counts_actual`; the central validator recomputes
-`total = embedding + non_embedding_core`, checks the actual core against the
-manifest's 1M-core band, requires the embedding count to match the model-config
+`total = embedding + non_embedding_core`, checks the actual total against the
+manifest's 3M-total band, requires the embedding count to match the model-config
 estimate, and compares actual core/total counts with the provisional manifest
 estimator. The relative drift ceiling is 5%. An out-of-band model or larger
 estimator drift fails before promotion.
