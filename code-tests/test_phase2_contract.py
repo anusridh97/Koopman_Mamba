@@ -131,6 +131,14 @@ def _test_runtime_fingerprint():
     }
 
 
+def test_architecture_base_is_exactly_pinned(spec):
+    assert spec["architecture_base"] == {
+        "branch": "claude/cholesky-smaller-rank-0dcu89",
+        "commit": "e69f087a7eafffcfaee0bb946f2213c87059dde0",
+        "status": "upstream_work_in_progress",
+    }
+
+
 def _diagnostic_payload(manifest, ppl=100.0):
     diagnostics = {name: 0.0 for name in manifest["required_diagnostics"]}
     diagnostics.update(
@@ -468,6 +476,12 @@ def test_fixed_controls_keep_architecture_modes_separate(spec):
         code_identity=CODE,
         data_identity=DATA,
     )
+    transformer = build_trial_manifest(
+        spec,
+        control_parameters(spec, "transformer_control"),
+        code_identity=CODE,
+        data_identity=DATA,
+    )
     assert paper["model_extensions"]["stats_mode"] == "paper_sequence_max"
     assert paper["model_extensions"]["write_gate"] == "none"
     assert "beta_init_probability" not in paper["model_extensions"]
@@ -475,6 +489,14 @@ def test_fixed_controls_keep_architecture_modes_separate(spec):
     assert candidate["model_extensions"]["stats_mode"] == "candidate_beta_gated"
     assert mamba["model_config"]["ska_layer_indices"] == []
     assert "ska_rank" not in mamba["parameters"]
+    assert mamba["model_extensions"]["baseline_builder"] == "build_mamba_only"
+    assert mamba["model_extensions"]["channel_mixer"] == "swiglu"
+    assert transformer["model_config"]["ska_layer_indices"] == []
+    assert transformer["model_extensions"]["baseline_builder"] == "build_transformer"
+    assert transformer["model_extensions"]["echo_components_present"] is False
+    assert transformer["architecture_base"]["commit"] == (
+        "e69f087a7eafffcfaee0bb946f2213c87059dde0"
+    )
 
 
 def test_step_500_pruning_contract():
@@ -686,7 +708,7 @@ def test_preflight_fails_closed_then_can_pass_a_resolved_contract(spec, tmp_path
     data_manifest = {
         "schema_version": 1,
         "tokenizer": {
-            "name": "mistralai/Mistral-7B-v0.1",
+            "name": "NousResearch/Llama-2-7b-hf",
             "revision": "pinned",
             "vocab_size": 32000,
             "fingerprint_sha256": hashlib.sha256(
@@ -987,10 +1009,10 @@ def test_dry_run_writes_strict_unique_manifests(spec, tmp_path):
 
 def test_fixed_controls_materialize_at_all_three_promotion_seeds(tmp_path):
     summary = materialize_controls(SPEC_PATH, tmp_path)
-    assert summary["control_run_count"] == 9
+    assert summary["control_run_count"] == 12
     assert summary["seeds"] == [42, 43, 44]
     hashes = {entry["trial_hash"] for entry in summary["execution_plan"]}
-    assert len(hashes) == 9
+    assert len(hashes) == 12
     assert all(
         entry["required_stage"] == "final"
         for entry in summary["execution_plan"]

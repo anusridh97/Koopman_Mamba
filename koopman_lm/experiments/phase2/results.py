@@ -924,7 +924,7 @@ def validate_step_metrics(
 
     mode = manifest["parameters"]["architecture_mode"]
     allowed_na: set[str] = set()
-    if mode in {"paper_control", "mamba_only"}:
+    if mode in {"paper_control", "mamba_only", "transformer"}:
         allowed_na.update(
             {
                 "beta_mean",
@@ -932,7 +932,7 @@ def validate_step_metrics(
                 "layerscale_magnitude_mean",
             }
         )
-    if mode == "mamba_only":
+    if mode in {"mamba_only", "transformer"}:
         allowed_na.update(
             {
                 "ska_zero_ppl_delta",

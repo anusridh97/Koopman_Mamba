@@ -108,6 +108,28 @@ matrix multiplication; installed-version strings alone do not pass.
 Hostnames, Slurm IDs, and CUDA device ordinals are intentionally excluded;
 software, kernel, and GPU properties are not.
 
+### 3a. Run provisional baseline infrastructure trials
+
+Before the Echo adapter is finalized, exercise the shared trainer with the
+canonical standard baselines. These runs validate infrastructure only and
+must use a separate output root and W&B group:
+
+```bash
+mkdir -p logs
+export PHASE2_DATA_DIR=/absolute/path/to/one/frozen/tokenized/shard
+export PHASE2_BASELINE_ROOT=/absolute/path/phase2a-baseline-smoke
+export PHASE2_TOKENIZER=NousResearch/Llama-2-7b-hf
+sbatch scripts/slurm_phase2a_baseline_smoke.sh
+```
+
+The four array tasks are Mamba-only and Transformer at seeds 42 and 43, one
+trial per GPU. Passing means both builders train through the same weighted-CE
+path, write isolated checkpoints, and can be reconstructed for evaluation. It
+does not establish a comparable scientific baseline until the team freezes
+the parameter-matching rule, tokenizer revision, data artifact, and full token
+budget. DeepSpeed is a separate two-GPU smoke because the upstream branch
+currently implements DDP, not DeepSpeed.
+
 ## 4. Run calibration preflight
 
 ```bash
@@ -183,7 +205,7 @@ the shared budget ledger.
 
 Before Optuna, run a fixed pilot containing:
 
-- paper control, updated default, and Mamba-only;
+- paper control, updated default, Mamba-only, and Transformer;
 - minimum and maximum rank;
 - minimum and maximum chunk;
 - rank 128 plus ridge 1e-4;
@@ -248,7 +270,7 @@ koopman-phase2-preflight \
 Only `stage=study` is accepted by the Optuna controller. TPE trials use
 `koopman-phase2-study`; fixed pilot/control arms use `run-manifest`.
 
-Materialize the three fixed controls at seeds 42, 43, and 44 only after the
+Materialize the four fixed controls at seeds 42, 43, and 44 only after the
 study-stage preflight passes:
 
 ```bash
@@ -273,7 +295,7 @@ the sampled-run GPU-hour ceiling.
   SQLite. Runtime URL type must match the backend recorded in the spec.
 - Use one trial per GPU; reserve DeepSpeed for the later larger-scale phases.
 - Start with at least 20 unpruned startup trials.
-- Launch the three fixed controls at all promotion seeds.
+- Launch the four fixed controls at all promotion seeds.
 - Preserve failed, pruned, and completed statuses distinctly.
 - Monitor failure rate, extreme-rank stability, diagnostic overhead, and false
   pruning of full-budget controls.

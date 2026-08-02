@@ -18,8 +18,11 @@ mode, and loss normalization instead of inheriting trainer defaults.
 
 ## Model mapping
 
-`model_config.json` contains fields already understood by the role-based
-`KoopmanLMConfig`. `trial_manifest.json:model_extensions` contains fields that
+`model_config.json` contains fields understood by
+`koopman_lm.globals.config.KoopmanLMConfig`. The pinned architecture base also
+adds `ska_inverse_cholesky`; it must remain off unless a future, explicitly
+versioned Phase 2 axis selects the small-rank per-token path.
+`trial_manifest.json:model_extensions` contains fields that
 must be mapped after the final architecture lands:
 
 | Extension | Required canonical behavior |
@@ -35,8 +38,9 @@ must be mapped after the final architecture lands:
 | `chunk_semantics=strict_causal_chunked` | requested chunk size reaches the active chunked path; do not select a backend that ignores it |
 
 Paper mode must ignore candidate LayerScale/short-conv/QKNorm behavior.
-Mamba-only mode builds a true no-SKA sequence mixer, not merely an SKA model
-whose output happens to be zero.
+Mamba-only mode must call `build_mamba_only` and Transformer mode must call
+`build_transformer`. Both use SwiGLU channel mixers and contain no SKA or
+Koopman MLP modules; they are not Echo models with branches zeroed at runtime.
 
 After building the finalized model, count actual total and non-embedding
 trainable parameters, including beta/QKNorm and other extension parameters.
@@ -73,9 +77,10 @@ invocation's GPU seconds/hours. Parameter, FLOP, and GPU-time accounting are
 result evidence, not W&B-only metadata.
 
 Before launch, a capability test must trace or instrument all four chunk sizes
-and prove the selected backend consumes them. In the current role-based code,
-`exact_intrachunk=true` bypasses `ska_chunk_size`, so Phase 2a materializes it
-as false; silently re-enabling that path would invalidate the chunk-size axis.
+and prove the selected backend consumes them. In the current globals code,
+`ska_exact_intrachunk` and `ska_inverse_cholesky` bypass the standard chunked
+path, so Phase 2a materializes both as false. Silently enabling either path
+would invalidate the chunk-size axis.
 
 ## Optimizer mapping
 
@@ -170,7 +175,7 @@ batch planning can enforce the approved compute ceiling.
 
 All required diagnostic keys must exist. Truly absent quantities are JSON
 `null` and named in `not_applicable_diagnostics`; only mode-approved absences
-are accepted. The Mamba-only and paper controls therefore do not need fake beta
+are accepted. The Mamba-only, Transformer, and paper controls therefore do not need fake beta
 statistics.
 
 `diagnostics_by_layer` must exactly match the manifest's realized zero-based SKA
@@ -241,7 +246,7 @@ are at least one, and ridge escalation/memory counters are
 nonnegative/positive integers as applicable. Step time and every perplexity are
 strictly positive. Effective Jacobian rank cannot exceed `d_model`.
 
-Paper controls report beta and LayerScale aggregates as null/N/A. Mamba-only
+Paper controls report beta and LayerScale aggregates as null/N/A. Mamba-only and Transformer
 controls report all SKA-specific aggregates as null/N/A and emit an empty
 `diagnostics_by_layer` object. Metrics outside the mode-approved N/A set may
 never be hidden with null. Paper-control per-layer beta and LayerScale records

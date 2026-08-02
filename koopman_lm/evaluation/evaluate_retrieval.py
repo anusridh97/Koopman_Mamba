@@ -2,7 +2,7 @@
 """
 evaluate_retrieval.py -- Retrieval evaluation with zero-shot and fine-tuning.
 
-Evaluates all three model variants on retrieval tasks in two regimes:
+Evaluates all supported model variants on retrieval tasks in two regimes:
 
   1. Zero-shot: models are evaluated directly (no task-specific training)
   2. Fine-tuned: models are fine-tuned on task-specific training data,
@@ -42,7 +42,7 @@ Usage:
       --checkpoint ./koopman-180m-fast/final/model.pt \
       --mode both
 
-  # Compare all three models
+  # Compare three checkpoints
   python evaluate_retrieval.py \
       --checkpoint  ./koopman-180m-fast/final/model.pt \
       --checkpoint2 ./mamba-attn-180m-fast/final/model.pt \
@@ -68,16 +68,19 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 import dataclasses
 from koopman_lm.globals.config import build_config
-from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
+from koopman_lm.models.baselines import (
+    build_mamba_attention,
+    build_mamba_only,
+    build_transformer,
+)
 
 
 # ============================================================================
-# Model loading (same as evaluate.py, supports all 3 types)
+# Model loading (same as evaluate.py, including standard baselines)
 # ============================================================================
 
 def load_model(checkpoint, model_size="180m",
-               tokenizer_name="mistralai/Mistral-7B-v0.1",
+               tokenizer_name="NousResearch/Llama-2-7b-hf",
                model_type=None):
     """Load model from checkpoint, auto-detecting model_type from meta.pt."""
     meta_path = checkpoint.replace("model.pt", "meta.pt")
@@ -93,7 +96,11 @@ def load_model(checkpoint, model_size="180m",
     else:
         cfg = build_config(model_size)
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    ckpt_dir = os.path.dirname(checkpoint)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     cfg = dataclasses.replace(cfg, vocab_size=len(tokenizer))   # frozen: use replace
@@ -102,8 +109,14 @@ def load_model(checkpoint, model_size="180m",
         model = build_mamba_attention(cfg)
     elif model_type == "mamba_only":
         model = build_mamba_only(cfg)
-    else:
+    elif model_type == "transformer":
+        model = build_transformer(cfg)
+    elif model_type == "koopman":
+        from koopman_lm.models.koopman_lm import KoopmanLM
+
         model = KoopmanLM(cfg)
+    else:
+        raise ValueError(f"Unknown model_type in checkpoint metadata: {model_type!r}")
 
     state = torch.load(checkpoint, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
@@ -773,7 +786,7 @@ def parse_args():
 
     p.add_argument("--model_size", type=str, default="180m")
     p.add_argument("--tokenizer", type=str,
-                   default="mistralai/Mistral-7B-v0.1")
+                   default="NousResearch/Llama-2-7b-hf")
     p.add_argument("--max_seq_len", type=int, default=2048)
 
     p.add_argument("--mode", type=str, default="both",

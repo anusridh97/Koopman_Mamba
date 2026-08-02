@@ -204,7 +204,7 @@ class FrozenArtifactTests(unittest.TestCase):
 
             spec = {
                 "protocol": {
-                    "tokenizer": "mistralai/Mistral-7B-v0.1",
+                    "tokenizer": "NousResearch/Llama-2-7b-hf",
                     "tokenizer_revision": "tok-rev",
                     "train_dataset": "FineWeb-Edu",
                     "train_dataset_revision": "train-rev",
@@ -234,7 +234,7 @@ class FrozenArtifactTests(unittest.TestCase):
             manifest = {
                 "schema_version": 1,
                 "tokenizer": {
-                    "name": "mistralai/Mistral-7B-v0.1",
+                    "name": "NousResearch/Llama-2-7b-hf",
                     "revision": "tok-rev",
                     "vocab_size": 32000,
                     "fingerprint_sha256": _sha256(

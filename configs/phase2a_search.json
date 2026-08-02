@@ -2,6 +2,11 @@
   "schema_version": 1,
   "study_name": "echo-phase2a-1m-v1",
   "status": "premerge_infrastructure_only",
+  "architecture_base": {
+    "branch": "claude/cholesky-smaller-rank-0dcu89",
+    "commit": "e69f087a7eafffcfaee0bb946f2213c87059dde0",
+    "status": "upstream_work_in_progress"
+  },
   "base_model_config": "configs/phase2a_1m_core.json",
   "scale": {
     "label": "1m-core",
@@ -12,7 +17,7 @@
     "note": "A real 32000-token tied embedding adds 2.048M parameters. Total model size is therefore approximately 2.90M-3.15M. Both counts must be logged."
   },
   "protocol": {
-    "tokenizer": "mistralai/Mistral-7B-v0.1",
+    "tokenizer": "NousResearch/Llama-2-7b-hf",
     "tokenizer_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
     "train_dataset": "FineWeb-Edu",
     "train_dataset_revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
@@ -123,7 +128,11 @@
     },
     "mamba_only": {
       "searched": false,
-      "description": "No-SKA control with the same 16-layer 1M-core backbone and Koopman MLP channel mixers. Schedule separately at matched seeds."
+      "description": "Standard all-Mamba-2 plus SwiGLU baseline built by koopman_lm.models.baselines.build_mamba_only. It shares the Phase 2 config, tokenizer, data, and training protocol but instantiates no SKA or Koopman MLP modules; Echo-only imports are lazy."
+    },
+    "transformer": {
+      "searched": false,
+      "description": "Standard causal-attention plus SwiGLU baseline built by koopman_lm.models.baselines.build_transformer. It shares the Phase 2 config, tokenizer, data, and training protocol but instantiates no Mamba, SKA, or Koopman MLP modules; Echo-only imports are lazy."
     }
   },
   "axes": {
@@ -326,6 +335,12 @@
     {
       "name": "mamba_only_control",
       "architecture_mode": "mamba_only",
+      "ska_fraction": 0.0,
+      "objective_arm": "next_token_only"
+    },
+    {
+      "name": "transformer_control",
+      "architecture_mode": "transformer",
       "ska_fraction": 0.0,
       "objective_arm": "next_token_only"
     }

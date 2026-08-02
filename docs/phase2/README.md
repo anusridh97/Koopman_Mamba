@@ -1,5 +1,9 @@
 # Phase 2a preparation
 
+Architecture base: `origin/claude/cholesky-smaller-rank-0dcu89` at
+`e69f087a7eafffcfaee0bb946f2213c87059dde0` (upstream WIP). Phase 2 manifests
+record that pin so later upstream changes cannot silently alter a run.
+
 Start here:
 
 1. `EXPERIMENT_CONTRACT.md` defines the scientific study and every initial
@@ -25,6 +29,12 @@ JSON Schemas are deferred until the architecture and metric payload are final.
 Portable tools:
 
 ```bash
+# Concurrent baseline infrastructure smoke: Mamba/Transformer x seeds 42/43
+mkdir -p logs
+PHASE2_DATA_DIR=/path/to/frozen/tokenized/data \
+PHASE2_BASELINE_ROOT=/path/to/baseline-smoke \
+sbatch scripts/slurm_phase2a_baseline_smoke.sh
+
 # Search-contract and trial-materialization smoke test
 koopman-phase2-dry-run \
   --spec configs/phase2a_search.json \
@@ -53,7 +63,7 @@ koopman-phase2-audit-pilot \
   --pilot-root /path/to/echo-phase2a-pilot \
   --output /path/to/pilot_report.json
 
-# After the pilot report is approved, materialize 3 controls x 3 seeds
+# After the pilot report is approved, materialize 4 controls x 3 seeds
 koopman-phase2-controls \
   --spec configs/phase2a_search.json \
   --capabilities /path/to/final_capabilities.json \

@@ -25,8 +25,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.globals.modules.ska import SKAModule
-from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
 from koopman_lm.globals.modules.mamba import Mamba2Block      # noqa: F401 (re-exported)
 from koopman_lm.globals.modules.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
 
@@ -59,6 +57,10 @@ class SwiGLUMLP(nn.Module):
 class SKABlock(nn.Module):
     def __init__(self, cfg: KoopmanLMConfig):
         super().__init__()
+        # Keep the standard Mamba/Transformer imports independent from SKA.
+        # Echo-only modules are loaded only when an SKA baseline is built.
+        from koopman_lm.globals.modules.ska import SKAModule
+
         self.norm = nn.LayerNorm(cfg.d_model)
         self.ska = SKAModule(
             d_model=cfg.d_model,
@@ -123,7 +125,13 @@ def _build_model(cfg, seq_layer_fn, mlp_fn):
             if cfg.tie_embeddings:
                 self.lm_head.weight = self.embed.weight
 
-        def forward(self, input_ids, labels=None):
+        def forward(self, input_ids, labels=None, loss_weights=None):
+            """Run a baseline LM with the same weighted-CE API as Echo.
+
+            Keeping this signature identical to ``KoopmanLM.forward`` lets the
+            shared trainer compare architectures without a baseline-only data
+            or loss path. With all-one weights this is ordinary mean CE.
+            """
             h = self.embed(input_ids)
             for seq, mlp in zip(self.seq_layers, self.mlp_layers):
                 h = seq(h)
@@ -132,11 +140,22 @@ def _build_model(cfg, seq_layer_fn, mlp_fn):
             logits = self.lm_head(h)
             loss = None
             if labels is not None:
-                loss = F.cross_entropy(
-                    logits.view(-1, logits.size(-1)),
-                    labels.view(-1),
-                    ignore_index=-100,
-                )
+                if loss_weights is None:
+                    loss = F.cross_entropy(
+                        logits.view(-1, logits.size(-1)),
+                        labels.view(-1),
+                        ignore_index=-100,
+                    )
+                else:
+                    ce = F.cross_entropy(
+                        logits.view(-1, logits.size(-1)),
+                        labels.view(-1),
+                        ignore_index=-100,
+                        reduction="none",
+                    ).view_as(labels)
+                    weights = loss_weights.to(ce.dtype)
+                    weights = weights * (labels != -100).to(ce.dtype)
+                    loss = (ce * weights).sum() / weights.sum().clamp(min=1.0)
             return {"loss": loss, "logits": logits}
 
         def param_summary(self):
@@ -231,6 +250,11 @@ def build_mamba_ska_koopman(cfg: KoopmanLMConfig, mlp_expand: float | None = Non
     ablation needs. Pass mlp_expand explicitly (e.g. table2.py's
     --koopman_mlp_expand) to compensate; None keeps cfg.mlp_expand unchanged.
     """
+    from koopman_lm.globals.modules.koopman_mlp import (
+        SpectralKoopmanMLP,
+        SpectralKoopmanMLPGated,
+    )
+
     def seq_fn(c, i, is_ska):
         return SKABlock(c) if is_ska else Mamba2Block(c)
     def mlp_fn(c):

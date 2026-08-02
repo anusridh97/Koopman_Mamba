@@ -1,7 +1,7 @@
 #!/bin/bash
 # Execute one entry from a calibration/pilot/control/promotion execution plan.
 # Override --array to the exact zero-based plan range when calling sbatch:
-#   calibration 0-2; current pilot 0-20; controls 0-8.
+#   calibration 0-2; current pilot 0-21; controls 0-11.
 
 #SBATCH --job-name=echo-p2a-fixed
 #SBATCH --account=mpsnyder
@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --array=0-20
+#SBATCH --array=0-21
 #SBATCH --output=/labs/mpsnyder/cody1212/koopman_runs/logs/phase2a_fixed_%A_%a.out
 #SBATCH --error=/labs/mpsnyder/cody1212/koopman_runs/logs/phase2a_fixed_%A_%a.err
 

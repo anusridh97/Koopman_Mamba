@@ -238,7 +238,7 @@ def main():
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--model_size", type=str, default="50m",
                         choices=["180m", "180m_gated", "370m", "50m"])
-    parser.add_argument("--tokenizer", type=str, default="mistralai/Mistral-7B-v0.1")
+    parser.add_argument("--tokenizer", type=str, default="NousResearch/Llama-2-7b-hf")
     parser.add_argument("--context_lens", nargs="+", type=int,
                         default=[128, 256, 512, 1024, 2048])
     parser.add_argument("--n_examples", type=int, default=50)

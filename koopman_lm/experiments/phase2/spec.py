@@ -154,6 +154,7 @@ def validate_spec(spec: Mapping[str, Any]) -> None:
     required_sections = {
         "schema_version",
         "study_name",
+        "architecture_base",
         "base_model_config",
         "scale",
         "protocol",
@@ -182,6 +183,22 @@ def validate_spec(spec: Mapping[str, Any]) -> None:
         "scientific_ready",
     }:
         raise Phase2SpecError(f"Unknown Phase 2 spec status={spec.get('status')!r}")
+
+    architecture_base = spec["architecture_base"]
+    if not isinstance(architecture_base, Mapping):
+        raise Phase2SpecError("architecture_base must be an object")
+    base_branch = architecture_base.get("branch")
+    base_commit = architecture_base.get("commit")
+    if not isinstance(base_branch, str) or not base_branch.strip():
+        raise Phase2SpecError("architecture_base.branch must be nonempty")
+    if (
+        not isinstance(base_commit, str)
+        or len(base_commit) != 40
+        or any(character not in "0123456789abcdef" for character in base_commit)
+    ):
+        raise Phase2SpecError(
+            "architecture_base.commit must be a full lowercase 40-character Git SHA"
+        )
 
     hard_failure_rules = spec["hard_failure_rules"]
     required_result_gates = {
@@ -659,7 +676,7 @@ def validate_trial_parameters(
     spec: Mapping[str, Any], params: Mapping[str, Any]
 ) -> None:
     mode = params.get("architecture_mode")
-    if mode not in {"updated_sweep", "paper_control", "mamba_only"}:
+    if mode not in {"updated_sweep", "paper_control", "mamba_only", "transformer"}:
         raise Phase2SpecError(f"Unknown architecture_mode={mode!r}")
     if mode != "updated_sweep":
         return
@@ -703,14 +720,22 @@ def derive_objective_weights(params: Mapping[str, Any]) -> dict[str, float]:
     return weights
 
 
-def estimate_parameter_counts(model: Mapping[str, Any]) -> dict[str, int]:
-    """Mirror the current config estimator and expose embedding/core separately."""
+def estimate_parameter_counts(
+    model: Mapping[str, Any], architecture_mode: str | None = None
+) -> dict[str, int]:
+    """Estimate embedding/core counts for Echo or a standard baseline.
+
+    Baseline modes use the canonical builders from ``models.baselines``:
+    all-Mamba-2 or all-attention sequence mixers and SwiGLU channel mixers.
+    The estimator remains provisional until checked against a built CUDA model.
+    """
 
     d = int(model["d_model"])
     vocab = int(model["vocab_size"])
     n_layers = int(model["n_layers"])
     indices = list(model.get("ska_layer_indices", []))
-    n_ska = len(indices)
+    baseline_mode = architecture_mode in {"mamba_only", "transformer"}
+    n_ska = 0 if baseline_mode else len(indices)
     n_mamba = n_layers - n_ska
     n_heads = int(model["ska_n_heads"])
     rank = int(model["ska_rank"])
@@ -725,7 +750,11 @@ def estimate_parameter_counts(model: Mapping[str, Any]) -> dict[str, int]:
         + d_inner
         + d_inner * d
     )
-    mamba_total = per_mamba * n_mamba
+    if architecture_mode == "transformer":
+        # qkv (3*d*d) + output projection (d*d); norms are counted below.
+        mamba_total = 4 * d * d * n_layers
+    else:
+        mamba_total = per_mamba * n_mamba
 
     per_ska = (
         d * n_heads * rank * 2
@@ -745,8 +774,12 @@ def estimate_parameter_counts(model: Mapping[str, Any]) -> dict[str, int]:
 
     expanded = int(d * float(model.get("mlp_expand", 2.667)))
     d_k = ((expanded + 63) // 64) * 64
-    projections = 3 if model.get("mlp_gated", False) else 2
-    mlp_total = (d * d_k * projections + d_k) * n_layers
+    if baseline_mode:
+        # SwiGLU: gate/up/down, all bias-free; its LayerNorm is counted below.
+        mlp_total = 3 * d * d_k * n_layers
+    else:
+        projections = 3 if model.get("mlp_gated", False) else 2
+        mlp_total = (d * d_k * projections + d_k) * n_layers
     norms = n_layers * d * 2 + d
 
     core = mamba_total + ska_total + mlp_total + norms

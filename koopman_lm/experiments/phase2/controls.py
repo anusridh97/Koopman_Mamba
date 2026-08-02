@@ -1,4 +1,4 @@
-"""Materialize the three fixed Phase 2a controls at all promotion seeds."""
+"""Materialize the four fixed Phase 2a controls at all promotion seeds."""
 
 from __future__ import annotations
 

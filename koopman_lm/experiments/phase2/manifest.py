@@ -54,6 +54,8 @@ _REFERENCE_DEFAULTS: dict[str, Any] = {
     "objective_arm": "next_token_only",
 }
 
+_BASELINE_MODES = {"mamba_only", "transformer"}
+
 
 def _public_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in spec.items() if not key.startswith("_")}
@@ -123,7 +125,7 @@ def control_parameters(spec: Mapping[str, Any], name: str) -> dict[str, Any]:
     if mode != "updated_sweep":
         for key in candidate_only:
             params.pop(key, None)
-    if mode == "mamba_only":
+    if mode in _BASELINE_MODES:
         for key in {
             "ska_rank",
             "ska_placement",
@@ -132,6 +134,7 @@ def control_parameters(spec: Mapping[str, Any], name: str) -> dict[str, Any]:
             "qk_norm",
             "ska_projection_lr_multiplier",
             "gamma_eta_lr_multiplier",
+            "koopman_eigen_lr_multiplier",
         }:
             params.pop(key, None)
     return params
@@ -142,6 +145,23 @@ def _effective_lrs(
 ) -> dict[str, dict[str, Any]]:
     base_lr = float(spec["protocol"]["base_learning_rate"])
     mode = params["architecture_mode"]
+    if mode in _BASELINE_MODES:
+        sequence_mixer = "Mamba-2" if mode == "mamba_only" else "causal attention"
+        return {
+            "backbone": {
+                "lr": base_lr * float(params.get("backbone_lr_multiplier", 1.0)),
+                "owns": [f"{sequence_mixer} sequence-mixer parameters"],
+            },
+            "swiglu_mlp": {
+                "lr": base_lr * float(params.get("mlp_lr_multiplier", 1.5)),
+                "owns": ["SwiGLU gate, up, and down projections"],
+            },
+            "norms": {
+                "lr": base_lr * float(params.get("norm_lr_multiplier", 0.5)),
+                "owns": ["LayerNorm scale and bias parameters"],
+                "weight_decay": 0.0,
+            },
+        }
     groups = {
         "backbone": {
             "lr": base_lr * float(params.get("backbone_lr_multiplier", 1.0)),
@@ -165,7 +185,7 @@ def _effective_lrs(
             "weight_decay": 0.0,
         },
     }
-    if mode != "mamba_only":
+    if mode not in _BASELINE_MODES:
         groups["ska_projections"] = {
             "lr": base_lr * float(params.get("ska_projection_lr_multiplier", 5.0)),
             "owns": [
@@ -197,14 +217,14 @@ def _materialize_model(
     mode = params["architecture_mode"]
     n_layers = int(model["n_layers"])
 
-    if mode == "mamba_only":
+    if mode in _BASELINE_MODES:
         count = 0
         indices: list[int] = []
     else:
         count = round_ska_count(n_layers, float(params["ska_fraction"]))
         indices = placement_indices(n_layers, count, str(params["ska_placement"]))
 
-    if mode != "mamba_only":
+    if mode not in _BASELINE_MODES:
         model.update(
             {
                 "ska_rank": int(params["ska_rank"]),
@@ -221,6 +241,19 @@ def _materialize_model(
         "stats_mode": "beta_causal" if mode == "updated_sweep" else mode,
         "qk_norm": False,
     }
+    if mode in _BASELINE_MODES:
+        extensions.update(
+            {
+                "stats_mode": "not_applicable",
+                "baseline_builder": (
+                    "build_mamba_only"
+                    if mode == "mamba_only"
+                    else "build_transformer"
+                ),
+                "channel_mixer": "swiglu",
+                "echo_components_present": False,
+            }
+        )
     if mode == "updated_sweep":
         probability = float(params["beta_init_probability"])
         model.update(
@@ -291,12 +324,12 @@ def build_trial_manifest(
     mode = params.get("architecture_mode")
     if mode == "updated_sweep":
         validate_trial_parameters(spec, params)
-    elif mode not in {"paper_control", "mamba_only"}:
+    elif mode not in {"paper_control", "mamba_only", "transformer"}:
         raise Phase2SpecError(f"Unsupported architecture mode: {mode!r}")
 
     model, extensions = _materialize_model(spec, params)
     weights = derive_objective_weights(params)
-    counts = estimate_parameter_counts(model)
+    counts = estimate_parameter_counts(model, architecture_mode=str(mode))
     scale = spec["scale"]
     core = counts["non_embedding_core"]
     within_band = int(scale["accepted_min"]) <= core <= int(scale["accepted_max"])
@@ -375,6 +408,7 @@ def build_trial_manifest(
         "model_config_hash": stable_hash(model),
         "base_model_config_hash": stable_hash(_load_base_model(spec)),
         "spec_hash": identity_inputs["spec_hash"],
+        "architecture_base": deepcopy(spec["architecture_base"]),
         "status": "MATERIALIZED_NOT_RUN",
         "parameters": dict(params),
         "model_config": model,

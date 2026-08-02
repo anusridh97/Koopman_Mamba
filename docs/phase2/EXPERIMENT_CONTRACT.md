@@ -46,7 +46,14 @@ The modes are not interchangeable hyperparameters.
    `1e-3`. At 1M core it uses the explicitly declared 25% middle-clustered
    layout; it is a matched-scale mechanism control, not a literal Table 4
    model-size/topology reproduction.
-3. `mamba_only` is the no-SKA control.
+3. `mamba_only` is the canonical all-Mamba-2 + SwiGLU baseline.
+4. `transformer` is the canonical all-causal-attention + SwiGLU baseline.
+
+The two standard baselines share the Phase 2 config, tokenizer, packed data,
+optimizer protocol, token budget, and evaluation harness. They contain no SKA
+or Koopman MLP modules. Their parameter counts are reported separately; the
+team must still approve whether final comparison matching uses total
+parameters, non-embedding parameters, or measured training FLOPs.
 
 Beta initialization applies only to `updated_sweep` and means
 `beta_bias = logit(p)`, so `sigmoid(beta_bias)` equals 0.1, 0.3, or 0.5.

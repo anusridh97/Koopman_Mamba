@@ -1,6 +1,6 @@
 
 """
-evaluate.py -- Unified evaluation for all three model variants.
+evaluate.py -- Unified evaluation for all supported model variants.
 
 Loads model_type from checkpoint meta.pt so all models use the exact same
 evaluation code, same seeds, same data, same metrics.
@@ -9,6 +9,7 @@ Model types (auto-detected from checkpoint):
   koopman     — Mamba-2 + SKA + Koopman MLP
   mamba_attn  — Mamba-2 + Flash Attention + SwiGLU MLP
   mamba_only  — Mamba-2 + SwiGLU MLP (no global retrieval)
+  transformer — Causal attention + SwiGLU MLP
 
 Evaluation modes:
   1. Held-out perplexity (WikiText-103 test, same as Mamba evals)
@@ -43,8 +44,11 @@ from torch.utils.data import DataLoader, IterableDataset
 from transformers import AutoTokenizer
 import dataclasses
 from koopman_lm.globals.config import build_config, config_hash
-from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
+from koopman_lm.models.baselines import (
+    build_mamba_attention,
+    build_mamba_only,
+    build_transformer,
+)
 
 
 # ============================================================================
@@ -52,7 +56,7 @@ from koopman_lm.models.baselines import build_mamba_attention, build_mamba_only
 # ============================================================================
 
 def load_model(checkpoint, model_size="180m",
-               tokenizer_name="mistralai/Mistral-7B-v0.1",
+               tokenizer_name="NousResearch/Llama-2-7b-hf",
                model_type=None):
     """
     Load a model from checkpoint. Auto-detects model_type from meta.pt.
@@ -91,8 +95,14 @@ def load_model(checkpoint, model_size="180m",
         model = build_mamba_attention(cfg)
     elif model_type == "mamba_only":
         model = build_mamba_only(cfg)
-    else:
+    elif model_type == "transformer":
+        model = build_transformer(cfg)
+    elif model_type == "koopman":
+        from koopman_lm.models.koopman_lm import KoopmanLM
+
         model = KoopmanLM(cfg)
+    else:
+        raise ValueError(f"Unknown model_type in checkpoint metadata: {model_type!r}")
 
     state = torch.load(checkpoint, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
@@ -584,7 +594,7 @@ def parse_args():
                    help="Second checkpoint for side-by-side comparison")
     p.add_argument("--model_size", type=str, default="180m")
     p.add_argument("--tokenizer", type=str,
-                   default="mistralai/Mistral-7B-v0.1")
+                   default="NousResearch/Llama-2-7b-hf")
     p.add_argument("--mode", type=str, default="all",
                    choices=["all", "ppl", "fineweb_ppl", "niah"])
     p.add_argument("--held_out_data_dir", type=str, default=None,

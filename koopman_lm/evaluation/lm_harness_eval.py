@@ -11,7 +11,7 @@ O(1) recurrent generation wrapper.
 Usage:
   python evals/lm_harness_eval.py \
       --model koopman \
-      --model_args checkpoint=./koopman-180m-output/step_5000/model.pt,model_size=180m,tokenizer=mistralai/Mistral-7B-v0.1,max_length=2048 \
+      --model_args checkpoint=./koopman-180m-output/step_5000/model.pt,model_size=180m,tokenizer=NousResearch/Llama-2-7b-hf,max_length=2048 \
       --tasks hellaswag,piqa,arc_easy,arc_challenge,winogrande,lambada_openai \
       --batch_size 16 \
       --device cuda
@@ -45,7 +45,7 @@ class KoopmanEvalWrapper(HFLM):
         self,
         checkpoint="./koopman-180m-output/final/model.pt",
         model_size="180m",
-        tokenizer="mistralai/Mistral-7B-v0.1",
+        tokenizer="NousResearch/Llama-2-7b-hf",
         max_length=2048,
         batch_size=None,
         device="cuda",

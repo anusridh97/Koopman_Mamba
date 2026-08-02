@@ -183,6 +183,7 @@ EXTRA_TRAIN_ARGS="--no_compile --wandb_project echo --deterministic" scripts/pre
 | `TOKENIZER` | NousResearch/Llama-2-7b-hf | HF tokenizer id |
 | `DATA_ROOT` / `RUN_ROOT` | `$SCRATCH/{data,runs}` | shard / checkpoint roots |
 | `NUM_WORKERS` | 4 | dataloader workers |
+| `MODEL_TYPE` | `koopman` | `koopman`, `mamba_only`, `transformer`, or `mamba_attn`; baselines use the same tokenizer/data/trainer |
 | `EXTRA_TRAIN_ARGS` | "" | passthrough to `train.py` |
 
 Key `train.py` flags (full list: `python -m koopman_lm.training.train --help`):

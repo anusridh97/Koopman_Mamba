@@ -7,7 +7,7 @@ train_fast.py -- Optimized training for Koopman LM and baselines.
   * Passes loss_weights into model.forward -> recall-weighted CE (up-weights
     SCROLLS answer spans). Baseline behavior is recovered when weights are all
     ones (no weights.bin) -- identical to the original mean CE.
-  * Tokenizer default -> meta-llama/Llama-2-7b-hf (use NousResearch mirror if gated).
+  * Tokenizer default -> NousResearch/Llama-2-7b-hf (ungated Llama-2 mirror).
   * For model_type==koopman the SKA fast-patch is OPTIONAL now (the custom
     autograd core already avoids autograd-through-cholesky); --ska_fast to enable.
 
@@ -30,10 +30,11 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.globals.config import build_config, config_hash, CONFIG_FACTORIES
+from koopman_lm.globals.modules.mamba import Mamba2Block
 from koopman_lm.globals.modules.utils.repro import seed_everything, enable_determinism, seed_worker
-from koopman_lm.models.koopman_lm import KoopmanLM, Mamba2Block, SKABlock
 from koopman_lm.models.baselines import (
-    build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
+    build_mamba_attention, build_mamba_only,
+    build_transformer,
     CausalAttentionBlock,
 )
 from koopman_lm.training.data.dataset import MemmapPackedDataset
@@ -127,12 +128,16 @@ def build_model(args, tokenizer):
     n_mamba = cfg.n_layers - n_ska
 
     if args.model_type == "koopman":
+        from koopman_lm.models.koopman_lm import KoopmanLM
+
         print(f"Building Koopman LM ({args.model_size}): {n_mamba} Mamba-2 + {n_ska} SKA")
         model = KoopmanLM(cfg)
     elif args.model_type == "mamba_attn":
         model = build_mamba_attention(cfg)
     elif args.model_type == "mamba_only":
         model = build_mamba_only(cfg)
+    elif args.model_type == "transformer":
+        model = build_transformer(cfg)
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
 
@@ -142,6 +147,8 @@ def build_model(args, tokenizer):
         _load_init_weights(model, args.init_from)
 
     if args.model_type == "koopman":
+        from koopman_lm.models.koopman_lm import SKABlock
+
         if args.ska_fast:
             from koopman_lm.globals.modules.ska.fast import patch_ska_module
             for layer in model.seq_layers:
@@ -190,10 +197,15 @@ def train(args):
     raw_model = model
 
     if args.compile:
+        ska_block_cls = None
+        if args.model_type == "koopman":
+            from koopman_lm.models.koopman_lm import SKABlock
+
+            ska_block_cls = SKABlock
         layers = raw_model.seq_layers if hasattr(raw_model, 'seq_layers') else []
         n_compiled = 0
         for i, layer in enumerate(layers):
-            if isinstance(layer, SKABlock):
+            if ska_block_cls is not None and isinstance(layer, ska_block_cls):
                 try:
                     layer.ska = torch.compile(layer.ska, mode="max-autotune"); n_compiled += 1
                 except Exception as e:
@@ -331,7 +343,7 @@ def _save_checkpoint(model, cfg, tokenizer, step, args, dirname=None):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--model_type", type=str, default="koopman",
-                   choices=["koopman", "mamba_attn", "mamba_only"])
+                   choices=["koopman", "mamba_attn", "mamba_only", "transformer"])
     p.add_argument("--model_size", type=str, default="440m",
                    help="model size name (e.g. 440m) or path to a custom YAML config")
     p.add_argument("--init_from", type=str, default=None,
@@ -341,7 +353,7 @@ def parse_args():
                         "--max_steps). Must match --model_size architecture and "
                         "the tokenizer vocab of the base checkpoint.")
     p.add_argument("--data_dir", type=str, default=None)
-    p.add_argument("--tokenizer", type=str, default="meta-llama/Llama-2-7b-hf")
+    p.add_argument("--tokenizer", type=str, default="NousResearch/Llama-2-7b-hf")
     p.add_argument("--max_seq_len", type=int, default=2048)
     p.add_argument("--per_device_train_batch_size", type=int, default=8)
     p.add_argument("--gradient_accumulation_steps", type=int, default=8)

@@ -41,14 +41,24 @@ esac
 : "${VAL_TOKENS:=20000000}"
 : "${NUM_WORKERS:=4}"
 : "${NPROC:=1}"                                  # GPUs for DDP; >1 -> torchrun + --ddp
+: "${MODEL_TYPE:=koopman}"                       # koopman|mamba_only|transformer|mamba_attn
 : "${EXTRA_TRAIN_ARGS:=}"                        # e.g. "--no_compile --wandb_project echo"
+
+case "$MODEL_TYPE" in
+  koopman|mamba_only|transformer|mamba_attn) ;;
+  *) echo "unknown MODEL_TYPE '$MODEL_TYPE'"; exit 1 ;;
+esac
 
 TRAIN_DIR="$DATA_ROOT/fineweb_${SIZE}_train"
 VAL_DIR="$DATA_ROOT/fineweb_${SIZE}_val"
-RUN_DIR="$RUN_ROOT/echo-${SIZE}"
+if [ "$MODEL_TYPE" = "koopman" ]; then
+  RUN_DIR="$RUN_ROOT/echo-${SIZE}"
+else
+  RUN_DIR="$RUN_ROOT/${MODEL_TYPE}-${SIZE}"
+fi
 EFF_BATCH=$(( PDBS * GA ))                        # × world_size under DDP
 
-echo "=== Echo pretrain: $SIZE ==="
+echo "=== LM pretrain: model=$MODEL_TYPE size=$SIZE ==="
 echo "  tokens=$TOKENS  steps=$STEPS  seq=$SEQ_LEN  eff_batch=$EFF_BATCH (pdbs=$PDBS × ga=$GA)"
 echo "  lr=$LR  warmup=$WARMUP  wd=$WEIGHT_DECAY  seed=$SEED"
 echo "  tokenizer=$TOKENIZER"
@@ -90,7 +100,7 @@ else
   echo "--- training (single GPU) ---"
 fi
 $LAUNCH \
-  --model_type koopman --model_size "$SIZE" \
+  --model_type "$MODEL_TYPE" --model_size "$SIZE" \
   --data_dir "$TRAIN_DIR" --tokenizer "$TOKENIZER" --max_seq_len "$SEQ_LEN" \
   --per_device_train_batch_size "$PDBS" --gradient_accumulation_steps "$GA_USE" \
   --max_steps "$STEPS" --learning_rate "$LR" --warmup_steps "$WARMUP" \

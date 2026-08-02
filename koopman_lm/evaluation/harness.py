@@ -205,7 +205,7 @@ def parse_args():
     p.add_argument("--tasks", nargs="+", default=None, choices=ALL_TASKS,
                    help=f"subset of {ALL_TASKS} (default: all)")
     p.add_argument("--out", type=str, default=None, help="JSON output path")
-    p.add_argument("--tokenizer", type=str, default="mistralai/Mistral-7B-v0.1")
+    p.add_argument("--tokenizer", type=str, default="NousResearch/Llama-2-7b-hf")
     p.add_argument("--model_size", type=str, default="180m",
                    help="fallback scale if the checkpoint has no embedded cfg")
     p.add_argument("--device", type=str, default=None)

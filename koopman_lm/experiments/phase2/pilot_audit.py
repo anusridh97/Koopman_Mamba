@@ -497,7 +497,12 @@ def audit_pilot(
 
     coverage = summary.get("coverage", {})
     expected_coverage = {
-        "architecture_modes": {"updated_sweep", "paper_control", "mamba_only"},
+        "architecture_modes": {
+            "updated_sweep",
+            "paper_control",
+            "mamba_only",
+            "transformer",
+        },
         "ranks": {32, 48, 128},
         "fractions": {0.15, 0.2, 0.25, 0.33},
         "chunks": {32, 64, 128},

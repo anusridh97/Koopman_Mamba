@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "tokenizer": {
-    "name": "mistralai/Mistral-7B-v0.1",
+    "name": "NousResearch/Llama-2-7b-hf",
     "revision": "REQUIRED_BEFORE_SCIENTIFIC_RUN",
     "vocab_size": 32000,
     "fingerprint_sha256": "REQUIRED_BEFORE_SCIENTIFIC_RUN"

@@ -3,9 +3,8 @@ pretokenize.py -- Pre-tokenize a mixed corpus into memory-mapped arrays with a
 PARALLEL per-token recall-weight stream (dual-stream format).
 
 440M rewrite changes:
-  * Tokenizer default -> Llama-2 (meta-llama/Llama-2-7b-hf, 32000 vocab; use
-    NousResearch/Llama-2-7b-hf for an ungated mirror with the identical
-    tokenizer). uint16 packing still valid (vocab < 65536).
+  * Tokenizer default -> NousResearch/Llama-2-7b-hf, the ungated mirror of the
+    32k Llama-2 tokenizer. uint16 packing remains valid (vocab < 65536).
   * SCROLLS examples are reformatted as context -> query -> answer; the ANSWER
     span (short answer for QA subtasks, the full summary for summarization
     subtasks) is up-weighted in the recall-weight stream. Everything else gets
@@ -139,8 +138,8 @@ def main():
     p.add_argument("--smoke", action="store_true",
                    help="write a tiny synthetic corpus (no network) for the e2e smoke test")
     p.add_argument("--smoke_tokens", type=int, default=200_000)
-    p.add_argument("--tokenizer", type=str, default="meta-llama/Llama-2-7b-hf",
-                   help="Llama-2 tokenizer (use NousResearch/Llama-2-7b-hf if gated)")
+    p.add_argument("--tokenizer", type=str, default="NousResearch/Llama-2-7b-hf",
+                   help="ungated mirror of the Llama-2 tokenizer")
     p.add_argument("--fineweb", type=str, default="HuggingFaceFW/fineweb-edu")
     p.add_argument("--fineweb_subset", type=str, default="sample-10BT")
     p.add_argument("--pg19", type=str, default="pg19")

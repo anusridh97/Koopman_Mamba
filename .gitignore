@@ -16,6 +16,9 @@ dist/
 
 # Agent / IDE artifacts
 .agents/
+/AGENTS.md
+/CLAUDE.md
+/reference/
 
 # Data / checkpoints / runs (large, not source)
 *.bin

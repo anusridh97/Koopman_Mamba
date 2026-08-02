@@ -142,7 +142,7 @@ def _head(
 
 
 def _manifest(mode: str = "updated_sweep") -> dict:
-    indices = [] if mode == "mamba_only" else [2, 5]
+    indices = [] if mode in {"mamba_only", "transformer"} else [2, 5]
     return {
         "trial_hash": "a" * 64,
         "parameters": {"architecture_mode": mode},
@@ -743,6 +743,13 @@ class Phase2ResultsContractTests(unittest.TestCase):
         mamba_metrics["not_applicable_diagnostics"] = mamba_na
         mamba_metrics["diagnostics_by_layer"] = {}
         _validate(_manifest("mamba_only"), mamba_metrics)
+
+        transformer_metrics = _metrics()
+        for name in mamba_na:
+            transformer_metrics["diagnostics"][name] = None
+        transformer_metrics["not_applicable_diagnostics"] = mamba_na
+        transformer_metrics["diagnostics_by_layer"] = {}
+        _validate(_manifest("transformer"), transformer_metrics)
 
     def test_na_cannot_hide_an_applicable_metric(self) -> None:
         metrics = _metrics()

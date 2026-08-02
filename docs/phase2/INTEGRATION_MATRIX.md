@@ -1,39 +1,49 @@
 # Phase 2 integration matrix
 
-The preparation branch is based on `origin/pr/eval-consolidation`, the
-role-based package closest to the Scaling Plan's Phase 0 target. Portable
-experiment tooling lives here; scientific launch remains fail-closed until the
-architecture and training capabilities below land.
+This branch is based directly on
+`origin/claude/cholesky-smaller-rank-0dcu89` at commit
+`e69f087a7eafffcfaee0bb946f2213c87059dde0`. That upstream branch is the
+team's latest architecture snapshot but is still work in progress. Its
+`koopman_lm/globals/` implementation is authoritative; this branch does not
+carry the competing role-based module tree.
+
+Portable Phase 2 tooling and baseline wiring live on top. Scientific Echo
+launch remains fail-closed, while short Mamba/Transformer infrastructure runs
+are allowed when clearly labeled provisional.
 
 ## Required integration order
 
-1. Start from `pr/eval-consolidation`.
-2. Port/merge `phase1-finalize`, preserving the consolidated evaluation loader.
-3. Port the paper-mode behavior from commit `bec8517` semantically into the
-   role-based modules; do not cherry-pick the old-layout commit wholesale.
-4. Port exact-resume semantics from `ati-180m-exact-resume`.
-5. Implement the Phase 2 optimizer, objective, evaluator callback, and launch
-   adapters against the finalized APIs.
-6. Run all correctness and preflight gates, then a small pipeline pilot.
-
-The role-based kernels already implement the exclusive boundary and two-sided
-whitening formulas. They still need protected paper sequence-max/ungated mode,
-recurrent frozen prefill normalization, mode-aware diagnostics, and the literal
-Appendix-F paper-mode test.
+1. Fetch the latest upstream architecture branch and inspect changes since the
+   pinned base commit.
+2. Rebase these Phase 2 commits onto that new upstream commit; never merge in
+   the role-based refactor as a second model implementation.
+3. Re-run baseline isolation, weighted-loss, checkpoint-load, and correctness
+   tests whenever shared Mamba, attention, SwiGLU, config, data, or trainer code
+   changes upstream.
+4. Update `architecture_base.commit` in the search spec and rematerialize all
+   manifests after every accepted architecture-base change.
+5. Complete the Echo-specific Phase 2 adapter and run the fixed pilot before
+   any scientific sweep.
 
 ## Capability status on this branch
 
 | Capability | Status | Evidence/action |
 |---|---|---|
-| role-based package | READY | `modules/`, `models/`, `training/`, `evaluation/` |
+| pinned WIP architecture base | READY | direct ancestor is `e69f087`; the search spec records the same branch/commit |
+| canonical package layout | READY | upstream `globals/` layout only; no duplicate role-based architecture tree |
+| Mamba baseline definition | READY | `build_mamba_only`: all Mamba-2 sequence mixers plus SwiGLU, no SKA/Koopman MLP |
+| Transformer baseline definition | READY | `build_transformer`: all causal-attention sequence mixers plus SwiGLU, no Mamba/SKA/Koopman MLP |
+| shared baseline train/eval path | READY locally | trainer accepts both modes and weighted CE; checkpoint loaders reconstruct both modes; Echo-only imports are lazy |
+| concurrent one-GPU baseline smoke | READY, MARLOWE UNVERIFIED | `scripts/slurm_phase2a_baseline_smoke.sh` launches two models x two seeds |
+| DeepSpeed | BLOCKED | upstream provides single-GPU/DDP only; keep DeepSpeed as a separate two-GPU infrastructure task, not the one-GPU-per-trial sweep launcher |
 | unified eval entry point | PARTIAL | present; dataset/evaluator revisions are not frozen |
-| exclusive cross-chunk boundary | READY | role-based chunk statistics use exclusive prefixes |
-| two-sided whitening | READY | role-based operator uses `L^-1 M L^-T` |
+| exclusive cross-chunk boundary | PARTIAL | current globals implementation and tests must be reconciled with the finalized stats mode |
+| two-sided whitening | PARTIAL | current globals implementation remains architecture-WIP; literal paper-mode test is still required |
 | paper sequence-max/no-gate mode | BLOCKED | semantically port `bec8517` and its literal reference test |
 | Phase 1 diagnostics | PARTIAL | port `phase1-finalize`; make beta metrics mode-aware |
 | beta init probability | BLOCKED | add config and initialize bias with `logit(p)` |
 | QKNorm | BLOCKED | define its position relative to existing normalization, then implement |
-| effective chunk sweep | PARTIAL | prep config selects strict causal chunking; final adapter must prove each chunk value reaches the active backend and changes execution |
+| effective chunk sweep | PARTIAL | standard chunking, exact-intrachunk, and the new inverse-Cholesky path have different semantics; the final adapter must select and record one effective path per arm |
 | per-group learning rates | BLOCKED | current trainer has one AdamW group |
 | Birdie objective mixture | BLOCKED | generators, mixer, normalization, and equal-token accounting absent |
 | step-500 MQAR callback | BLOCKED | training loop has no evaluator/pruner callback |
