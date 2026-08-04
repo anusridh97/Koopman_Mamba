@@ -169,6 +169,32 @@ def test_generic_init_leaves_mamba_ssm_internals_alone() -> None:
     assert mamba.in_proj.weight.std().item() == pytest.approx(INIT_STD, rel=0.20)
 
 
+def test_rope_preserves_dtype_so_attention_runs_without_autocast() -> None:
+    """RoPE must not promote q/k to float32.
+
+    v never goes through RoPE, so a float32 RoPE output makes
+    scaled_dot_product_attention see mixed dtypes and raise. autocast hid this
+    by casting every SDPA input; running in pure bf16 (as DeepSpeed bf16 does)
+    does not.
+    """
+    from koopman_lm.globals.modules.attention import _apply_rope
+
+    for dtype in (torch.float32, torch.bfloat16, torch.float16):
+        x = torch.randn(2, 4, 8, 16, dtype=dtype)
+        assert _apply_rope(x).dtype == dtype, dtype
+
+    # end to end: a pure-bf16 transformer with NO autocast must forward
+    cfg = _init_probe_config()
+    torch.manual_seed(0)
+    model = build_transformer(cfg).to(torch.bfloat16).eval()
+    chunk = torch.randint(0, cfg.vocab_size, (2, 33))
+    with torch.no_grad():
+        out = model(input_ids=chunk[:, :-1].contiguous(),
+                    labels=chunk[:, 1:].contiguous())
+    assert out["logits"].dtype == torch.bfloat16
+    assert math.isfinite(out["loss"].item())
+
+
 def test_baseline_weighted_loss_matches_explicit_weighted_ce() -> None:
     torch.manual_seed(0)
     model = build_transformer(_tiny_config()).eval()
