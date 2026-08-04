@@ -5,6 +5,7 @@
   "d_state": 16,
   "d_conv": 4,
   "mamba_expand": 2,
+  "mamba_headdim": 16,
   "ska_n_heads": 4,
   "ska_rank": 48,
   "ska_ridge": 0.001,

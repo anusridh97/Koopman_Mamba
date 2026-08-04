@@ -27,6 +27,13 @@ class KoopmanLMConfig:
     d_state: int = 128          # multiple of 8
     d_conv: int = 4
     mamba_expand: int = 2
+    # Mamba-2 head width. None keeps mamba_ssm's own default (64).
+    # Must be set explicitly at small d_model: mamba_ssm packs z/x/B/C/dt into
+    # one in_proj of width 2*d_inner + 2*ngroups*d_state + nheads, and the
+    # channel-last causal_conv1d kernel requires that width to be a multiple
+    # of 8. At d_model=64 the default headdim=64 gives nheads=2 and width 290,
+    # which the kernel rejects at runtime; headdim=16 gives nheads=8 and 296.
+    mamba_headdim: int | None = None
 
     # SKA config
     ska_n_heads: int = 12
