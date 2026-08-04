@@ -106,8 +106,41 @@ class SKABlock(nn.Module):
 # Generic model builder
 # ============================================================================
 
-def _build_model(cfg, seq_layer_fn, mlp_fn):
-    """Generic model builder shared by all variants."""
+def _generic_init_weights(module):
+    """Normal(0, 0.02) on Linear/Embedding -- byte-identical to
+    ``KoopmanLM._init_weights``.
+
+    Kept deliberately in lockstep with that method: the standard baselines are
+    controls for Echo, so they must start from the SAME generic distribution.
+    Without it a baseline keeps PyTorch's defaults -- N(0, 1) embeddings -- and
+    with a tied head the initial logits scale as ||h||*std(E) = sqrt(d_model)*1,
+    i.e. std ~8 at d_model=64. That puts the initial loss far ABOVE ln(V)
+    (measured 34-55 vs ln(32000)=10.37) and burns training budget shrinking
+    logits instead of learning. std=0.02 gives logit std ~0.16 -> near-uniform
+    softmax -> loss ~ln(V).
+
+    Only nn.Linear and nn.Embedding are touched, so Mamba-2's A_log/dt_bias/D
+    and the conv1d weight keep mamba_ssm's own initialization, exactly as under
+    KoopmanLM. SKA and Koopman-MLP inits are NOT re-asserted here -- this is
+    applied only by the SKA-free builders (see ``generic_init``).
+    """
+    if isinstance(module, nn.Linear):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    elif isinstance(module, nn.Embedding):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+
+def _build_model(cfg, seq_layer_fn, mlp_fn, generic_init=False):
+    """Generic model builder shared by all variants.
+
+    generic_init: apply ``_generic_init_weights``. Opt-in because the SKA and
+    Koopman-MLP variants own bespoke projection inits that a blanket
+    Normal(0, 0.02) pass would trample; KoopmanLM re-asserts those afterwards,
+    and this builder deliberately does not replicate that logic. Only the
+    SKA-free controls (mamba_only, transformer) enable it.
+    """
 
     class _Model(nn.Module):
         def __init__(self):
@@ -124,6 +157,12 @@ def _build_model(cfg, seq_layer_fn, mlp_fn):
             self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
             if cfg.tie_embeddings:
                 self.lm_head.weight = self.embed.weight
+
+            # AFTER tying, matching KoopmanLM's ordering. apply() only ever
+            # calls in-place normal_, so the tied lm_head/embed stay the SAME
+            # tensor; it is simply filled twice at the same std.
+            if generic_init:
+                self.apply(_generic_init_weights)
 
         def forward(self, input_ids, labels=None, loss_weights=None):
             """Run a baseline LM with the same weighted-CE API as Echo.
@@ -193,7 +232,7 @@ def build_mamba_only(cfg: KoopmanLMConfig):
         return Mamba2Block(c)  # always Mamba, regardless of index
     def mlp_fn(c):
         return SwiGLUMLP(c.d_model, c.mlp_expand)
-    return _build_model(cfg, seq_fn, mlp_fn)
+    return _build_model(cfg, seq_fn, mlp_fn, generic_init=True)
 
 
 def build_mamba_attention(cfg: KoopmanLMConfig):
@@ -218,7 +257,7 @@ def build_transformer(cfg: KoopmanLMConfig):
         return CausalAttentionBlock(c)
     def mlp_fn(c):
         return SwiGLUMLP(c.d_model, c.mlp_expand)
-    return _build_model(cfg, seq_fn, mlp_fn)
+    return _build_model(cfg, seq_fn, mlp_fn, generic_init=True)
 
 
 def build_mamba_ska_swiglu(cfg: KoopmanLMConfig):
