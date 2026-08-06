@@ -1,0 +1,26 @@
+import torch.nn as nn
+from koopman_lm.globals.config import KoopmanLMConfig
+from koopman_lm.globals.modules.norm import make_norm
+
+
+class Mamba2Block(nn.Module):
+    """Pre-norm Mamba-2 sequence layer. Requires mamba_ssm."""
+    def __init__(self, cfg: KoopmanLMConfig):
+        super().__init__()
+        from mamba_ssm import Mamba2
+        self.norm = make_norm(cfg.d_model, cfg.norm_type, cfg.norm_eps)
+        self.mamba = Mamba2(
+            d_model=cfg.d_model,
+            d_state=cfg.d_state,
+            d_conv=cfg.d_conv,
+            expand=cfg.mamba_expand,
+        )
+        self._ablate = False
+
+    def forward(self, x):
+        if self._ablate:
+            return x
+        return x + self.mamba(self.norm(x))
+
+
+__all__ = ["Mamba2Block"]
