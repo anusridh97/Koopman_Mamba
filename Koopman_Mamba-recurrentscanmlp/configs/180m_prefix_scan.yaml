@@ -1,0 +1,43 @@
+# Exact prefix-scan, parameter-matched 180M configuration.
+# One depth is traded for six parallel SKA adapters, leaving a Mamba-only final
+# depth after the last SKA block. Estimated parameter count is ~180.05M.
+d_model: 640
+n_layers: 25
+vocab_size: 32000
+d_state: 128
+d_conv: 4
+mamba_expand: 2
+
+ska_n_heads: 10
+ska_rank: 24
+ska_ridge: 0.01
+ska_power_K: 1
+ska_chunk_size: 64
+ska_layer_indices: [3, 7, 11, 15, 19, 23]
+ska_mode: parallel
+ska_inverse_cholesky: false
+ska_exact_intrachunk: false
+ska_prefix_scan: true
+ska_prefix_scan_block_size: 32
+ska_prefix_scan_jitter: 0.0
+ska_norm_clip: true
+ska_norm_clip_c: 4.0
+ska_eta_learnable: false
+ska_eta_value: 1.0
+ska_eta_bounds: null
+ska_gamma_learnable: false
+ska_gamma_value: 1.0
+ska_gamma_clamp: null
+ska_gamma_bounds: null
+ska_layerscale: true
+ska_layerscale_init: 0.01
+ska_out_proj_std: 0.02
+ska_short_conv: false
+
+mlp_type: swiglu
+mlp_expand: 2.667
+norm_type: rmsnorm
+norm_eps: 0.00001
+init_policy: mamba_safe
+initializer_range: 0.02
+rescale_prenorm_residual: true
