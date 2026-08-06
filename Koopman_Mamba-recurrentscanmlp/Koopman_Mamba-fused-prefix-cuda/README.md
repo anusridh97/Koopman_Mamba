@@ -119,9 +119,3 @@ PYTHONPATH=. pytest -q code-tests \
 ```
 
 The CPU tests cover the inverse-Cholesky formula, asymmetric operator/readout transport, raw-prefix adjoints, block-size invariance, strict causality, recurrent parity, and production parameter counts.
-
-## Verification status of this archive
-
-The recurrence, host integration, Python packaging, and CPU mathematical tests were executed in the packaging environment: **16 tests passed and 10 CUDA-only tests were skipped**. The CUDA device and host translation units also passed Clang CUDA syntax parsing, and a wheel build confirmed that the `.cu` source is packaged.
-
-That environment did not contain a CUDA toolkit, `nvcc`, or an NVIDIA GPU, so the extension has **not** yet been compiled by NVCC or benchmarked on B200. The B200 build script performs that remaining target-machine gate and fails before training if the device, toolkit, forward result, or backward gradients do not match the required contract.
