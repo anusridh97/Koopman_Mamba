@@ -1,0 +1,16 @@
+README.md                                           build, validation, benchmark, and training guide
+pyproject.toml                                      package/dependency metadata; CUDA source included in wheels
+configs/50m.yaml                                    canonical 50,765,216-parameter fused-prefix model
+configs/180m.yaml                                   canonical 180,049,352-parameter fused-prefix model
+configs/*_prefix_scan.yaml                          launcher-compatible aliases of the canonical configs
+scripts/setup_env.sh                                install after CUDA-enabled PyTorch, then validate on B200
+scripts/build_b200_prefix_scan.sh                   native SM100 build entry point
+scripts/build_prefix_scan_cuda.py                   NVCC/device checks plus dense-oracle forward/backward gate
+scripts/benchmark_prefix_scan.py                    full SKA exact-fused versus legacy chunk-64 benchmark
+scripts/train_50m.sh                                50M FineWeb-Edu production launcher
+scripts/train_180m.sh                               180M FineWeb-Edu production launcher
+scripts/pretrain.sh                                 shared data and training pipeline
+koopman_lm/globals/modules/ska/cuda_prefix_scan.py  strict native-layout autograd/JIT wrapper
+koopman_lm/globals/modules/ska/csrc/prefix_scan_ext.cu fused rank-24 exact forward and analytic backward
+koopman_lm/                                         model, optimizer, training, evaluation, and reference runtime
+code-tests/                                         math, integration, native-layout, and CUDA oracle tests

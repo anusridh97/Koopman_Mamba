@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "koopman_lm"
+version = "0.6.0"
+description = "Koopman-Mamba language models with an exact fused CUDA SKA prefix scan."
+requires-python = ">=3.10"
+# Core deps are CUDA-free so `pip install -e .` works on a CPU box (import succeeds;
+# building the Mamba2 backbone needs the optional [cuda] extra). Grounded in the
+# actual module-level imports of koopman_lm/*.py.
+dependencies = [
+    # torch is intentionally NOT upper-pinned: it must match your CUDA + mamba_ssm
+    # build. Install torch FIRST for your platform, then `pip install -e .`.
+    "torch>=2.1",
+    "numpy>=1.24",
+    "transformers>=4.40,<5.0",   # AutoTokenizer (Llama-2 / Mistral)
+    "datasets>=2.18",            # HF datasets for pretokenize + BABILong eval
+    "safetensors",
+    "wandb",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# CUDA-only, version-sensitive: pip cannot resolve the CUDA match reliably, so these
+# are an explicit extra. Required to instantiate the Mamba2 backbone (model.py) and
+# the Mamba-2 backbone. Build against YOUR already-installed torch+CUDA.
+cuda = [
+    "mamba-ssm>=2.2.2",
+    "causal-conv1d>=1.4.0",
+    # Use the Triton version bundled with the selected CUDA-enabled PyTorch.
+    "ninja>=1.11",
+    "packaging>=23",
+]
+# lm-evaluation-harness pulls a heavy transitive tree (sacrebleu, evaluate,
+# sqlitedict, ...) not needed for training or the CPU import-sanity check --
+# kept as its own extra rather than folded into [dev].
+lmharness = [
+    "lm-eval>=0.4.4,<0.5",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+koopman-train = "koopman_lm.training.train:main"
+
+[tool.setuptools.packages.find]
+include = ["koopman_lm", "koopman_lm.*"]
+
+[tool.uv]
+# mamba-ssm / causal-conv1d compile CUDA kernels AGAINST the installed torch, so
+# they must build with torch already present -> no isolated build env.
+no-build-isolation-package = ["mamba-ssm", "causal-conv1d"]
+
+# With isolation OFF, the build uses whatever is in the env -- a fresh uv venv
+# has NO setuptools/wheel/ninja, so the compile would fail. Inject the build
+# deps (incl. torch) for exactly these two packages so `uv sync --extra cuda`
+# works from a clean env. (These packages' setup.py also tries to fetch a
+# matching PREBUILT wheel from GitHub before compiling -- so with network + a
+# torch/CUDA combo they publish, no nvcc compile happens at all.)
+[tool.uv.extra-build-dependencies]
+mamba-ssm = ["torch", "setuptools", "wheel", "ninja", "packaging"]
+causal-conv1d = ["torch", "setuptools", "wheel", "ninja", "packaging"]
+
+# Install a CUDA-enabled PyTorch build appropriate for the target GPU before
+# installing this project. No wheel index is hard-pinned here because B200 requires
+# an SM100-capable build/toolkit.
+
+[tool.pytest.ini_options]
+testpaths = ["code-tests"]
+markers = [
+    "correctness: numerical correctness gate (runs in CI before any training commit)",
+    "gpu: requires a CUDA device (mamba_ssm backbone / bf16 kernels); auto-skipped on CPU",
+    "slow: long-running (e.g. end-to-end smoke test)",
+    "jax: requires JAX; reference-oracle parity tests, auto-skipped if jax absent",
+]
+
+[tool.setuptools.package-data]
+"koopman_lm.globals.modules.ska" = ["csrc/*.cu"]
