@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editable-install / packaging artifacts
+*.so
+
+# OS
+.DS_Store
+
+# Agent / IDE artifacts
+.agents/
+
+# Data / checkpoints / runs (large, not source)
+*.bin
+*.pt
+*.safetensors
+wandb/
+tok_*/
+*-output/
+mqar-*/
+koopman-*-fast/
+results*.json
+paper-out/
+
+# Logs
+*.log
+
+# uv lockfile — kept local for now. If the team standardizes on `uv` as the
+# pinned toolchain for reproduction runs, DELETE this line and commit uv.lock
+# (a committed lockfile is the pro-reproducibility choice for a fresh clone).
+uv.lock

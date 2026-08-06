@@ -1,0 +1,8 @@
+{
+  "model_type": "koopman",
+  "held_out_ppl": {
+    "loss": 3.8342284404870237,
+    "ppl": 46.257723309235004,
+    "n_tokens": 337920
+  }
+}
