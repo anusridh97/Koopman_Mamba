@@ -82,3 +82,71 @@ def test_resume_indices_is_the_tail_of_the_epoch_permutation():
     tail = resume_indices(100, seed=7, epoch=3, samples_consumed=40)
     assert tail == full[40:]
     assert len(tail) == 60
+
+
+import torch.nn as nn
+
+
+def _tiny_optimizer_and_scheduler():
+    model = nn.Linear(4, 4)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda step: 1.0 - step / 100)
+    return model, opt, sched
+
+
+def test_resume_state_round_trips_optimizer_scheduler_and_position(tmp_path):
+    from koopman_lm.training.resume import save_resume_state, load_resume_state, apply_resume_state
+
+    model, opt, sched = _tiny_optimizer_and_scheduler()
+    x = torch.randn(2, 4)
+    for _ in range(5):
+        loss = model(x).sum()
+        loss.backward()
+        opt.step(); sched.step(); opt.zero_grad()
+
+    path = tmp_path / "resume.pt"
+    save_resume_state(path, step=5, epoch=0, samples_consumed=17,
+                       optimizer=opt, scheduler=sched)
+    # re-read the just-written file for the "expected" snapshot -- opt.state_dict()
+    # returns live references to the optimizer's own tensors, which the next
+    # opt.step() calls mutate in place, so comparing against it later would
+    # silently compare against post-mutation values instead of the saved ones.
+    saved_snapshot = load_resume_state(path)
+    saved_opt_sd = saved_snapshot["optimizer"]
+    saved_sched_sd = saved_snapshot["scheduler"]
+
+    # advance further -- this must NOT be what gets restored
+    for _ in range(3):
+        loss = model(x).sum()
+        loss.backward()
+        opt.step(); sched.step(); opt.zero_grad()
+    assert sched.state_dict()["_step_count"] != saved_sched_sd["_step_count"]
+
+    # fresh optimizer/scheduler, as a resumed process would build
+    _, fresh_opt, fresh_sched = _tiny_optimizer_and_scheduler()
+    state = load_resume_state(path)
+    step, epoch, samples_consumed = apply_resume_state(state, optimizer=fresh_opt, scheduler=fresh_sched)
+
+    assert (step, epoch, samples_consumed) == (5, 0, 17)
+    assert fresh_sched.state_dict()["_step_count"] == saved_sched_sd["_step_count"]
+    # AdamW moment tensors match exactly (not the fresh, zero-initialized ones)
+    for group_a, group_b in zip(fresh_opt.state_dict()["state"].values(), saved_opt_sd["state"].values()):
+        assert torch.equal(group_a["exp_avg"], group_b["exp_avg"])
+
+
+def test_apply_resume_state_restores_rng_by_default(tmp_path):
+    from koopman_lm.training.resume import save_resume_state, load_resume_state, apply_resume_state
+
+    _, opt, sched = _tiny_optimizer_and_scheduler()
+    random.seed(9); np.random.seed(9); torch.manual_seed(9)
+    random.random(); np.random.rand(); torch.randn(1)  # burn in
+
+    path = tmp_path / "resume.pt"
+    save_resume_state(path, step=0, epoch=0, samples_consumed=0, optimizer=opt, scheduler=sched)
+    expected = (random.random(), float(np.random.rand()), torch.randn(1).item())
+
+    random.random(); np.random.rand(); torch.randn(1)  # perturb
+    state = load_resume_state(path)
+    apply_resume_state(state, optimizer=opt, scheduler=sched)
+    actual = (random.random(), float(np.random.rand()), torch.randn(1).item())
+    assert actual == expected

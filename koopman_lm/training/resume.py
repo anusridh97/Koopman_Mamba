@@ -68,3 +68,48 @@ def resume_indices(dataset_len: int, seed: int, epoch: int, samples_consumed: in
     """The indices still owed for `epoch`, after `samples_consumed` have
     already been drawn -- the forward skip of §5.2, pure index arithmetic."""
     return epoch_permutation(dataset_len, seed, epoch)[samples_consumed:]
+
+
+def save_resume_state(path, *, step: int, epoch: int, samples_consumed: int,
+                       optimizer, scheduler, extra: Optional[Dict[str, Any]] = None) -> None:
+    """Write the rolling resume.pt (§5.3): optimizer + scheduler + RNG + epoch
+    + samples-consumed, atomically (temp file + os.replace) so a kill
+    mid-write cannot corrupt it. Deliberately excludes model weights -- those
+    stay in the periodic, weights-only step_<N>/ archival checkpoints;
+    train.py's caller is responsible for writing a step_<N>/ at the same
+    `step` whenever it calls this."""
+    import torch
+
+    from koopman_lm.run.artifacts import atomic_torch_save
+
+    state = {
+        "step": step,
+        "epoch": epoch,
+        "samples_consumed": samples_consumed,
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "rng": capture_rng_state(),
+        "torch_version": str(torch.__version__),
+    }
+    if extra:
+        state.update(extra)
+    atomic_torch_save(path, state)
+
+
+def load_resume_state(path) -> Dict[str, Any]:
+    """resume.pt holds RNG state (numpy/python tuples, not just tensors), so
+    weights_only=False -- same reasoning as mqar_finetune.py's meta.pt load."""
+    import torch
+
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+def apply_resume_state(state: Dict[str, Any], *, optimizer, scheduler,
+                        restore_rng: bool = True):
+    """Restore optimizer/scheduler (and, by default, RNG) from a loaded
+    resume-state dict. Returns (step, epoch, samples_consumed)."""
+    optimizer.load_state_dict(state["optimizer"])
+    scheduler.load_state_dict(state["scheduler"])
+    if restore_rng:
+        restore_rng_state(state["rng"])
+    return state["step"], state["epoch"], state["samples_consumed"]
