@@ -112,9 +112,15 @@ green.
 Four frozen dataclasses:
 
 - `model: KoopmanLMConfig` — unchanged, exactly as it exists today
-- `data: DataSpec` — shard reference, plus the tokenizer/mix/token-count it must match
+- `data: DataSpec` — **polymorphic**, tagged by `kind`:
+  - `kind: shard` — shard reference plus the tokenizer/mix/token-count it must match
+  - `kind: synthetic` — generator name and its parameters (`mqar`, `toolcall`,
+    `sysprompt`, `niah`), for the experiments of §6
 - `optim: OptimSpec` — lr, warmup, schedule, effective batch, weight decay, grad clip
 - `runtime: RuntimeSpec` — seed, precision, ddp, partition, account, QoS, workers
+
+`data.kind` is the *only* place the pretraining and synthetic-experiment paths
+differ. See §6.
 
 ### 3.2 Two-stage lifecycle
 
@@ -136,7 +142,17 @@ not competing options; they belong at different lifecycle stages.
 ### 3.3 Run identity
 
 ```
-run_id = sha256(model + data + optim + seed)[:8]
+group_id = sha256(model + data + optim)[:8]          # the experiment
+run_id   = sha256(model + data + optim + seed)[:8]   # the datapoint
+```
+
+Two hashes, because seed occupies an awkward middle position: a different seed
+*is* a different datapoint, but three seeds are also obviously one experiment.
+Hashing with and without it gives both readings, and makes replicates visible on
+the filesystem rather than only recoverable through the aggregation layer:
+
+```
+$RUN_ROOT/50m-fineweb-3b.<group_id>/seed42.<run_id>/
 ```
 
 The hashed/not-hashed line is **not** the struct boundary. It is:
@@ -243,6 +259,35 @@ are deleted; the registry drops to two entries.
 `test_config_hash_distinguishes_configs` already fails on exactly this, so the
 fix has a test waiting for it.
 
+### 3.7 Artifact write policy
+
+Content-addressed directories create an overwrite hazard that the rest of this
+design would otherwise walk straight into: because `run_id` is derived from the
+spec, relaunching an identical spec resolves to an identical directory. Without
+a policy, a re-launch silently clobbers a completed run's `final/` — and since
+the spec is identical, nothing in the config would reveal that anything was
+lost. The current code has the same exposure: `_save_checkpoint`
+(`train.py:362`) does `os.makedirs(..., exist_ok=True)` and then writes over
+whatever is present.
+
+The governing distinction is between **earned** bytes and **derived** bytes.
+Checkpoints and result JSONs are earned — hours to days of GPU time. Specs,
+sbatch files, and aggregation tables are derived and reproducible. The policy is
+strict for the former and relaxed for the latter.
+
+- **Run-directory creation refuses to clobber.** If the target exists and
+  contains `final/`, abort with the path and the conflicting `run_id`.
+  Proceeding requires either `--resume` (continue from `resume.pt`) or
+  `--force` (explicit, and recorded in `attempts.jsonl`).
+- **`attempts.jsonl` is append-only**, never rewritten. It is the audit trail of
+  every execution against this `run_id`, including forced ones.
+- **All state writes are atomic** — temp file plus `os.replace` — so a
+  preemption mid-write cannot leave a truncated `resume.pt` or `spec.yaml`.
+- **Re-scoring a checkpoint overwrites its result file.** This is a deliberate
+  exception: eval output is cheap and re-derivable, and the alternative
+  accumulates unversioned near-duplicates. Stated here so it is a decision
+  rather than an accident.
+
 ---
 
 ## 4. Results and evaluation layer
@@ -270,7 +315,7 @@ design must not assume they are alike:
 
 `experiments/table2.py` and `mqar_finetune.py` are a different species again —
 they train a small model from scratch on generated data and score in-loop, with
-no shard and no tokenizer. See §7.
+no shard and no tokenizer. They are brought onto the shared loop in §6.
 
 ### 4.2 What changes
 
@@ -334,6 +379,18 @@ weights-only warm start — optimizer, LR schedule, and step counter are all
 fresh. `_save_checkpoint` (`train.py:362`) writes `model.pt`, `meta.pt`, and the
 tokenizer; no optimizer state.
 
+**But the capability already exists twice in-tree.** `mqar_finetune.py:116`
+saves optimizer and scheduler state and `:145` restores both plus the step;
+`table2.py:168` and `:183` are a near byte-for-byte copy of the same pair. So
+this section is a *consolidation* of three implementations — two working, one
+absent — not new capability.
+
+That duplication is itself the finding. `CONTRIBUTING.draft.md` records the same
+failure mode from the branch audit: *"`ati-180m-exact-resume` and
+`table4-reproduction-fix` independently wrote the same resume implementation and
+the same test file, same day, same author."* It has since happened again, inside
+a single branch. §6 removes the conditions that cause it.
+
 The Marlowe partitions cap at 30 days (`hero`), 2 days (`batch`), and 12 hours
 (`preempt`). The 180m recipe is 51,000 steps. On anything but `hero` that run
 cannot finish, and a preemption restarts it from zero. Sweeps at scale live on
@@ -393,7 +450,69 @@ criterion for this section.
 
 ---
 
-## 6. Migration
+## 6. Trainer unification
+
+### 6.1 Three loops, one algorithm
+
+`train.py`, `mqar_finetune.py`, and `table2.py` are near-duplicates:
+
+| | `train.py` | `mqar_finetune.py` | `table2.py` |
+|---|---|---|---|
+| Batches from | `MemmapPackedDataset` | `MQARDataset` (generator) | inline per-step generators, no DataLoader |
+| Loss | model-internal, `loss_weights` | external CE, `ignore_index=-100` | external CE, `ignore_index=-100` |
+| Resume | **none** | full | full |
+| DDP / grad-accum | yes | no | no |
+| Param groups | `_param_groups` no-decay policy | `model.parameters()` | `model.parameters()`, wd=0.01 |
+
+Everything that genuinely differs is the **data source**, the **loss**, and an
+optional **in-loop eval hook**. The loop, resume, DDP, gradient accumulation,
+parameter grouping, logging, and checkpointing are one algorithm written three
+times.
+
+### 6.2 `TrainTask`
+
+```
+TrainTask                one loop, one resume, one param-group policy
+├── ShardTask            MemmapPackedDataset; weighted CE through the model
+└── SyntheticTask        curricula.py generators; masked CE; in-loop accuracy
+      ├── mqar                        (mqar_finetune)
+      ├── toolcall / sysprompt        (table2 training curriculum)
+      └── niah                        (table2 held-out eval)
+```
+
+A task supplies batches, computes loss, and optionally exposes an in-loop eval.
+It owns nothing else. `RunSpec.data.kind` selects the task (§3.1), so the
+synthetic experiments become ordinary runs: they gain the run directory, the
+result envelope of §4.2, sweep grids declared once instead of duplicated into
+`slurm_array.sh`, and exact resume — while `mqar_finetune.py` and `table2.py`
+shrink to their generators and eval logic.
+
+This removes code rather than adding a second system.
+
+### 6.3 The weight-decay discrepancy
+
+`train.py:61` deliberately excludes norms, biases, embeddings, and the Mamba
+state parameters (`A_log`, `D`, `dt_bias`) from weight decay, documenting that
+at long schedules `weight_decay=0.1` shrinks them several-fold before gradients
+are considered. `table2.py:206` instead passes `model.parameters()` flat at
+`weight_decay=0.01`.
+
+**Published Table 2 numbers were therefore produced under a different and
+almost certainly unintended optimizer regime than every other result in the
+repo.** This is a live inconsistency in a paper result, not a style question.
+
+Resolution: apply the `_param_groups` policy uniformly and **regenerate Table 2**.
+The existing numbers are treated as superseded, not annotated-and-kept — a
+result that cannot be reproduced by the current code is a liability regardless
+of how it is labelled. Because Table 2 runs at 1m scale, the re-run is cheap
+relative to the ambiguity it removes.
+
+This is also the strongest available argument for §6.2: the discrepancy exists
+*because* there are three loops. One loop makes it unrepresentable.
+
+---
+
+## 7. Migration
 
 `pretrain.sh` is **not** deleted in the commit that adds the Python path.
 
@@ -409,13 +528,22 @@ criterion for this section.
 4. Launch one real 50m run through the new path on the `batch` partition.
    Confirm the checkpoint loads, resume works after a real preemption, and the
    loss curve is as expected.
-5. Delete the three shell scripts, in their own commit.
+5. Unify the trainers behind `TrainTask` (§6.2), porting `mqar_finetune.py` and
+   `table2.py` onto the shared loop.
+6. Regenerate Table 2 under the corrected parameter groups (§6.3) and supersede
+   the old numbers in `results/`.
+7. Delete the three shell scripts, in their own commit.
 
-Both paths work until step 5.
+Both paths work until step 7.
+
+Steps 1, 3, and 5 each stand alone: the cherry-picks fix a red suite, resume
+makes the `batch` and `preempt` partitions usable, and trainer unification
+removes the duplication behind §6.3 — none of them require the launcher work to
+have landed.
 
 ---
 
-## 7. Out of scope
+## 8. Out of scope
 
 - `koopman_lm/experiments/phase2/` (~12.5k lines on Cody's branch). Its schemas
   are being mined — the run manifest fields, config+data hashing, runtime
@@ -425,20 +553,13 @@ Both paths work until step 5.
   governance approvals. Not adopted.
 - The 9 phase2-coupled tests.
 - Full content-addressed data shards (see §3.5).
-- **Converting `experiments/table2.py` and `mqar_finetune.py`.** They train and
-  score in one loop on generated data, with their own checkpoint and resume
-  logic and their own output trees (`./table2-out`, `./mqar-out`,
-  `./mqar-sweep`). They should adopt the run-directory contract of §4.2, but
-  rewriting their internals would introduce a second trainer into this spec.
-  Their sweep grids do fall under §4.2's "declared exactly once" rule, since
-  that is what `slurm_array.sh` duplicates today.
 - Serving or deployment inference. `models/recurrent.py` provides step-by-step
   decode for generation-based evals and parity tests; nothing here concerns
   productionising it.
 
 ---
 
-## 8. Related work in flight
+## 9. Related work in flight
 
 - Branch `jack/test-recovery`: 23 recovered test files, CI cpu job,
   `scripts/check_imports.py`, `scripts/slurm_tests.sh`. 208 passed / 29 failed /
