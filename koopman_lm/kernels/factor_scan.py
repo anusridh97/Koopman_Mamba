@@ -51,6 +51,7 @@ import torch
 
 from koopman_lm.kernels.lin_alg import (
     spec_w, tri_solve_lower, tri_solve_lowerT, whiten_M)
+from koopman_lm.kernels.ska_operator import _ska_whitened_forward
 
 
 # canonical thin square root (upsweep merge primitive)
@@ -202,14 +203,7 @@ class SKACoreGivenL(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, G, M, Cv, q, L, K):
-        W = whiten_M(L, M)
-        alpha = spec_w(W)
-        a = alpha.unsqueeze(-1)
-        U = [tri_solve_lower(L, q)]
-        for _ in range(K):
-            U.append(a * (W @ U[-1]))
-        XK = tri_solve_lowerT(L, U[K])
-        y = Cv @ XK
+        y, W, alpha, U = _ska_whitened_forward(L, M, Cv, q, K, need_trace=True)
         ctx.K = K
         ctx.save_for_backward(L, W, Cv, alpha, *U)
         return y

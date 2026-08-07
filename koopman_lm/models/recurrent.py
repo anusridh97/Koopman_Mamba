@@ -19,83 +19,31 @@ Legacy chunked configurations retain the older raw-state fallback.
 Mamba-2 decode is unchanged (uses mamba_ssm's built-in step()).
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from contextlib import nullcontext
 
 from koopman_lm.models.koopman_lm import KoopmanLM
+from koopman_lm.models.recurrent_state import SKAState, PrefixSKAState  # noqa: F401 (re-exported)
 from koopman_lm.modules.seq.mamba import Mamba2Block
 from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
-from koopman_lm.kernels.lin_alg import whiten_M, spec_w, tri_solve_lower, tri_solve_lowerT
 from koopman_lm.kernels.chunk_stats import symmetric_key_value, causal_normalize
+from koopman_lm.kernels.ska_operator import ska_decode_whitened
 from koopman_lm.kernels.prefix_scan import (
     _advance_whitened_state,
     _read_state,
     boundary_whitened_states,
 )
 
-
-def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
-    """y = C_v L^{-T}(alpha W)^K L^{-1} q, given Cholesky L of G. Matches the
-    training core's forward (no grad needed at decode).
-    L:(N,r,r) M:(N,r,r) Cv:(N,P,r) q:(N,r,1) -> (N,P,1)."""
-    W = whiten_M(L, M)
-    alpha = spec_w(W).unsqueeze(-1)                  # (N,1,1)
-    U = tri_solve_lower(L, q)
-    for _ in range(K):
-        U = alpha * (W @ U)
-    XK = tri_solve_lowerT(L, U)
-    y = Cv @ XK
-    if isinstance(gamma_value, float):
-        if gamma_value != 1.0:
-            y = y * (gamma_value ** K)
-    else:
-        y = y * (gamma_value ** K)
-    return y
-
-
-class SKAState:
-    """Fixed-size recurrent state for one SKA layer (sqrt-beta symmetric)."""
-    __slots__ = ['G', 'M', 'C_v', 'x_last', 'L']
-
-    def __init__(self, B, H, r, P, device, dtype=torch.float32, ridge_eps=1e-3):
-        eye = torch.eye(r, device=device, dtype=dtype)
-        self.G = ridge_eps * eye.reshape(1, 1, r, r).expand(B, H, r, r).clone()
-        self.L = math.sqrt(ridge_eps) * eye.reshape(1, 1, r, r) \
-                     .expand(B, H, r, r).clone()      # carried Cholesky of G
-        self.M = torch.zeros(B, H, r, r, device=device, dtype=dtype)
-        self.C_v = torch.zeros(B, H, P, r, device=device, dtype=dtype)
-        # (B,H,r) previous SYMMETRIC key x = sqrt(beta)*z (for the boundary M
-        # cross-term sqrt(beta_t beta_{t-1})). NOT the raw key -- carrying raw z
-        # here is the train/decode divergence bug.
-        self.x_last = None
-
-
-class PrefixSKAState:
-    """Compact exact state used by the prefix-scan recurrence.
-
-    Invariants per batch/head are
-
-        L L^T = G,
-        A = L^{-1} M L^{-T},
-        R = C L^{-T},
-        h_prev = L^{-1} x_last.
-
-    The state contains two r-by-r matrices instead of the legacy three raw
-    matrices plus a factor, and every decode write is quadratic.
-    """
-    __slots__ = ['L', 'A', 'R', 'h_prev', 'has_prev']
-
-    def __init__(self, B, H, r, P, device, dtype=torch.float32, ridge_eps=1e-3):
-        eye = torch.eye(r, device=device, dtype=dtype)
-        self.L = (math.sqrt(ridge_eps) * eye).reshape(1, 1, r, r) \
-            .expand(B, H, r, r).clone()
-        self.A = torch.zeros(B, H, r, r, device=device, dtype=dtype)
-        self.R = torch.zeros(B, H, P, r, device=device, dtype=dtype)
-        self.h_prev = torch.zeros(B, H, r, device=device, dtype=dtype)
-        self.has_prev = torch.zeros(B, H, device=device, dtype=torch.bool)
+# SKAState/PrefixSKAState now live in models/recurrent_state.py; re-imported
+# here (and re-exported, since `from koopman_lm.models.recurrent import
+# PrefixSKAState` is a real external import path -- see
+# code-tests/test_prefix_scan.py) so this file holds the model and nothing
+# else. _ska_apply_whitened (the third bit-identical copy of the whitened SKA
+# forward core) moved to kernels.ska_operator.ska_decode_whitened, next to
+# its two siblings (_ref_core, SKACoreGivenL.forward) -- see
+# docs/superpowers/specs/2026-08-07-structural-review.md, issue 3.
 
 
 class RecurrentKoopmanLM(nn.Module):
@@ -420,7 +368,7 @@ class RecurrentKoopmanLM(nn.Module):
             else:
                 y = y * (gamma ** ska.power_K)
         else:
-            y = _ska_apply_whitened(
+            y = ska_decode_whitened(
                 st.L.reshape(N, r, r),
                 st.M.reshape(N, r, r),
                 st.C_v.reshape(N, P, r),

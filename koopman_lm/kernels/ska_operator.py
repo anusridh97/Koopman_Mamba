@@ -84,17 +84,58 @@ def ska_core(G, M, Cv, q, K):
     return SKACoreFn.apply(G, M, Cv, q, K)
 
 
-# --- reference: autodiff THROUGH the same forward (gauge-identical) ---
-def _ref_core(G, M, Cv, q, K):
-    L = torch.linalg.cholesky(G)
+def _ska_whitened_forward(L, M, Cv, q, K, need_trace=False):
+    """The whitened SKA forward core, given a precomputed Cholesky factor L:
+
+        y = Cv @ L^{-T} (alpha W)^K L^{-1} q,   W = L^{-1} M L^{-T}
+
+    This is the single shared implementation behind three call sites that
+    were previously bit-identical copies of this loop: _ref_core (below,
+    which computes L = chol(G) itself), factor_scan.SKACoreGivenL.forward
+    (which takes L as an argument and needs the intermediate U's for its
+    custom backward), and models.recurrent's decode-time whitened apply
+    (which takes L, runs under no_grad, and additionally scales by
+    gamma_value ** K). See
+    docs/superpowers/specs/2026-08-07-structural-review.md, issue 3.
+
+    If need_trace, also returns (W, alpha, U) with U = [U_0, ..., U_K], the
+    state SKACoreGivenL.forward needs to save for backward.
+    """
     W = whiten_M(L, M)
     alpha = spec_w(W)
     a = alpha.unsqueeze(-1)
+    if need_trace:
+        U = [tri_solve_lower(L, q)]
+        for _ in range(K):
+            U.append(a * (W @ U[-1]))
+        XK = tri_solve_lowerT(L, U[K])
+        y = Cv @ XK
+        return y, W, alpha, U
     U = tri_solve_lower(L, q)
     for _ in range(K):
         U = a * (W @ U)
     XK = tri_solve_lowerT(L, U)
     return Cv @ XK
+
+
+def ska_decode_whitened(L, M, Cv, q, K, gamma_value):
+    """Decode-time whitened apply: the shared forward core plus the
+    gamma_value ** K scaling the O(1)-state recurrent decode path needs.
+    No backward (decode runs under no_grad).
+    L:(N,r,r) M:(N,r,r) Cv:(N,P,r) q:(N,r,1) -> (N,P,1)."""
+    y = _ska_whitened_forward(L, M, Cv, q, K)
+    if isinstance(gamma_value, float):
+        if gamma_value != 1.0:
+            y = y * (gamma_value ** K)
+    else:
+        y = y * (gamma_value ** K)
+    return y
+
+
+# --- reference: autodiff THROUGH the same forward (gauge-identical) ---
+def _ref_core(G, M, Cv, q, K):
+    L = torch.linalg.cholesky(G)
+    return _ska_whitened_forward(L, M, Cv, q, K)
 
 
 # ---------------------------------------------------------------------------
