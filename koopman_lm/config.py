@@ -114,7 +114,7 @@ class KoopmanLMConfig:
 
     # --- Koopman MLP utilization / structure options (Aurora-inspired v2) ---
     # All default to reproducing v1 exactly (param names/shapes unchanged).
-    # See globals/modules/koopman_mlp.py for the full rationale.
+    # See modules/mlp/koopman.py for the full rationale.
     #
     # (1) Row-normalized lift with explicit per-row gains (WeightNorm over rows):
     #     W[i,:] = g_i * v_i / ||v_i||. "How much a neuron matters" collapses to

@@ -34,9 +34,10 @@ from koopman_lm.training.repro import seed_everything, enable_determinism, seed_
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.mamba import Mamba2Block
 from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
+from koopman_lm.modules.seq.attention import CausalAttentionBlock
 from koopman_lm.models.baselines import (
     build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
-    build_mamba_ska_koopman, CausalAttentionBlock,
+    build_mamba_ska_koopman,
 )
 from koopman_lm.training.data.dataset import MemmapPackedDataset
 
