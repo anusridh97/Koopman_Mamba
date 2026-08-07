@@ -197,3 +197,75 @@ def test_check_git_clean_returns_false_when_clean(monkeypatch):
 
     monkeypatch.setattr("koopman_lm.run.resolve.subprocess.run", _fake_run(""))
     assert check_git_clean(allow_dirty=False) is False
+
+
+def test_load_materialized_spec_rejects_missing_model_field(tmp_path):
+    """A spec.yaml written before a field was added must not silently receive
+    the new dataclass default on load -- that would make an old run appear
+    to have declared a value it never had. Missing keys must raise, listing
+    what's missing."""
+    import dataclasses
+
+    from koopman_lm.config import KoopmanLMConfig, build_config
+    from koopman_lm.run.resolve import load_materialized_spec, to_flat_dict
+    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+
+    spec = RunSpec(
+        name="x", model=build_config("50m"),
+        data=SyntheticDataSpec(generator="mqar", params={}),
+        optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100),
+        runtime=RuntimeSpec(),
+    )
+    flat = to_flat_dict(spec)
+    removed_field = next(iter(sorted(flat["model"])))
+    del flat["model"][removed_field]
+
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(yaml.safe_dump(flat, sort_keys=False))
+
+    with pytest.raises(ValueError, match="does not match this code's config schema") as excinfo:
+        load_materialized_spec(spec_path)
+    assert removed_field in str(excinfo.value)
+    assert "missing" in str(excinfo.value)
+
+
+def test_load_materialized_spec_rejects_unknown_model_field(tmp_path):
+    """A spec.yaml key absent from the current KoopmanLMConfig dataclass
+    (e.g. a field that was renamed or removed) must raise rather than being
+    silently ignored or crashing with an opaque TypeError."""
+    from koopman_lm.config import build_config
+    from koopman_lm.run.resolve import load_materialized_spec, to_flat_dict
+    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+
+    spec = RunSpec(
+        name="x", model=build_config("50m"),
+        data=SyntheticDataSpec(generator="mqar", params={}),
+        optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100),
+        runtime=RuntimeSpec(),
+    )
+    flat = to_flat_dict(spec)
+    flat["model"]["some_field_that_was_removed_long_ago"] = 123
+
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(yaml.safe_dump(flat, sort_keys=False))
+
+    with pytest.raises(ValueError, match="does not match this code's config schema") as excinfo:
+        load_materialized_spec(spec_path)
+    assert "some_field_that_was_removed_long_ago" in str(excinfo.value)
+    assert "unknown" in str(excinfo.value)
+
+
+def test_load_materialized_spec_accepts_exact_key_set(tmp_path):
+    from koopman_lm.config import build_config
+    from koopman_lm.run.resolve import load_materialized_spec, materialize
+    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+
+    spec = RunSpec(
+        name="x", model=build_config("50m"),
+        data=SyntheticDataSpec(generator="mqar", params={}),
+        optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100),
+        runtime=RuntimeSpec(),
+    )
+    out_path = materialize(spec, tmp_path)
+    reloaded = load_materialized_spec(out_path)
+    assert reloaded.model == spec.model

@@ -179,10 +179,33 @@ def materialize(spec: RunSpec, run_dir, *, dirty: bool = False) -> Path:
     return out_path
 
 
+def _check_model_key_set(model_dict: Dict[str, Any]) -> None:
+    """A spec.yaml written before a field was added to KoopmanLMConfig would
+    otherwise silently receive the new field's default on load, making an old
+    run look like it declared a value it never had. Compare the materialized
+    spec's model key set against dataclasses.fields(KoopmanLMConfig) and raise
+    with both lists on any mismatch.
+
+    Scoped to *materialized* specs only -- authoring specs with `extends:`
+    legitimately carry partial key sets (a leaf overrides only what it
+    changes), so this must not run in resolve_run_spec's _resolve_model path.
+    """
+    expected = {f.name for f in dataclasses.fields(KoopmanLMConfig)}
+    actual = set(model_dict)
+    missing = sorted(expected - actual)
+    unknown = sorted(actual - expected)
+    if missing or unknown:
+        raise ValueError(
+            "spec.yaml does not match this code's config schema.\n"
+            f"  missing: {missing}\n"
+            f"  unknown: {unknown}")
+
+
 def load_materialized_spec(spec_yaml_path) -> RunSpec:
     """Read a materialized spec.yaml back into a RunSpec (used by eval/resume;
     never re-reads a base config)."""
     raw = yaml.safe_load(Path(spec_yaml_path).read_text())
+    _check_model_key_set(raw["model"])
     model = KoopmanLMConfig(**raw["model"])
     data = data_spec_from_dict(raw["data"])
     optim = OptimSpec(**raw["optim"])
