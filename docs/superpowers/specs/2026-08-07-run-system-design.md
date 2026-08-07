@@ -21,9 +21,9 @@ first element is reconstructable afterwards.
 
 Each of these is checkable against the tree as of `a7ced87`.
 
-**Identity is half-captured.** `config_hash` (`config.py:281`) hashes only
-`KoopmanLMConfig`. It goes into every checkpoint (`train.py:346`) and into the
-wandb group name (`train.py:287`). Two runs at LR 4e-4 and 3e-4 over different
+**Identity is half-captured.** `config_hash` (`config.py:288`) hashes only
+`KoopmanLMConfig`. It goes into every checkpoint (`train.py:347`) and into the
+wandb group name (`train.py:288`). Two runs at LR 4e-4 and 3e-4 over different
 token budgets are therefore indistinguishable by hash and land in the same
 wandb group. The half of a run's identity that is actually swept is the half
 that is not captured.
@@ -57,7 +57,7 @@ exist. The `_prefix_scan` variants set no backend field, so
 
 **Names are maintained by hand.** The size token appears in four schemes with
 three spellings — `50m`, `50m_prefix_scan`, `50m_quality`. `phase_tag` defaults
-to the literal `"run"` (`train.py:413`) and `pretrain.sh` never sets it, so every
+to the literal `"run"` (`train.py:414`) and `pretrain.sh` never sets it, so every
 production wandb group is `run-50m_prefix_scan-<hash>`.
 
 ---
@@ -76,7 +76,7 @@ drops out):
 | `config.py` | **ours** | 10 fields exist only here: all `ska_prefix_scan*`, `ska_mode`, `mlp_type`, `norm_type`/`norm_eps`, `init_policy`, `initializer_range`, `rescale_prenorm_residual` — plus every `ValueError` validation in `__post_init__`. Cody has one: `mamba_headdim`. |
 | `koopman_lm.py` | **ours** | `MambaSKAParallelBlock`, `_build_mlp`, both init policies. Cody: nothing unique. |
 | `recurrent.py` | **ours** | `PrefixSKAState`, `_prefill_sequence_layer`, `_step_sequence_layer`. Cody: nothing unique. |
-| `baselines.py` | **ours** | Cody's apparent extras (`SKABlock`, `SwiGLUMLP`) merely relocated — now at `models/koopman_lm.py:14` and `modules/channel_mixer/mlp.py:11`. |
+| `baselines.py` | **ours** | Cody's apparent extras (`SKABlock`, `SwiGLUMLP`) merely relocated — now at `modules/seq/ska_block.py:26` and `modules/mlp/swiglu.py:11`. |
 | `ska.py` | ours (net) | +8/−32 toward Cody; no API divergence. |
 | `train.py` | ours (net) | +47/−79 toward Cody; no API divergence. |
 | `attention.py` | **Cody** | RoPE dtype fix. The one confirmed regression. |
@@ -267,7 +267,7 @@ spec, relaunching an identical spec resolves to an identical directory. Without
 a policy, a re-launch silently clobbers a completed run's `final/` — and since
 the spec is identical, nothing in the config would reveal that anything was
 lost. The current code has the same exposure: `_save_checkpoint`
-(`train.py:362`) does `os.makedirs(..., exist_ok=True)` and then writes over
+(`train.py:363`) does `os.makedirs(..., exist_ok=True)` and then writes over
 whatever is present.
 
 The governing distinction is between **earned** bytes and **derived** bytes.
@@ -374,9 +374,9 @@ its `run_id` and so can be traced to the run that produced it.
 
 ### 5.1 Why this is in scope
 
-`train.py` cannot resume. `--init_from` (`train.py:107`) is explicitly a
+`train.py` cannot resume. `--init_from` (`train.py:108`) is explicitly a
 weights-only warm start — optimizer, LR schedule, and step counter are all
-fresh. `_save_checkpoint` (`train.py:362`) writes `model.pt`, `meta.pt`, and the
+fresh. `_save_checkpoint` (`train.py:363`) writes `model.pt`, `meta.pt`, and the
 tokenizer; no optimizer state.
 
 **But the capability already exists twice in-tree.** `mqar_finetune.py:116`
@@ -491,7 +491,7 @@ This removes code rather than adding a second system.
 
 ### 6.3 The weight-decay discrepancy
 
-`train.py:61` deliberately excludes norms, biases, embeddings, and the Mamba
+`train.py:62` deliberately excludes norms, biases, embeddings, and the Mamba
 state parameters (`A_log`, `D`, `dt_bias`) from weight decay, documenting that
 at long schedules `weight_decay=0.1` shrinks them several-fold before gradients
 are considered. `table2.py:206` instead passes `model.parameters()` flat at
