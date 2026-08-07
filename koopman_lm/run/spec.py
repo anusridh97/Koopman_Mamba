@@ -170,3 +170,43 @@ class RunSpec:
             raise TypeError(f"RunSpec.optim must be an OptimSpec, got {type(self.optim)}")
         if not isinstance(self.runtime, RuntimeSpec):
             raise TypeError(f"RunSpec.runtime must be a RuntimeSpec, got {type(self.runtime)}")
+
+
+def _json_stable(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+def _scientific_payload(spec: RunSpec, include_seed: bool) -> Dict[str, Any]:
+    payload = {
+        "model": dataclasses.asdict(spec.model),
+        "data": dataclasses.asdict(spec.data),
+        "optim": dataclasses.asdict(spec.optim),
+    }
+    if include_seed:
+        payload["seed"] = spec.runtime.seed
+    return payload
+
+
+def group_id(spec: RunSpec) -> str:
+    """sha256(model + data + optim)[:8] -- the experiment (§3.3)."""
+    blob = _json_stable(_scientific_payload(spec, include_seed=False))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+
+
+def run_id(spec: RunSpec) -> str:
+    """sha256(model + data + optim + seed)[:8] -- the datapoint (§3.3)."""
+    blob = _json_stable(_scientific_payload(spec, include_seed=True))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+
+
+def run_dir_name(spec: RunSpec) -> str:
+    return f"{spec.name}.{group_id(spec)}"
+
+
+def attempt_dir_name(spec: RunSpec) -> str:
+    return f"seed{spec.runtime.seed}.{run_id(spec)}"
+
+
+def run_dir_path(run_root, spec: RunSpec) -> Path:
+    """$RUN_ROOT/<name>.<group_id>/seed<seed>.<run_id>/ (§3.3)."""
+    return Path(run_root) / run_dir_name(spec) / attempt_dir_name(spec)

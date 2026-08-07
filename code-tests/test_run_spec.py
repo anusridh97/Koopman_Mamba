@@ -145,3 +145,61 @@ def test_run_spec_type_checks_its_fields():
         RunSpec(name="x", model="not-a-config", data=data, optim=optim, runtime=runtime)
     with pytest.raises(TypeError):
         RunSpec(name="x", model=cfg, data="not-a-data-spec", optim=optim, runtime=runtime)
+
+
+def _make_spec(seed=42, lr=4e-4, partition="batch", account="marlowe-m000151-pm06",
+                qos="medium", workers=4, ddp=False):
+    from koopman_lm.config import build_config
+    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+
+    return RunSpec(
+        name="50m-mqar-smoke",
+        model=build_config("50m"),
+        data=SyntheticDataSpec(generator="mqar", params={"num_kv_pairs": 8}),
+        optim=OptimSpec(lr=lr, warmup_steps=300, max_steps=15000),
+        runtime=RuntimeSpec(seed=seed, partition=partition, account=account,
+                              qos=qos, workers=workers, ddp=ddp),
+    )
+
+
+def test_group_id_and_run_id_are_stable_hex8():
+    from koopman_lm.run.spec import group_id, run_id
+
+    spec = _make_spec()
+    g1, g2 = group_id(spec), group_id(_make_spec())
+    r1, r2 = run_id(spec), run_id(_make_spec())
+    assert g1 == g2 and len(g1) == 8 and all(c in "0123456789abcdef" for c in g1)
+    assert r1 == r2 and len(r1) == 8
+
+
+def test_run_id_changes_with_seed_but_group_id_does_not():
+    from koopman_lm.run.spec import group_id, run_id
+
+    a, b = _make_spec(seed=42), _make_spec(seed=1337)
+    assert group_id(a) == group_id(b)
+    assert run_id(a) != run_id(b)
+
+
+def test_group_id_changes_with_scientific_inputs():
+    from koopman_lm.run.spec import group_id
+
+    a, b = _make_spec(lr=4e-4), _make_spec(lr=3e-4)
+    assert group_id(a) != group_id(b)
+
+
+def test_group_id_and_run_id_ignore_execution_details():
+    from koopman_lm.run.spec import group_id, run_id
+
+    a = _make_spec(partition="batch", account="marlowe-m000151-pm06", qos="medium", workers=4)
+    b = _make_spec(partition="hero", account="marlowe-m000151-pm06", qos="medium", workers=16)
+    assert group_id(a) == group_id(b)
+    assert run_id(a) == run_id(b)
+
+
+def test_run_dir_path_layout():
+    from koopman_lm.run.spec import attempt_dir_name, group_id, run_dir_name, run_dir_path, run_id
+
+    spec = _make_spec()
+    path = run_dir_path("/scratch/runs", spec)
+    assert path.parts[-2] == run_dir_name(spec) == f"50m-mqar-smoke.{group_id(spec)}"
+    assert path.parts[-1] == attempt_dir_name(spec) == f"seed42.{run_id(spec)}"
