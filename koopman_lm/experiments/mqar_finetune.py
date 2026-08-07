@@ -50,6 +50,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from koopman_lm.config import build_config, config_hash
+from koopman_lm.training.optim import param_groups
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
 from koopman_lm.experiments.curricula import make_mqar, eval_mqar
@@ -231,8 +232,15 @@ def train(args):
                         num_workers=args.num_workers, pin_memory=True,
                         drop_last=True)
 
+    # Route through the shared decay/no-decay policy (see
+    # koopman_lm.training.optim.param_groups) instead of flat model.parameters().
+    # A flat AdamW(weight_decay=0.1) decayed norms, biases, embeddings, and the
+    # Mamba state parameters (A_log, D, dt_bias) too -- at this script's 50m scale
+    # a prior audit found ~24% of parameters affected at 10x the intended decay
+    # coefficient. Published MQAR fine-tune numbers were produced under the old,
+    # unfiltered-decay optimizer and are superseded.
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr,
+        param_groups(model, weight_decay=0.1), lr=args.lr,
         betas=(0.9, 0.95), weight_decay=0.1)
 
     def lr_lambda(step):
