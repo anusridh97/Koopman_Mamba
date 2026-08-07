@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import torch
 import yaml
@@ -66,6 +66,50 @@ def resolve_run_spec(path) -> RunSpec:
     return RunSpec(name=raw["name"], model=model, data=data, optim=optim, runtime=runtime)
 
 
+class DirtyTreeError(RuntimeError):
+    """Raised when the working tree has uncommitted changes and
+    --allow-dirty was not passed. Launching from an uncommitted tree makes
+    code_id (the git commit, §4.2) meaningless -- the point of this guard is
+    that launching uncommitted becomes a deliberate act, not an accident."""
+
+
+def git_dirty_paths() -> List[str]:
+    """`git status --porcelain` lines for the working tree, or [] if clean
+    (or git is unavailable). --porcelain respects .gitignore, so run outputs
+    and scratch never trip this."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain"],
+                              capture_output=True, text=True, check=True)
+    except Exception:
+        return []
+    return [line for line in out.stdout.splitlines() if line.strip()]
+
+
+def check_git_clean(*, allow_dirty: bool) -> bool:
+    """Refuse to launch from a dirty tree unless `allow_dirty` is set.
+
+    Returns whether the tree was dirty, so the caller can stamp
+    `dirty: true` into the materialized spec.yaml. Raises DirtyTreeError
+    (listing the offending paths) when dirty and not allowed -- this must
+    run before anything is materialized.
+    """
+    paths = git_dirty_paths()
+    if not paths:
+        return False
+    if not allow_dirty:
+        listing = "\n".join(f"  {p}" for p in paths)
+        raise DirtyTreeError(
+            f"refusing to launch from a dirty working tree "
+            f"({len(paths)} uncommitted path(s)):\n{listing}\n"
+            f"Commit or stash these changes, or pass --allow-dirty to "
+            f"launch anyway (recorded as dirty: true in spec.yaml).")
+    listing = "\n".join(f"  {p}" for p in paths)
+    print(f"[koopman_lm.run] WARNING: launching with --allow-dirty -- "
+          f"{len(paths)} uncommitted path(s), code_id will not reflect "
+          f"them:\n{listing}")
+    return True
+
+
 def git_commit() -> str:
     try:
         out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
@@ -108,7 +152,7 @@ def to_flat_dict(spec: RunSpec) -> Dict[str, Any]:
     }
 
 
-def materialize(spec: RunSpec, run_dir) -> Path:
+def materialize(spec: RunSpec, run_dir, *, dirty: bool = False) -> Path:
     """Write the fully-flattened spec + provenance to run_dir/spec.yaml,
     atomically. The only file downstream consumers (eval, resume, analysis)
     read.
@@ -119,11 +163,17 @@ def materialize(spec: RunSpec, run_dir) -> Path:
     but it must still be recoverable so two runs that collide on run_id
     (same declared science) but ran different code can be told apart (§3.7's
     create_run_dir collision check reads this back).
+
+    `dirty=True` records that this launch proceeded with uncommitted local
+    changes (--allow-dirty, the escape hatch from check_git_clean's default
+    refusal) -- omitted entirely when the tree was clean.
     """
     run_dir = Path(run_dir)
     payload = to_flat_dict(spec)
     payload["provenance"] = provenance()
     payload["code_id"] = payload["provenance"]["git_commit"]
+    if dirty:
+        payload["dirty"] = True
     out_path = run_dir / "spec.yaml"
     atomic_write_text(out_path, yaml.safe_dump(payload, sort_keys=False))
     return out_path

@@ -137,3 +137,63 @@ def test_materialize_writes_code_id_distinct_from_run_id(tmp_path):
 
     assert raw["code_id"] == git_commit()
     assert raw["code_id"] != run_id(spec)
+
+
+def _fake_run(stdout):
+    def _inner(*args, **kwargs):
+        class _Result:
+            pass
+        r = _Result()
+        r.stdout = stdout
+        r.returncode = 0
+        return r
+    return _inner
+
+
+def test_git_dirty_paths_parses_porcelain_output(monkeypatch):
+    from koopman_lm.run.resolve import git_dirty_paths
+
+    monkeypatch.setattr(
+        "koopman_lm.run.resolve.subprocess.run",
+        _fake_run(" M koopman_lm/run/resolve.py\n?? scratch/junk.txt\n"))
+    paths = git_dirty_paths()
+    assert len(paths) == 2
+    assert any("resolve.py" in p for p in paths)
+    assert any("junk.txt" in p for p in paths)
+
+
+def test_git_dirty_paths_empty_when_clean(monkeypatch):
+    from koopman_lm.run.resolve import git_dirty_paths
+
+    monkeypatch.setattr("koopman_lm.run.resolve.subprocess.run", _fake_run(""))
+    assert git_dirty_paths() == []
+
+
+def test_check_git_clean_raises_and_lists_paths_when_dirty(monkeypatch):
+    from koopman_lm.run.resolve import DirtyTreeError, check_git_clean
+
+    monkeypatch.setattr(
+        "koopman_lm.run.resolve.subprocess.run",
+        _fake_run(" M koopman_lm/run/resolve.py\n"))
+    with pytest.raises(DirtyTreeError, match="resolve.py"):
+        check_git_clean(allow_dirty=False)
+
+
+def test_check_git_clean_allow_dirty_warns_and_returns_true(monkeypatch, capsys):
+    from koopman_lm.run.resolve import check_git_clean
+
+    monkeypatch.setattr(
+        "koopman_lm.run.resolve.subprocess.run",
+        _fake_run(" M koopman_lm/run/resolve.py\n"))
+    dirty = check_git_clean(allow_dirty=True)
+    assert dirty is True
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "resolve.py" in out
+
+
+def test_check_git_clean_returns_false_when_clean(monkeypatch):
+    from koopman_lm.run.resolve import check_git_clean
+
+    monkeypatch.setattr("koopman_lm.run.resolve.subprocess.run", _fake_run(""))
+    assert check_git_clean(allow_dirty=False) is False

@@ -1,6 +1,8 @@
 """python -m koopman_lm.run <spec.yaml> [--launcher local|slurm] [--resume]
-[--force] [--run_root PATH] [--dry_run] (§3.4 orchestration order):
+[--force] [--run_root PATH] [--dry_run] [--allow-dirty] (§3.4 orchestration
+order):
 
+    refuse to launch from a dirty working tree (unless --allow-dirty)
     resolve spec (extends -> flat) + validate
     verify data shard matches spec (tokenizer, mix, n_tokens)
     materialize spec.yaml + attempt record into the run dir
@@ -16,7 +18,7 @@ from pathlib import Path
 from koopman_lm.run.artifacts import append_attempt, create_run_dir, make_attempt_record
 from koopman_lm.run.data_verify import verify_shard
 from koopman_lm.run.launch import LocalLauncher
-from koopman_lm.run.resolve import git_commit, materialize, resolve_run_spec
+from koopman_lm.run.resolve import check_git_clean, git_commit, materialize, resolve_run_spec
 from koopman_lm.run.slurm import SlurmLauncher
 from koopman_lm.run.spec import ShardDataSpec, run_dir_path, run_id as compute_run_id
 
@@ -32,11 +34,15 @@ def parse_args(argv=None):
     p.add_argument("--force", action="store_true")
     p.add_argument("--dry_run", action="store_true",
                     help="build launch.sbatch / the local command without submitting")
+    p.add_argument("--allow-dirty", dest="allow_dirty", action="store_true",
+                    help="launch despite uncommitted changes (loud escape hatch; "
+                         "recorded as dirty: true in spec.yaml). Default is refusal.")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    dirty = check_git_clean(allow_dirty=args.allow_dirty)
     spec = resolve_run_spec(args.spec)
 
     if isinstance(spec.data, ShardDataSpec):
@@ -45,7 +51,7 @@ def main(argv=None):
     run_dir = run_dir_path(args.run_root, spec)
     create_run_dir(run_dir, resume=args.resume, force=args.force, code_id=git_commit())
 
-    materialize(spec, run_dir)
+    materialize(spec, run_dir, dirty=dirty)
     append_attempt(run_dir, make_attempt_record(
         host=socket.gethostname(),
         job_id=os.environ.get("SLURM_JOB_ID"),

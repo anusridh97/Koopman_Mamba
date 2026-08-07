@@ -12,6 +12,16 @@ import yaml
 pytestmark = pytest.mark.correctness
 
 
+@pytest.fixture(autouse=True)
+def _pretend_clean_tree(monkeypatch):
+    """main() now refuses to launch from a dirty git tree (Fix 3). These
+    tests exercise orchestration, not the state of the developer's actual
+    working tree at test time, so default to "clean" here; the tests that
+    specifically cover dirty-tree behavior override this explicitly."""
+    monkeypatch.setattr("koopman_lm.run.__main__.check_git_clean",
+                         lambda allow_dirty: False)
+
+
 def _write_shard_run_spec(tmp_path):
     shard_dir = tmp_path / "shard"
     shard_dir.mkdir()
@@ -136,3 +146,48 @@ def test_main_verifies_data_before_creating_the_run_dir(tmp_path):
     spec = resolve_run_spec(spec_path)
     run_dir = run_dir_path(run_root, spec)
     assert not run_dir.exists()   # verification failed before any dir was created
+
+
+def test_main_refuses_to_launch_from_a_dirty_tree(tmp_path, monkeypatch):
+    """A dirty working tree must block launch before anything is
+    materialized -- the default is refusal, so launching uncommitted is a
+    deliberate act (--allow-dirty) rather than an accident."""
+    from koopman_lm.run.__main__ import main
+    from koopman_lm.run.resolve import DirtyTreeError
+    from koopman_lm.run.spec import run_dir_path
+    from koopman_lm.run.resolve import resolve_run_spec
+
+    spec_path = _write_shard_run_spec(tmp_path)
+    run_root = tmp_path / "runs"
+    monkeypatch.setattr("koopman_lm.run.__main__.check_git_clean",
+                         lambda allow_dirty: (_ for _ in ()).throw(
+                             DirtyTreeError("dirty: koopman_lm/run/resolve.py")))
+
+    with pytest.raises(DirtyTreeError):
+        main([str(spec_path), "--run_root", str(run_root), "--dry_run"])
+
+    spec = resolve_run_spec(spec_path)
+    run_dir = run_dir_path(run_root, spec)
+    assert not run_dir.exists()   # nothing materialized before the dirty check
+
+
+def test_main_allow_dirty_records_dirty_true_in_spec_yaml(tmp_path, monkeypatch):
+    """--allow-dirty is a loud, explicit escape hatch: it must not silently
+    bypass the check -- the resulting spec.yaml records dirty: true."""
+    import yaml
+
+    from koopman_lm.run.__main__ import main
+    from koopman_lm.run.spec import run_dir_path
+    from koopman_lm.run.resolve import resolve_run_spec
+
+    spec_path = _write_shard_run_spec(tmp_path)
+    run_root = tmp_path / "runs"
+    monkeypatch.setattr("koopman_lm.run.__main__.check_git_clean",
+                         lambda allow_dirty: True)
+
+    main([str(spec_path), "--run_root", str(run_root), "--dry_run", "--allow-dirty"])
+
+    spec = resolve_run_spec(spec_path)
+    run_dir = run_dir_path(run_root, spec)
+    raw = yaml.safe_load((run_dir / "spec.yaml").read_text())
+    assert raw["dirty"] is True
