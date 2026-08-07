@@ -78,3 +78,35 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1) -> List[str
     if spec.runtime.ddp and world_size > 1:
         argv.append("--ddp")
     return argv
+
+
+class Launcher(abc.ABC):
+    """The spec says *what* to run; the launcher says *where* (§3.4)."""
+
+    @abc.abstractmethod
+    def build_command(self, spec: RunSpec, run_dir) -> List[str]:
+        ...
+
+    @abc.abstractmethod
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False):
+        ...
+
+
+class LocalLauncher(Launcher):
+    """Runs training in-process via subprocess: `python -m ...` for a single
+    GPU, `torchrun --standalone` when runtime.ddp and runtime.gpus > 1."""
+
+    def build_command(self, spec: RunSpec, run_dir) -> List[str]:
+        world_size = spec.runtime.gpus if (spec.runtime.ddp and spec.runtime.gpus > 1) else 1
+        train_args = build_train_argv(spec, run_dir, world_size=world_size)
+        if world_size > 1:
+            return ["torchrun", "--standalone", f"--nproc_per_node={world_size}",
+                     "-m", "koopman_lm.training.train", *train_args]
+        return [sys.executable, "-m", "koopman_lm.training.train", *train_args]
+
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False):
+        write_model_config(spec, run_dir)
+        cmd = self.build_command(spec, run_dir)
+        if dry_run:
+            return cmd
+        return subprocess.run(cmd, check=True)

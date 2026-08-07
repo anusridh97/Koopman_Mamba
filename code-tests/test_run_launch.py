@@ -87,3 +87,36 @@ def test_build_train_argv_rejects_synthetic_data():
     )
     with pytest.raises(ValueError, match="synthetic"):
         build_train_argv(spec, "/tmp/run")
+
+
+def test_local_launcher_build_command_single_gpu(tmp_path):
+    from koopman_lm.run.launch import LocalLauncher
+
+    spec = _shard_spec()
+    cmd = LocalLauncher().build_command(spec, tmp_path)
+    assert cmd[0] == sys.executable
+    assert cmd[1:3] == ["-m", "koopman_lm.training.train"]
+    assert "--ddp" not in cmd
+
+
+def test_local_launcher_build_command_multi_gpu_uses_torchrun(tmp_path):
+    from koopman_lm.run.launch import LocalLauncher
+
+    spec = _shard_spec(ddp=True, gpus=2)   # 96 = 16 * 2 * 3: divides evenly
+    cmd = LocalLauncher().build_command(spec, tmp_path)
+    assert cmd[0] == "torchrun"
+    assert "--nproc_per_node=2" in cmd
+    assert "--ddp" in cmd
+
+
+def test_local_launcher_submit_dry_run_does_not_call_subprocess(tmp_path, monkeypatch):
+    from koopman_lm.run.launch import LocalLauncher
+
+    def _boom(*a, **k):
+        raise AssertionError("subprocess.run must not be called under dry_run")
+
+    monkeypatch.setattr("koopman_lm.run.launch.subprocess.run", _boom)
+    spec = _shard_spec()
+    cmd = LocalLauncher().submit(spec, tmp_path, dry_run=True)
+    assert cmd[1:3] == ["-m", "koopman_lm.training.train"]
+    assert (tmp_path / "model_config.json").is_file()
