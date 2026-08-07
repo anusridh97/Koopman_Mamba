@@ -317,9 +317,7 @@ CONFIG_REGISTRY = {
     "1m": "1m.yaml",
     # Canonical fused-prefix production configurations.
     "50m": "50m.yaml",
-    "50m_prefix_scan": "50m_prefix_scan.yaml",
     "180m": "180m.yaml",
-    "180m_prefix_scan": "180m_prefix_scan.yaml",
     "180m_gated": "180m_gated.yaml",
     "180m_v2": "180m_v2.yaml",
     # Scaling ladder.

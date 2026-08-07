@@ -1,8 +1,8 @@
 #!/bin/bash
 # FineWeb-Edu pretraining entry point for the two production fused-prefix models.
 #
-#   scripts/pretrain.sh 50m_prefix_scan
-#   scripts/pretrain.sh 180m_prefix_scan
+#   scripts/pretrain.sh 50m
+#   scripts/pretrain.sh 180m
 #
 # Every training knob is overridable through the environment. The fused CUDA
 # extension is compiled and checked once in this parent process before torchrun,
@@ -13,11 +13,11 @@ SIZE="${1:?usage: scripts/pretrain.sh <config-name>}"
 
 # ---- production per-size defaults (all env-overridable) ----
 case "$SIZE" in
-  50m_prefix_scan)
+  50m)
     : "${TOKENS:=3000000000}"; : "${STEPS:=15000}"; : "${PDBS:=16}"
     : "${GA:=6}"; : "${LR:=4e-4}"; : "${WARMUP:=300}"
     ;;
-  180m_prefix_scan)
+  180m)
     : "${TOKENS:=10000000000}"; : "${STEPS:=51000}"; : "${PDBS:=8}"
     : "${GA:=12}"; : "${LR:=3e-4}"; : "${WARMUP:=1000}"
     ;;
@@ -42,8 +42,8 @@ esac
 # Reuse the corrected FineWeb-Edu shards from earlier runs when present. This
 # avoids duplicate preprocessing and keeps the data order controlled.
 case "$SIZE" in
-  50m_prefix_scan)  : "${DATA_TAG:=50m_quality}" ;;
-  180m_prefix_scan) : "${DATA_TAG:=180m_quality}" ;;
+  50m)  : "${DATA_TAG:=50m_quality}" ;;
+  180m) : "${DATA_TAG:=180m_quality}" ;;
 esac
 TRAIN_DIR="$DATA_ROOT/fineweb_${DATA_TAG}_train"
 VAL_DIR="$DATA_ROOT/fineweb_${DATA_TAG}_val"
