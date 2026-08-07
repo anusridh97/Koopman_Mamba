@@ -58,6 +58,13 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
     model_config_path = run_dir / "model_config.json"
     grad_accum = ddp_grad_accum(spec.optim.effective_batch,
                                  spec.optim.per_device_batch_size, world_size)
+    # train.py's --save_steps default (5000) is silently unreachable for any
+    # RunSpec with fewer max_steps than that -- e.g. a short proof-of-pipeline
+    # run never writes a single step_<N>/ checkpoint, which also makes
+    # --resume untestable (resume.pt is written at the same cadence, §5.3).
+    # Scale it off max_steps (three checkpoints over the run, at least one)
+    # instead of leaving the CLI default in force unconditionally.
+    save_steps = max(1, spec.optim.max_steps // 3)
     argv = [
         "--model_size", str(model_config_path),
         "--data_dir", spec.data.shard_dir,
@@ -71,11 +78,28 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
         "--weight_decay", str(spec.optim.weight_decay),
         "--max_grad_norm", str(spec.optim.grad_clip),
         "--num_workers", str(spec.runtime.workers),
+        "--save_steps", str(save_steps),
         "--output_dir", str(run_dir),
         "--seed", str(spec.runtime.seed),
         "--phase_tag", spec.name,
     ]
     argv.append("--bf16" if spec.runtime.precision == "bf16" else "--no_bf16")
+    # train.py's CLI defaults --compile=True and --gradient_checkpointing=True,
+    # but the fused-prefix-scan architecture (ska_prefix_scan=True, any
+    # backend) does not tolerate that combination: torch.compile's
+    # cudagraph-trees mode captures the whole step, and activation-checkpoint
+    # recomputation re-entering the custom autograd Function
+    # (_SKAPrefixScanFn) mid-capture raises
+    # `torch.AcceleratorError: CUDA error: operation failed due to a previous
+    # error during capture` (cudaErrorStreamCaptureInvalidated) -- reproduced
+    # on H100 in run 50m-e2e-gpu-smoke (job 415208, run2-resume log), which
+    # crashed identically even with ska_backend='pytorch', so this is not
+    # scoped to the CUDA kernel specifically. scripts/pretrain.sh already
+    # carries `--no_compile --no_gradient_checkpointing` as the known-safe
+    # combination for every production 50m/180m run; the run system must not
+    # regress behind that by omission.
+    argv.append("--no_compile")
+    argv.append("--no_gradient_checkpointing")
     if spec.runtime.ddp and world_size > 1:
         argv.append("--ddp")
     if resume:
