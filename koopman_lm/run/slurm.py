@@ -43,18 +43,18 @@ class SlurmLauncher(Launcher):
     def __init__(self, repo_root: str = "."):
         self.repo_root = repo_root
 
-    def build_command(self, spec: RunSpec, run_dir) -> List[str]:
+    def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
         world_size = spec.runtime.gpus * spec.runtime.nodes
-        train_args = build_train_argv(spec, run_dir, world_size=world_size)
+        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume)
         if world_size > 1:
             return ["torchrun", f"--nnodes={spec.runtime.nodes}",
                      f"--nproc_per_node={spec.runtime.gpus}",
                      "-m", "koopman_lm.training.train", *train_args]
         return [sys.executable, "-m", "koopman_lm.training.train", *train_args]
 
-    def render_sbatch(self, spec: RunSpec, run_dir) -> str:
+    def render_sbatch(self, spec: RunSpec, run_dir, *, resume: bool = False) -> str:
         run_dir = Path(run_dir)
-        launch_line = " ".join(self.build_command(spec, run_dir))
+        launch_line = " ".join(self.build_command(spec, run_dir, resume=resume))
         return _SBATCH_TEMPLATE.format(
             job_name=spec.name,
             account=spec.runtime.account,
@@ -69,11 +69,11 @@ class SlurmLauncher(Launcher):
             launch_line=launch_line,
         )
 
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False):
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
         run_dir = Path(run_dir)
         write_model_config(spec, run_dir)
         sbatch_path = run_dir / "launch.sbatch"
-        atomic_write_text(sbatch_path, self.render_sbatch(spec, run_dir))
+        atomic_write_text(sbatch_path, self.render_sbatch(spec, run_dir, resume=resume))
         if dry_run:
             return sbatch_path
         result = subprocess.run(["sbatch", str(sbatch_path)],

@@ -43,7 +43,8 @@ def write_model_config(spec: RunSpec, run_dir) -> Path:
     return path
 
 
-def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1) -> List[str]:
+def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
+                      resume: bool = False) -> List[str]:
     """Map a RunSpec onto koopman_lm.training.train's existing CLI flags.
     Only kind='shard' is supported: kind='synthetic' needs TrainTask/
     SyntheticTask (§6.2), a separate, later plan."""
@@ -77,6 +78,8 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1) -> List[str
     argv.append("--bf16" if spec.runtime.precision == "bf16" else "--no_bf16")
     if spec.runtime.ddp and world_size > 1:
         argv.append("--ddp")
+    if resume:
+        argv.append("--resume")
     return argv
 
 
@@ -84,11 +87,11 @@ class Launcher(abc.ABC):
     """The spec says *what* to run; the launcher says *where* (§3.4)."""
 
     @abc.abstractmethod
-    def build_command(self, spec: RunSpec, run_dir) -> List[str]:
+    def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
         ...
 
     @abc.abstractmethod
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False):
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
         ...
 
 
@@ -96,17 +99,17 @@ class LocalLauncher(Launcher):
     """Runs training in-process via subprocess: `python -m ...` for a single
     GPU, `torchrun --standalone` when runtime.ddp and runtime.gpus > 1."""
 
-    def build_command(self, spec: RunSpec, run_dir) -> List[str]:
+    def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
         world_size = spec.runtime.gpus if (spec.runtime.ddp and spec.runtime.gpus > 1) else 1
-        train_args = build_train_argv(spec, run_dir, world_size=world_size)
+        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume)
         if world_size > 1:
             return ["torchrun", "--standalone", f"--nproc_per_node={world_size}",
                      "-m", "koopman_lm.training.train", *train_args]
         return [sys.executable, "-m", "koopman_lm.training.train", *train_args]
 
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False):
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
         write_model_config(spec, run_dir)
-        cmd = self.build_command(spec, run_dir)
+        cmd = self.build_command(spec, run_dir, resume=resume)
         if dry_run:
             return cmd
         return subprocess.run(cmd, check=True)

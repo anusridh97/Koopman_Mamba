@@ -54,7 +54,7 @@ def main(argv=None):
     ))
 
     launcher = LAUNCHERS[args.launcher]()
-    result = launcher.submit(spec, run_dir, dry_run=args.dry_run)
+    result = launcher.submit(spec, run_dir, dry_run=args.dry_run, resume=args.resume)
     print(f"[koopman_lm.run] run_id={compute_run_id(spec)} run_dir={run_dir}")
     return result
 

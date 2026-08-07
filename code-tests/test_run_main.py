@@ -59,6 +59,26 @@ def test_main_dry_run_materializes_and_appends_one_attempt(tmp_path):
     assert json.loads(attempts[0])["forced"] is False
 
 
+def test_main_resume_flag_reaches_train_py_argv(tmp_path):
+    """`--resume` must survive the whole orchestrator path -- resolve ->
+    create_run_dir -> build_train_argv -- and land on train.py's own
+    `--resume` flag. Exercising build_train_argv and create_run_dir in
+    isolation (as the rest of this suite historically did) cannot catch a
+    dropped flag between them; only composing the real entry point can.
+    """
+    from koopman_lm.run.__main__ import main
+
+    spec_path = _write_shard_run_spec(tmp_path)
+    run_root = tmp_path / "runs"
+
+    # First launch: no --resume, run dir doesn't exist yet, nothing to resume.
+    main([str(spec_path), "--run_root", str(run_root), "--dry_run"])
+
+    # Second invocation: --resume must be forwarded to train.py's argv.
+    cmd = main([str(spec_path), "--run_root", str(run_root), "--dry_run", "--resume"])
+    assert "--resume" in cmd
+
+
 def test_main_dry_run_twice_appends_a_second_attempt_without_conflict(tmp_path):
     from koopman_lm.run.__main__ import main
     from koopman_lm.run.spec import run_dir_path
