@@ -7,7 +7,7 @@ Appendix E Remark 5 warns about), and leaves contractivity intact.
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.chunk_stats import causal_normalize
+from koopman_lm.kernels.chunk_stats import causal_normalize
 
 pytestmark = pytest.mark.correctness
 

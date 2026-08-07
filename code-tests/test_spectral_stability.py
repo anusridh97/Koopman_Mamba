@@ -1,4 +1,4 @@
-﻿"""Spectral-norm stability over 500 random inputs (scaling plan Phase 0, test 4).
+"""Spectral-norm stability over 500 random inputs (scaling plan Phase 0, test 4).
 
 After the detached spectral clamp alpha = 1/max(sigma_max(W), 1), the scaled
 operator alpha*W must stay bounded: sigma_max(alpha*W) <= 1 (so the spectral
@@ -10,7 +10,7 @@ bf16 marked gpu.
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.ska_operator import _whiten_M, _spec_w
+from koopman_lm.kernels.lin_alg import whiten_M as _whiten_M, spec_w as _spec_w
 
 pytestmark = pytest.mark.correctness
 

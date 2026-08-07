@@ -16,7 +16,7 @@ import pytest
 import torch
 
 from koopman_lm.config import build_config
-from koopman_lm.modules.channel_mixer.koopman import (
+from koopman_lm.modules.mlp.koopman import (
     SpectralKoopmanMLP, SpectralKoopmanMLPGated, PairMixer,
     _rotation_coeffs, _resolve_rotation_param, _effective_lift_weight)
 
@@ -270,7 +270,7 @@ def test_reset_projection_params_keeps_v2_params_after_reinit():
 
 
 def test_utilization_report_runs_and_detects_planted_pathologies():
-    from koopman_lm.modules.channel_mixer.koopman_diag import (
+    from koopman_lm.modules.mlp.koopman_diag import (
         utilization_report, gain_stats, dead_pair_stats, format_report)
     model, cfg = _tiny_koopman(n_layers=4)
     model.eval()

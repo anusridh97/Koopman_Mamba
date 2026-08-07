@@ -10,8 +10,8 @@ import torch
 import torch.nn.functional as F
 
 from koopman_lm.config import build_config
-from koopman_lm.modules.token_mixer.attention import CausalAttentionBlock
-from koopman_lm.modules.token_mixer.mamba import Mamba2Block
+from koopman_lm.modules.seq.attention import CausalAttentionBlock
+from koopman_lm.modules.seq.mamba import Mamba2Block
 from koopman_lm.models.baselines import (
     SwiGLUMLP,
     build_mamba_only,
@@ -177,7 +177,7 @@ def test_rope_preserves_dtype_so_attention_runs_without_autocast() -> None:
     by casting every SDPA input; running in pure bf16 (as DeepSpeed bf16 does)
     does not.
     """
-    from koopman_lm.modules.token_mixer.attention import _apply_rope
+    from koopman_lm.modules.seq.attention import _apply_rope
 
     for dtype in (torch.float32, torch.bfloat16, torch.float16):
         x = torch.randn(2, 4, 8, 16, dtype=dtype)

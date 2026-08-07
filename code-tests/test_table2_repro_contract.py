@@ -45,7 +45,7 @@ def test_koopman_mlp_expand_default_targets_matched_param_budget():
     # -- not a matched-budget ablation. --koopman_mlp_expand defaults to 5.0
     # to compensate, holding the shared backbone (embeddings/Mamba-2/SKA)
     # fixed at its real, GPU-confirmed size.
-    from koopman_lm.modules.channel_mixer.koopman import SpectralKoopmanMLP
+    from koopman_lm.modules.mlp.koopman import SpectralKoopmanMLP
     from koopman_lm.models.baselines import SwiGLUMLP
 
     def count(m):

@@ -1,4 +1,4 @@
-﻿"""Newton-Schulz (all-matmul) vs Cholesky core equivalence (Phase 0, test 3).
+"""Newton-Schulz (all-matmul) vs Cholesky core equivalence (Phase 0, test 3).
 
 The matmul-only NS core (ska_core_ns) must compute the same SKA operator as the
 Cholesky core (ska_core). Equivalence is EXACT (up to NS inverse-sqrt accuracy)
@@ -9,12 +9,11 @@ is marked gpu.
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.ska_operator import (
-    ska_core,
-    ska_core_ns,
-    _inv_sqrt_ns,
-    _whiten_M,
-    _spec_w,
+from koopman_lm.kernels.ska_operator import ska_core, ska_core_ns
+from koopman_lm.kernels.lin_alg import (
+    inv_sqrt_ns as _inv_sqrt_ns,
+    whiten_M as _whiten_M,
+    spec_w as _spec_w,
 )
 
 pytestmark = pytest.mark.correctness

@@ -17,7 +17,7 @@ no such point, so gradients stay finite for any theta.
 import pytest
 import torch
 
-from koopman_lm.modules.channel_mixer.koopman import (
+from koopman_lm.modules.mlp.koopman import (
     SpectralKoopmanMLP, SpectralKoopmanMLPGated, _disk_clamp, _rotation_coeffs)
 
 pytestmark = pytest.mark.correctness

@@ -1,4 +1,4 @@
-﻿"""Cholesky-update correctness in fp64 (scaling plan Phase 0, test 1).
+"""Cholesky-update correctness in fp64 (scaling plan Phase 0, test 1).
 
 The O(r^2) carried-factor updates must equal a full O(r^3) re-factorization.
 All pure-torch linear algebra -> runs on CPU. fp64 target: <= 1e-10 (the
@@ -9,12 +9,12 @@ import math
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.cholesky_update import (
+from koopman_lm.kernels.cholesky_update import (
     update_reference,
     update_L_only,
     cholesky_rank1_update_,
 )
-from koopman_lm.modules.kernels.factor_scan import all_prefix_chol, rank1_chol_update_
+from koopman_lm.kernels.factor_scan import all_prefix_chol, rank1_chol_update_
 
 pytestmark = pytest.mark.correctness
 

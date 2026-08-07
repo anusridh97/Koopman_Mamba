@@ -16,8 +16,9 @@ torch-less one.
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.incremental_transport import (
-    transport_write, read, residuals_vs_raw, _tri_solve_lower)
+from koopman_lm.kernels.incremental_transport import (
+    transport_write, read, residuals_vs_raw)
+from koopman_lm.kernels.lin_alg import tri_solve_lower as _tri_solve_lower
 
 pytestmark = pytest.mark.correctness
 

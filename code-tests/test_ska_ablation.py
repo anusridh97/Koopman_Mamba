@@ -6,7 +6,8 @@ import pytest
 import torch
 
 from koopman_lm.config import build_config
-from koopman_lm.models.koopman_lm import SKABlock, KoopmanLM
+from koopman_lm.models.koopman_lm import KoopmanLM
+from koopman_lm.modules.seq.ska_block import SKABlock
 
 pytestmark = pytest.mark.correctness
 

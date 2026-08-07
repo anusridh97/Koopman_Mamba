@@ -21,10 +21,10 @@ import math
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.inverse_cholesky import (
+from koopman_lm.kernels.inverse_cholesky import (
     prefix_inverse_factors, ska_core_inv_chol, ska_exact_inverse_cholesky)
-from koopman_lm.modules.kernels.chunk_stats import symmetric_key_value
-from koopman_lm.modules.kernels.chunk_stats_exact import exact_stats
+from koopman_lm.kernels.chunk_stats import symmetric_key_value
+from koopman_lm.kernels.chunk_stats_exact import exact_stats
 
 pytestmark = pytest.mark.correctness
 
@@ -152,7 +152,7 @@ def test_causality_and_recent_token_visibility():
 
 
 def test_ska_module_integration_and_exact_path_agreement():
-    from koopman_lm.modules.token_mixer.ska import SKAModule
+    from koopman_lm.modules.seq.ska import SKAModule
     torch.manual_seed(4)
     kw = dict(d_model=64, n_heads=2, rank=16, head_dim=8, power_K=2,
               chunk_size=16, backend='pytorch', eta_learnable=False,
