@@ -327,6 +327,13 @@ MAP = {
     "koopman_lm.globals.modules.ska.factor_scan":            "koopman_lm.modules.kernels.factor_scan",
     "koopman_lm.globals.modules.ska.core":                   "koopman_lm.modules.kernels.ska_operator",
     "koopman_lm.globals.modules.ska.fast":                   "koopman_lm.modules.kernels.fast",
+    # The old layout had a PACKAGE ska/ containing a MODULE ska.py; Task 3
+    # collapses both into the single file token_mixer/ska.py. This longer key
+    # MUST be present, and MUST sort before the bare package key below.
+    # Without it the shorter key prefix-matches (the `(?![\w])` lookahead is
+    # satisfied by the following `.`) and strands a trailing `.ska`, producing
+    # `koopman_lm.modules.token_mixer.ska.ska` -- a ModuleNotFoundError.
+    "koopman_lm.globals.modules.ska.ska":                    "koopman_lm.modules.token_mixer.ska",
     "koopman_lm.globals.modules.ska":                        "koopman_lm.modules.token_mixer.ska",
     "koopman_lm.globals.modules.utils.last_layer_memory":    "koopman_lm.modules.wip.memory",
     "koopman_lm.globals.modules.utils.recurrent":            "koopman_lm.models.recurrent",
@@ -457,7 +464,18 @@ $SP/venv/bin/python $SP/imports.py /users/jkli/Koopman_Mamba
 
 Expected: `all intra-package imports resolve; no syntax errors`
 
-Known limitation: it does not catch the `from koopman_lm import <submodule>` form, which is why Step 3 must be done by hand.
+Then check for doubled-segment mangling, which the resolver above WILL catch inside `koopman_lm/` but which is worth asserting explicitly:
+
+```bash
+git grep -nE "koopman_lm\.modules\.[a-z_]+\.([a-z_]+)\.\1" -- '*.py'
+```
+
+Expected: no output.
+
+Two known limitations, both of which have already caused a real defect in this plan:
+
+1. It does not catch the `from koopman_lm import <submodule>` form — that is why Step 3 must be done by hand.
+2. As written it walks only `koopman_lm/`. Files under `scripts/` also import `koopman_lm.*` and are rewritten by the script, so widen the scan to include `scripts/*.py`. Skipping this is exactly how the `token_mixer.ska.ska` mangling reached a commit.
 
 - [ ] **Step 5: Verify the Triton path actually loads now**
 
