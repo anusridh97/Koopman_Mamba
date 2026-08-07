@@ -31,6 +31,7 @@ from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
 from koopman_lm.training.repro import seed_everything, enable_determinism, seed_worker
+from koopman_lm.training.optim import param_groups as _param_groups
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.mamba import Mamba2Block
 from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
@@ -59,50 +60,9 @@ def enable_gradient_checkpointing(model):
             layer.forward = make_ckpt_forward(original_forward)
 
 
-def _param_groups(raw_model, weight_decay):
-    """Return standard AdamW decay/no-decay groups.
-
-    The old trainer decayed every parameter unless a rare Koopman-v2 option was
-    enabled.  That includes norm scales, biases, embeddings, Mamba state-space
-    parameters, LayerScale, and spectral/geometry variables.  At long schedules
-    ``weight_decay=0.1`` can shrink those parameters by several-fold even before
-    gradients are considered.  Matrix weights are decayed; state, scale, bias,
-    embedding, and explicitly geometric parameters are not.
-    """
-    fn = getattr(raw_model, 'no_weight_decay_param_names', None)
-    explicit_skip = set(fn() if fn is not None else ())
-    special_leaves = {
-        # Mamba state-space / discretization parameters.
-        'A_log', 'D', 'dt_bias',
-        # Koopman/SKA geometry and residual controls (some are >1D).
-        'lift_v', 'lift_g', 'A_raw', 's', 'theta', 'gamma', 'omega',
-        'eta', 'eta_raw', 'ssn_gamma', 'layerscale_gate', 'short_conv_gate',
-    }
-
-    decay, no_decay = [], []
-    seen = set()
-    for name, p in raw_model.named_parameters():
-        if not p.requires_grad or id(p) in seen:
-            continue
-        seen.add(id(p))
-        leaf = name.rsplit('.', 1)[-1]
-        is_embedding = name == 'embed.weight' or '.embed.' in name or 'embedding' in name
-        skip = (
-            name in explicit_skip
-            or p.ndim < 2
-            or leaf == 'bias'
-            or leaf in special_leaves
-            or is_embedding
-            or bool(getattr(p, '_no_weight_decay', False))
-        )
-        (no_decay if skip else decay).append(p)
-
-    groups = []
-    if decay:
-        groups.append({'params': decay, 'weight_decay': weight_decay})
-    if no_decay:
-        groups.append({'params': no_decay, 'weight_decay': 0.0})
-    return groups
+# _param_groups moved to koopman_lm.training.optim.param_groups (imported
+# above) so table2.py / mqar_finetune.py can share the same decay policy
+# without pulling in this module's transformers/DDP-heavy imports.
 
 
 def _load_init_weights(model, path):

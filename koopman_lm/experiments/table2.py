@@ -69,6 +69,7 @@ import torch.nn.functional as F
 
 from koopman_lm.experiments.curricula import eval_niah, make_sysprompt, make_toolcall
 from koopman_lm.config import build_config, config_hash
+from koopman_lm.training.optim import param_groups
 from koopman_lm.models.baselines import (
     build_mamba_attention,
     build_mamba_only,
@@ -203,7 +204,15 @@ def train(args) -> None:
     total = count_params(model)
     print(f"Parameters: {total:,} ({total / 1e6:.2f}M)")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=0.01)
+    # Route through the shared decay/no-decay policy (see
+    # koopman_lm.training.optim.param_groups) instead of flat model.parameters().
+    # A flat AdamW(weight_decay=0.01) decayed norms, biases, embeddings, and the
+    # Mamba state parameters (A_log, D, dt_bias) too -- this is the same bug
+    # train.py's _param_groups was written to avoid. Published Table 2 numbers
+    # were produced under the old, unfiltered-decay optimizer and are superseded.
+    optimizer = torch.optim.AdamW(
+        param_groups(model, weight_decay=0.01),
+        lr=args.lr, betas=(0.9, 0.95), weight_decay=0.01)
 
     def lr_lambda(step):
         if step < args.warmup_steps:
