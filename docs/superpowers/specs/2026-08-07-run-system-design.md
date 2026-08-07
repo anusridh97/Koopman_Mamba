@@ -1,11 +1,7 @@
 # Run system design — configs, launch, and run identity
 
-Status: **in progress.** Sections 1–3 are settled with the design owner. The
-results/eval layer (§4) is still being designed and will be appended before this
-spec goes to review.
-
-Owner: jkli. Written 2026-08-07 during a design session on branch
-`reorg-module-layout`.
+Status: **ready for review.** Owner: jkli. Written 2026-08-07 during a design
+session on branch `reorg-module-layout`.
 
 ---
 
@@ -225,11 +221,14 @@ Run directory:
 
 ```
 $RUN_ROOT/50m-fineweb-3b.a3f91c2e/
-  spec.yaml        fully resolved
-  launch.sbatch    generated
-  attempts.jsonl   one line per execution
-  step_1000/ step_2000/ final/
+  spec.yaml            fully resolved
+  launch.sbatch        generated
+  attempts.jsonl       one line per execution
+  resume.pt            rolling; optimizer + scheduler + RNG + data position
+  step_1000/ step_2000/ final/      weights-only, archival
   eval/
+    step_30000/zeroshot.json
+    final/fineweb_ppl.json
 ```
 
 Deleted: `scripts/pretrain.sh`, `scripts/train_50m.sh`, `scripts/train_180m.sh`.
@@ -248,25 +247,175 @@ fix has a test waiting for it.
 
 ## 4. Results and evaluation layer
 
-Not yet designed. To be appended.
+### 4.1 The shape of the problem
+
+A run is **one training job**. Evaluations are *attached results*, not part of
+the run: training is expensive and singular, scoring is cheap, repeatable, and
+plural. One run yields many checkpoints, and each checkpoint is scored many
+times — because benchmarks get added, eval code gets fixed, and the best
+checkpoint by loss is frequently not the best by benchmark. (Cody's
+`eval_sweep.sh` existed precisely to rank checkpoints by zero-shot benchmark
+rather than PPL.) Binding scoring into the run would mean retraining to
+re-score.
+
+"Evaluation" in this repo covers at least four distinct operations, and the
+design must not assume they are alike:
+
+| Kind | Entry point | Nature |
+|---|---|---|
+| Perplexity | `evaluate.py --mode fineweb_ppl` / `ppl` | teacher-forced forward pass; no generation |
+| Zero-shot benchmarks | `lm_harness_eval.py` | mostly answer-likelihood scoring |
+| Long-context retrieval | `niah_quick.py`, `ruler.py`, `babilong.py` | genuine generation |
+| Retrieval adaptation | `evaluate_retrieval.py --ft_steps 500` | *trains* 500 steps, then scores |
+
+`experiments/table2.py` and `mqar_finetune.py` are a different species again —
+they train a small model from scratch on generated data and score in-loop, with
+no shard and no tokenizer. See §7.
+
+### 4.2 What changes
+
+**Scoring is an explicit step.** Training produces checkpoints and stops. A
+separate command scores a checkpoint. This matches how the work is actually
+done, and it keeps a crashed eval from being indistinguishable from a failed
+training run.
+
+**Eval writes into the run directory, keyed by checkpoint.**
+
+```
+<run_dir>/eval/<checkpoint>/<task>.json
+```
+
+The checkpoint segment is required, not cosmetic: scoring three checkpoints on
+one task would otherwise collide on a single filename. `--output` survives as an
+override but stops being load-bearing. Today it defaults to `None`
+(`evaluate.py:608`, `evaluate_retrieval.py:810`), so forgetting it prints the
+numbers to stdout and loses them; `harness.py:207` spells the same flag `--out`.
+
+**Eval reads `spec.yaml`, not `--model_size`.** This removes the current failure
+mode where `evaluate.py --model_size 180m` can silently disagree with the
+architecture of the checkpoint it was handed.
+
+**Every result file carries a common envelope.** Today
+`results/echo50m_table4/fineweb_ppl.json` is `{"model_type": "koopman",
+"fineweb_ppl": {...}}` — no run id, no step, no commit, no timestamp. The
+envelope adds `run_id`, `task`, `checkpoint`, `git_commit`, `created_at`, with
+task-specific numbers nested under `metrics`. This is what makes aggregation
+possible at all.
+
+**The filesystem is the store; aggregation is a walk.**
+`python -m koopman_lm.results $RUN_ROOT` reads each run's `spec.yaml` and
+`eval/**/*.json` and emits one table — a row per (run, checkpoint, task), with
+columns for the swept axes. No database, no service.
+
+**The sweep grid is declared exactly once.** `scripts/slurm_array.sh:29-31`
+currently hardcodes `MODEL_TYPES`/`KV_PAIRS`/`GAPS` in bash beneath a comment
+reading *"must match PAPER_MODEL_TYPES, PAPER_KV_PAIRS, PAPER_GAPS in
+mqar_finetune.py."* Two copies of a grid kept in sync by a comment is a drift
+bug with a countdown on it. Instead `configs/sweeps/<name>.yaml` declares the
+axes, a generator materializes one `RunSpec` per cell, and the array job indexes
+into that materialized list. Bash never knows the grid.
+
+### 4.3 Two storage tiers
+
+Run directories live on scratch (`$RUN_ROOT`) and are never committed — they
+hold checkpoints. A small curated `results/` **is** committed, for numbers
+backing a paper table; this is the convention already established by
+`results/echo50m_table4/`. The difference is that a committed result now carries
+its `run_id` and so can be traced to the run that produced it.
 
 ---
 
-## 5. Migration
+## 5. Exact resume
+
+### 5.1 Why this is in scope
+
+`train.py` cannot resume. `--init_from` (`train.py:107`) is explicitly a
+weights-only warm start — optimizer, LR schedule, and step counter are all
+fresh. `_save_checkpoint` (`train.py:362`) writes `model.pt`, `meta.pt`, and the
+tokenizer; no optimizer state.
+
+The Marlowe partitions cap at 30 days (`hero`), 2 days (`batch`), and 12 hours
+(`preempt`). The 180m recipe is 51,000 steps. On anything but `hero` that run
+cannot finish, and a preemption restarts it from zero. Sweeps at scale live on
+`batch` and `preempt` by necessity.
+
+Resume belongs here rather than in a separate spec because the artifacts it
+requires — the run directory, `spec.yaml`, and the attempt record — are being
+defined by this design. Deferring it would mean revising that layout later.
+
+### 5.2 What exact resume requires
+
+| Component | Today | Needed |
+|---|---|---|
+| Model weights | saved | — |
+| Step counter | in `meta.pt` | — |
+| Optimizer state | **absent** | AdamW moments |
+| LR scheduler | **absent** | derivable from step, but saved explicitly |
+| RNG state | **absent** | torch, CUDA, numpy, python |
+| Dataloader position | **absent** | epoch + samples consumed within it |
+
+The dataloader position is the only subtle one, and it is tractable here.
+`MemmapPackedDataset.__getitem__` is a deterministic slice at
+`idx * max_seq_len + epoch_offset`, and `set_epoch` derives the offset from
+`seed + epoch` (`dataset.py:46`). Sampler shuffling is seeded from
+`seed_everything`. So the permutation is reproducible given `(seed, epoch)`, and
+resume needs only `(epoch, samples_consumed)` plus a forward skip over indices —
+index arithmetic, not data reads. Under DDP, `DistributedSampler.set_epoch` is
+deterministic per rank, so the same reconstruction holds.
+
+### 5.3 Rolling resume state, separate from archival checkpoints
+
+Optimizer state is large. For the 180m at fp32, weights are ~720 MB and AdamW
+moments ~1.4 GB. Writing that at every `save_steps=1000` over 51,000 steps would
+be ~107 GB per run.
+
+So the two concerns are separated:
+
+- **`resume.pt`** — a single rolling file at the run root, overwritten each time.
+  Optimizer, scheduler, RNG, epoch, samples consumed. Written atomically (temp
+  file plus rename) so a kill mid-write cannot corrupt it.
+- **`step_<N>/`** — periodic, weights-only, archival. What eval consumes.
+
+### 5.4 Preemption handling
+
+`SlurmLauncher` generates `--signal=B:USR1@300` and `--requeue`. The trainer
+installs a `SIGUSR1` handler that writes `resume.pt` and exits cleanly; Slurm
+requeues the job, and startup finds `resume.pt` and continues. Each requeue
+appends to `attempts.jsonl`, so one `run_id` accumulates many attempts — which
+is exactly the model §3.3 already specifies.
+
+### 5.5 The invariant worth testing
+
+Resume is correct when training *N* steps, killing, resuming, and training to
+*2N* produces the same weights as training *2N* uninterrupted, under
+`--deterministic`. That is a test, not a claim, and it is the acceptance
+criterion for this section.
+
+---
+
+## 6. Migration
 
 `pretrain.sh` is **not** deleted in the commit that adds the Python path.
 
-1. Add `koopman_lm/run/` alongside the existing scripts. Nothing deleted,
+1. Land the three cherry-picks from §2 (`mamba_headdim`, the RoPE fix,
+   `mqar_cell_fits`) and the 8 config YAMLs. This is a prerequisite: it turns 25
+   of the 29 currently-failing tests green, so later steps land against a
+   working gate rather than a red one.
+2. Add `koopman_lm/run/` alongside the existing scripts. Nothing deleted,
    nothing breaks. Lands inert per `CONTRIBUTING.draft.md` rule 2.
-2. Launch one real 50m run through the new path on the `batch` partition.
-   Confirm the checkpoint loads and the loss curve is as expected.
-3. Delete the three shell scripts, in their own commit.
+3. Add exact resume (§5) with the kill-and-continue equivalence test of §5.5.
+   Independently valuable — it is what makes the `batch` and `preempt`
+   partitions usable at all — and testable before any launcher change.
+4. Launch one real 50m run through the new path on the `batch` partition.
+   Confirm the checkpoint loads, resume works after a real preemption, and the
+   loss curve is as expected.
+5. Delete the three shell scripts, in their own commit.
 
-Both paths work until step 3.
+Both paths work until step 5.
 
 ---
 
-## 6. Out of scope
+## 7. Out of scope
 
 - `koopman_lm/experiments/phase2/` (~12.5k lines on Cody's branch). Its schemas
   are being mined — the run manifest fields, config+data hashing, runtime
@@ -276,12 +425,20 @@ Both paths work until step 3.
   governance approvals. Not adopted.
 - The 9 phase2-coupled tests.
 - Full content-addressed data shards (see §3.5).
-- Sweep expression and the aggregation layer over many run directories — depends
-  on §4.
+- **Converting `experiments/table2.py` and `mqar_finetune.py`.** They train and
+  score in one loop on generated data, with their own checkpoint and resume
+  logic and their own output trees (`./table2-out`, `./mqar-out`,
+  `./mqar-sweep`). They should adopt the run-directory contract of §4.2, but
+  rewriting their internals would introduce a second trainer into this spec.
+  Their sweep grids do fall under §4.2's "declared exactly once" rule, since
+  that is what `slurm_array.sh` duplicates today.
+- Serving or deployment inference. `models/recurrent.py` provides step-by-step
+  decode for generation-based evals and parity tests; nothing here concerns
+  productionising it.
 
 ---
 
-## 7. Related work in flight
+## 8. Related work in flight
 
 - Branch `jack/test-recovery`: 23 recovered test files, CI cpu job,
   `scripts/check_imports.py`, `scripts/slurm_tests.sh`. 208 passed / 29 failed /
