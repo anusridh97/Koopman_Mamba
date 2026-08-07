@@ -234,8 +234,13 @@ closer to production than "wip" suggests, say so.
 I ran these; re-run them if you want independent confirmation:
 
 ```bash
-# every rename byte-identical
-git diff --name-status -M b2d965e HEAD | grep "^R" | grep -v "^R100"     # expect: empty
+# Every rename was byte-identical AT THE COMMIT THAT DID THE RENAMING.
+# Check each renames-only commit, NOT the whole branch: the import-rewrite
+# commits later edited those same files, so across b2d965e..HEAD you will
+# correctly see ~15 renames at R064-R099. That is the import rewrite showing
+# up, not content drift during the move.
+git diff --name-status -M ff13957~1 ff13957 | grep "^R" | grep -v "^R100"   # expect: empty
+git diff --name-status -M 727ee1c~1 727ee1c | grep "^R" | grep -v "^R100"   # expect: empty
 
 # nothing outside the package touched
 git diff --stat b2d965e HEAD -- MQAR echo-ska lowrank_residual_cuda 'sys+toolcall'

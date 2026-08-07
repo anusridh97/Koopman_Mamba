@@ -42,6 +42,8 @@ from typing import Tuple
 import torch
 import torch.nn.functional as F
 
+from koopman_lm.kernels.lin_alg import exclusive_cumsum
+
 
 # ---------------------------------------------------------------------------
 # Associative raw segment summaries
@@ -131,13 +133,6 @@ def compose_summaries(left: SegmentSummary, right: SegmentSummary) -> SegmentSum
 # ---------------------------------------------------------------------------
 
 
-def _exclusive_cumsum(x: torch.Tensor, dim: int) -> torch.Tensor:
-    """Exclusive sum along ``dim``."""
-    if x.shape[dim] == 0:
-        return x.clone()
-    inclusive = torch.cumsum(x, dim=dim)
-    zero = torch.zeros_like(inclusive.narrow(dim, 0, 1))
-    return torch.cat([zero, inclusive.narrow(dim, 0, x.shape[dim] - 1)], dim=dim)
 
 
 def _future_exclusive_sum(x: torch.Tensor, dim: int) -> torch.Tensor:
@@ -221,9 +216,9 @@ def block_prefix_statistics(
         boundary = xb[:, 1:, 0].unsqueeze(-1) @ xb[:, :-1, -1].unsqueeze(-2)
         dM[:, 1:] = dM[:, 1:] + boundary
 
-    G0 = _exclusive_cumsum(dG, dim=1)
-    M0 = _exclusive_cumsum(dM, dim=1)
-    C0 = _exclusive_cumsum(dC, dim=1)
+    G0 = exclusive_cumsum(dG, dim=1)
+    M0 = exclusive_cumsum(dM, dim=1)
+    C0 = exclusive_cumsum(dC, dim=1)
 
     prev_x = torch.zeros(N, nb, r, device=x.device, dtype=x.dtype)
     has_prev = torch.zeros(N, nb, device=x.device, dtype=torch.bool)
@@ -625,9 +620,9 @@ def _exact_prefix_tensors(
     c = vbar.unsqueeze(-1) @ x.unsqueeze(-2)
 
     eye = torch.eye(r, device=x.device, dtype=x.dtype)
-    G = _exclusive_cumsum(g, dim=1) + ridge * eye
-    M = _exclusive_cumsum(m, dim=1)
-    C = _exclusive_cumsum(c, dim=1)
+    G = exclusive_cumsum(g, dim=1) + ridge * eye
+    M = exclusive_cumsum(m, dim=1)
+    C = exclusive_cumsum(c, dim=1)
     return G, M, C, q.unsqueeze(-1)
 
 
@@ -1301,7 +1296,7 @@ def _exact_prefix_tensors_autograd(
         m = zero_m
     c = vbar.unsqueeze(-1) @ x.unsqueeze(-2)
     eye = torch.eye(r, device=x.device, dtype=x.dtype)
-    G = _exclusive_cumsum(g, dim=1) + ridge * eye
-    M = _exclusive_cumsum(m, dim=1)
-    C = _exclusive_cumsum(c, dim=1)
+    G = exclusive_cumsum(g, dim=1) + ridge * eye
+    M = exclusive_cumsum(m, dim=1)
+    C = exclusive_cumsum(c, dim=1)
     return G, M, C, q.unsqueeze(-1)

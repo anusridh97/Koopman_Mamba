@@ -115,7 +115,7 @@ def transport_write(L, A, R, x_last, x_t, vbar_t):
     if x_last is None:
         v_w = torch.zeros(N, r, device=L.device, dtype=L.dtype)
     else:
-        v_w = tri_solve_lower(L_new, x_last.unsqueeze(-1)).squeeze(-1)   # L_new^-1 x_{t-1}
+        v_w = tri_solve_lower(L_new, x_last)   # L_new^-1 x_{t-1}
     A_new = phase2_transport_A(A, C, S) + torch.einsum('nr,ns->nrs', u, v_w)
     R_new = phase3_transport_R(R, C, S) + torch.einsum('np,nr->npr', vbar_t, u)
     return L_new, A_new, R_new, u, v_w
@@ -124,7 +124,7 @@ def transport_write(L, A, R, x_last, x_t, vbar_t):
 def read(L, A, R, q, K, eta=1.0):
     """y = eta * R (A^K L^-1 q). q:(N,r) -> y:(N,P). Contractive A (||A||<=1) so
     no spectral normalization -- the sqrt-beta guarantee (do NOT clamp here)."""
-    qw = tri_solve_lower(L, q.unsqueeze(-1))          # (N,r,1)
+    qw = tri_solve_lower(L, q).unsqueeze(-1)          # (N,r,1)
     h = qw
     for _ in range(K):
         h = A @ h

@@ -35,14 +35,9 @@ from dataclasses import dataclass
 
 import torch
 
+from koopman_lm.kernels.lin_alg import tri_solve_lower
 
-def _solve_lower(L: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
-    """Return ``L^{-1} rhs`` for vector or matrix right-hand sides."""
-    vector = rhs.ndim == L.ndim - 1
-    if vector:
-        rhs = rhs.unsqueeze(-1)
-    out = torch.linalg.solve_triangular(L, rhs, upper=False)
-    return out.squeeze(-1) if vector else out
+
 
 
 @dataclass
@@ -113,7 +108,7 @@ class FusedSKAStateReference:
             raise ValueError("power_k must be non-negative")
         if q.shape != self.prev_whitened.shape:
             raise ValueError(f"q must have shape {tuple(self.prev_whitened.shape)}")
-        u = _solve_lower(self.L, q)
+        u = tri_solve_lower(self.L, q)
         for _ in range(power_k):
             u = (self.A @ u.unsqueeze(-1)).squeeze(-1)
         return (self.R @ u.unsqueeze(-1)).squeeze(-1)
@@ -132,8 +127,8 @@ class FusedSKAStateReference:
         G_new = self.L @ self.L.transpose(-1, -2) + x.unsqueeze(-1) @ x.unsqueeze(-2)
         L_new = torch.linalg.cholesky(G_new)
 
-        T = _solve_lower(L_new, self.L)          # L_new^{-1} L
-        u = _solve_lower(L_new, x)               # L_new^{-1} x
+        T = tri_solve_lower(L_new, self.L)          # L_new^{-1} L
+        u = tri_solve_lower(L_new, x)               # L_new^{-1} x
         v = (T @ self.prev_whitened.unsqueeze(-1)).squeeze(-1)  # L_new^{-1} x_prev
 
         A_new = T @ self.A @ T.transpose(-1, -2)

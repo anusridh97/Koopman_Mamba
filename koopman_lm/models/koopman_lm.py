@@ -13,7 +13,13 @@ from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
 
 
 class KoopmanLM(nn.Module):
-    """180M/370M/440M Nemotron-H style hybrid language model."""
+    """Nemotron-H style hybrid: Mamba-2 at every layer, SKA as parallel memory.
+
+    Each layer is one seq mixer (modules/seq/) plus one mlp mixer
+    (modules/mlp/). cfg.ska_layer_indices selects which depths get SKA, and
+    cfg.ska_mode picks whether SKA is added beside Mamba (parallel) or
+    replaces it. Production sizes are 50M and 180M -- see configs/.
+    """
     def __init__(self, cfg: KoopmanLMConfig):
         super().__init__()
         self.cfg = cfg

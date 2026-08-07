@@ -29,7 +29,23 @@ __all__ = [
     "tri_solve_lowerT",
     "whiten_M",
     "inv_sqrt_ns",
+    "exclusive_cumsum",
 ]
+
+
+def exclusive_cumsum(x, dim):
+    """out[t] = sum_{i<t} x[i] along ``dim``. Zero-length ``dim`` is a no-op.
+
+    Previously existed three times under three names -- _excl_cumsum
+    (chunk_stats_exact), _excl_prefix (chunk_stats), _exclusive_cumsum
+    (prefix_scan). All computed the same thing; only this form guards the
+    empty case, which the chunk_stats_exact copy got wrong (RuntimeError).
+    """
+    if x.shape[dim] == 0:
+        return x.clone()
+    inclusive = torch.cumsum(x, dim=dim)
+    zero = torch.zeros_like(inclusive.narrow(dim, 0, 1))
+    return torch.cat([zero, inclusive.narrow(dim, 0, x.shape[dim] - 1)], dim=dim)
 
 
 def spec_w(W, iters=20):
@@ -52,7 +68,18 @@ def spec_w(W, iters=20):
 
 
 def tri_solve_lower(L, A):     # L^{-1} A
-    return torch.linalg.solve_triangular(L, A, upper=False)
+    """Solve L x = A. Accepts a matrix RHS or a vector RHS.
+
+    torch.linalg.solve_triangular requires a matrix, so a vector RHS (one
+    fewer dim than L) is unsqueezed and squeezed back. Callers used to do
+    that dance by hand, and fused_state_reference kept a private _solve_lower
+    that differed from this function ONLY by handling it.
+    """
+    vector = A.ndim == L.ndim - 1
+    if vector:
+        A = A.unsqueeze(-1)
+    out = torch.linalg.solve_triangular(L, A, upper=False)
+    return out.squeeze(-1) if vector else out
 
 
 def tri_solve_lowerT(L, A):    # L^{-T} A
