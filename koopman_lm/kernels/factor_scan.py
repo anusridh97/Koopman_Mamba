@@ -50,7 +50,7 @@ import math
 import torch
 
 from koopman_lm.kernels.lin_alg import (
-    _spec_w, _tri_solve_lower, _tri_solve_lowerT, _whiten_M)
+    spec_w, tri_solve_lower, tri_solve_lowerT, whiten_M)
 
 
 # canonical thin square root (upsweep merge primitive)
@@ -182,13 +182,13 @@ class SKACoreGivenL(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, G, M, Cv, q, L, K):
-        W = _whiten_M(L, M)
-        alpha = _spec_w(W)
+        W = whiten_M(L, M)
+        alpha = spec_w(W)
         a = alpha.unsqueeze(-1)
-        U = [_tri_solve_lower(L, q)]
+        U = [tri_solve_lower(L, q)]
         for _ in range(K):
             U.append(a * (W @ U[-1]))
-        XK = _tri_solve_lowerT(L, U[K])
+        XK = tri_solve_lowerT(L, U[K])
         y = Cv @ XK
         ctx.K = K
         ctx.save_for_backward(L, W, Cv, alpha, *U)
@@ -199,9 +199,9 @@ class SKACoreGivenL(torch.autograd.Function):
         K = ctx.K
         L, W, Cv, alpha, *U = ctx.saved_tensors
         a = alpha.unsqueeze(-1)
-        XK = _tri_solve_lowerT(L, U[K])
+        XK = tri_solve_lowerT(L, U[K])
         dCv = dY @ XK.transpose(-1, -2)
-        P = _tri_solve_lower(L, Cv.transpose(-1, -2) @ dY)
+        P = tri_solve_lower(L, Cv.transpose(-1, -2) @ dY)
         dMw = torch.zeros_like(W)
         dGw = torch.zeros_like(W)
         for i in range(K, 0, -1):
@@ -209,11 +209,11 @@ class SKACoreGivenL(torch.autograd.Function):
             dGw = dGw - (P @ U[i].transpose(-1, -2))
             P = a * (W.transpose(-1, -2) @ P)
         dGw = dGw - (P @ U[0].transpose(-1, -2))
-        dq = _tri_solve_lowerT(L, P)
+        dq = tri_solve_lowerT(L, P)
 
         def unwhiten(Aw):
-            t = _tri_solve_lowerT(L, Aw)
-            return _tri_solve_lowerT(L, t.transpose(-1, -2)).transpose(-1, -2)
+            t = tri_solve_lowerT(L, Aw)
+            return tri_solve_lowerT(L, t.transpose(-1, -2)).transpose(-1, -2)
 
         dM = unwhiten(dMw)
         dG = unwhiten(dGw)
@@ -269,12 +269,12 @@ if __name__ == "__main__":
 
     def ref(G, M, Cv, q):
         L = torch.linalg.cholesky(G)
-        W = _whiten_M(L, M)
-        a = _spec_w(W).unsqueeze(-1)
-        U = _tri_solve_lower(L, q)
+        W = whiten_M(L, M)
+        a = spec_w(W).unsqueeze(-1)
+        U = tri_solve_lower(L, q)
         for _ in range(K):
             U = a * (W @ U)
-        return Cv @ _tri_solve_lowerT(L, U)
+        return Cv @ tri_solve_lowerT(L, U)
 
     ins_c = [t.clone().requires_grad_(True) for t in (G, M, Cv, q)]
     ska_core_given_L(*ins_c, Lg, K).sum().backward()

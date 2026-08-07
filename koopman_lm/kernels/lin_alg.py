@@ -5,21 +5,34 @@ Small, generic numerical building blocks. They compose into the operator in
 ska_operator.py, but are ALSO reused directly by the recurrent decode path and
 factor_scan -- so they live on their own rather than inside the operator file:
 
-  * _tri_solve_lower / _tri_solve_lowerT -- triangular solves L^{-1}A, L^{-T}A
-  * _whiten_M                            -- double-sided whitening L^{-1} M L^{-T}
-  * _spec_w                              -- detached spectral-norm power iteration
-                                            (returns alpha = 1/max(sigma_max, 1))
-  * _inv_sqrt_ns                         -- symmetric inverse sqrt G^{-1/2} via
-                                            coupled Newton-Schulz (matmul-only)
+  * tri_solve_lower / tri_solve_lowerT -- triangular solves L^{-1}A, L^{-T}A
+  * whiten_M                           -- double-sided whitening L^{-1} M L^{-T}
+  * spec_w                             -- detached spectral-norm power iteration
+                                          (returns alpha = 1/max(sigma_max, 1))
+  * inv_sqrt_ns                        -- symmetric inverse sqrt G^{-1/2} via
+                                          coupled Newton-Schulz (matmul-only)
 
 All match echo_jax.py's gauge and math exactly; see ska_operator.py for how they
 assemble into the forward/backward.
+
+Consumers: ska_operator.py, factor_scan.py, incremental_transport.py, and
+models/recurrent.py. These names are deliberately PUBLIC (no leading
+underscore): a module whose purpose is to be imported by four others should
+not mark its exports internal.
 """
 
 import torch
 
+__all__ = [
+    "spec_w",
+    "tri_solve_lower",
+    "tri_solve_lowerT",
+    "whiten_M",
+    "inv_sqrt_ns",
+]
 
-def _spec_w(W, iters=20):
+
+def spec_w(W, iters=20):
     """sigma_max(W) via detached power iteration; returns alpha=1/max(sigma,1).
     iters=20 matches the JAX core (converges on ill-conditioned chunks).
     Detached: straight-through, no grad through the scale (as in JAX _specW).
@@ -38,21 +51,21 @@ def _spec_w(W, iters=20):
     return alpha  # (..., 1)
 
 
-def _tri_solve_lower(L, A):     # L^{-1} A
+def tri_solve_lower(L, A):     # L^{-1} A
     return torch.linalg.solve_triangular(L, A, upper=False)
 
 
-def _tri_solve_lowerT(L, A):    # L^{-T} A
+def tri_solve_lowerT(L, A):    # L^{-T} A
     return torch.linalg.solve_triangular(L.transpose(-1, -2), A, upper=True)
 
 
-def _whiten_M(L, M):            # W = L^{-1} M L^{-T}
+def whiten_M(L, M):            # W = L^{-1} M L^{-T}
     # L^{-1} M, then ( L^{-1} (that)^T )^T = L^{-1} M L^{-T}
-    LiM = _tri_solve_lower(L, M)
-    return _tri_solve_lower(L, LiM.transpose(-1, -2)).transpose(-1, -2)
+    LiM = tri_solve_lower(L, M)
+    return tri_solve_lower(L, LiM.transpose(-1, -2)).transpose(-1, -2)
 
 
-def _inv_sqrt_ns(G, iters=25):
+def inv_sqrt_ns(G, iters=25):
     """Symmetric inverse square root G^{-1/2} via coupled Newton-Schulz (matmul
     only). G: (...,r,r) SPD. Scaled by ||G||_F (>= spectral norm for SPD) so the
     eigenvalues land in (0,1] and the coupled iteration converges; convergence

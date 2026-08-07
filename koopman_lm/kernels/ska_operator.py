@@ -20,7 +20,7 @@ over leading dims (the BCH flattening done by the caller).
 import torch
 
 from koopman_lm.kernels.lin_alg import (
-    _spec_w, _tri_solve_lower, _tri_solve_lowerT, _whiten_M, _inv_sqrt_ns)
+    spec_w, tri_solve_lower, tri_solve_lowerT, whiten_M, inv_sqrt_ns)
 
 
 class SKACoreFn(torch.autograd.Function):
@@ -33,14 +33,14 @@ class SKACoreFn(torch.autograd.Function):
     def forward(ctx, G, M, Cv, q, K):
         # All in fp32 for the linear algebra (caller upcasts).
         L = torch.linalg.cholesky(G)                  # G = L L^T
-        W = _whiten_M(L, M)                            # W = L^{-1} M L^{-T}
-        alpha = _spec_w(W)                             # (...,1) detached
+        W = whiten_M(L, M)                            # W = L^{-1} M L^{-T}
+        alpha = spec_w(W)                             # (...,1) detached
         a = alpha.unsqueeze(-1)                        # (...,1,1) for broadcasting
 
-        U = [_tri_solve_lower(L, q)]                   # U_0 = L^{-1} q
+        U = [tri_solve_lower(L, q)]                   # U_0 = L^{-1} q
         for _ in range(K):
             U.append(a * (W @ U[-1]))                  # (alpha W) applied
-        XK = _tri_solve_lowerT(L, U[K])                # un-whiten once
+        XK = tri_solve_lowerT(L, U[K])                # un-whiten once
         y = Cv @ XK
 
         ctx.K = K
@@ -54,11 +54,11 @@ class SKACoreFn(torch.autograd.Function):
         a = alpha.unsqueeze(-1)
 
         # dCv = dY @ XK^T,  XK = L^{-T} U[K]
-        XK = _tri_solve_lowerT(L, U[K])
+        XK = tri_solve_lowerT(L, U[K])
         dCv = dY @ XK.transpose(-1, -2)
 
         # P_K = L^{-1} (Cv^T dY)
-        P = _tri_solve_lower(L, Cv.transpose(-1, -2) @ dY)
+        P = tri_solve_lower(L, Cv.transpose(-1, -2) @ dY)
 
         dMw = torch.zeros_like(W)
         dGw = torch.zeros_like(W)
@@ -67,12 +67,12 @@ class SKACoreFn(torch.autograd.Function):
             dGw = dGw - (P @ U[i].transpose(-1, -2))
             P = a * (W.transpose(-1, -2) @ P)
         dGw = dGw - (P @ U[0].transpose(-1, -2))       # i = 0 term
-        dq = _tri_solve_lowerT(L, P)
+        dq = tri_solve_lowerT(L, P)
 
         # un-whiten the whitened-space grads: dA = L^{-T} dAw L^{-1}
         def unwhiten(Aw):
-            t = _tri_solve_lowerT(L, Aw)               # L^{-T} Aw
-            return _tri_solve_lowerT(L, t.transpose(-1, -2)).transpose(-1, -2)
+            t = tri_solve_lowerT(L, Aw)               # L^{-T} Aw
+            return tri_solve_lowerT(L, t.transpose(-1, -2)).transpose(-1, -2)
 
         dM = unwhiten(dMw)
         dG = unwhiten(dGw)
@@ -87,13 +87,13 @@ def ska_core(G, M, Cv, q, K):
 # --- reference: autodiff THROUGH the same forward (gauge-identical) ---
 def _ref_core(G, M, Cv, q, K):
     L = torch.linalg.cholesky(G)
-    W = _whiten_M(L, M)
-    alpha = _spec_w(W)
+    W = whiten_M(L, M)
+    alpha = spec_w(W)
     a = alpha.unsqueeze(-1)
-    U = _tri_solve_lower(L, q)
+    U = tri_solve_lower(L, q)
     for _ in range(K):
         U = a * (W @ U)
-    XK = _tri_solve_lowerT(L, U)
+    XK = tri_solve_lowerT(L, U)
     return Cv @ XK
 
 
@@ -121,9 +121,9 @@ def ska_core_ns(G, M, Cv, q, K, ns_iters=25):
     no triangular solves. Uses a symmetric NS inverse-sqrt for the whitening.
     Forward-only (no custom backward); for training use ``ska_core``. See module
     docstring for the gauge-equivalence conditions vs the Cholesky core."""
-    Gi2 = _inv_sqrt_ns(G, ns_iters)                # symmetric G^{-1/2}
+    Gi2 = inv_sqrt_ns(G, ns_iters)                # symmetric G^{-1/2}
     W = Gi2 @ M @ Gi2                              # whitened operator (sym gauge)
-    alpha = _spec_w(W).unsqueeze(-1)               # (...,1,1)
+    alpha = spec_w(W).unsqueeze(-1)               # (...,1,1)
     U = Gi2 @ q
     for _ in range(K):
         U = alpha * (W @ U)

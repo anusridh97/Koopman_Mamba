@@ -28,7 +28,7 @@ from contextlib import nullcontext
 from koopman_lm.models.koopman_lm import (
     KoopmanLM, Mamba2Block, SKABlock, MambaSKAParallelBlock,
 )
-from koopman_lm.kernels.lin_alg import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
+from koopman_lm.kernels.lin_alg import whiten_M, spec_w, tri_solve_lower, tri_solve_lowerT
 from koopman_lm.kernels.chunk_stats import symmetric_key_value, causal_normalize
 from koopman_lm.kernels.prefix_scan import (
     _advance_whitened_state,
@@ -41,12 +41,12 @@ def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
     """y = C_v L^{-T}(alpha W)^K L^{-1} q, given Cholesky L of G. Matches the
     training core's forward (no grad needed at decode).
     L:(N,r,r) M:(N,r,r) Cv:(N,P,r) q:(N,r,1) -> (N,P,1)."""
-    W = _whiten_M(L, M)
-    alpha = _spec_w(W).unsqueeze(-1)                  # (N,1,1)
-    U = _tri_solve_lower(L, q)
+    W = whiten_M(L, M)
+    alpha = spec_w(W).unsqueeze(-1)                  # (N,1,1)
+    U = tri_solve_lower(L, q)
     for _ in range(K):
         U = alpha * (W @ U)
-    XK = _tri_solve_lowerT(L, U)
+    XK = tri_solve_lowerT(L, U)
     y = Cv @ XK
     if isinstance(gamma_value, float):
         if gamma_value != 1.0:
