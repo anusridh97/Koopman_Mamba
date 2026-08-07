@@ -20,6 +20,7 @@ import sys
 import math
 import json
 import time
+import signal
 import argparse
 import dataclasses
 import numpy as np
@@ -41,6 +42,32 @@ from koopman_lm.models.baselines import (
     build_mamba_ska_koopman,
 )
 from koopman_lm.training.data.dataset import MemmapPackedDataset
+
+
+class PreemptionFlag:
+    """Set from inside a signal handler, read from the training loop.
+    Plain attribute (not threading.Event) -- train.py's loop is
+    single-threaded; this only needs to survive a signal handler write."""
+
+    def __init__(self):
+        self._flag = False
+
+    def set(self):
+        self._flag = True
+
+    def is_set(self) -> bool:
+        return self._flag
+
+
+def install_sigusr1_handler(flag: PreemptionFlag) -> None:
+    """§5.4: SlurmLauncher's --signal=B:USR1@300 fires 300s before a
+    preemption/timeout kill. The handler only flips a flag -- it does no I/O
+    itself -- so the actual resume.pt write happens on the main thread at the
+    next safe point in the training loop, never inside signal-handler
+    context."""
+    def _handler(signum, frame):
+        flag.set()
+    signal.signal(signal.SIGUSR1, _handler)
 
 
 def enable_gradient_checkpointing(model):
