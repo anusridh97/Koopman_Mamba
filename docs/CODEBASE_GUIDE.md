@@ -24,18 +24,20 @@ Two production sizes ship: **50M** and **180M**.
 koopman_lm/
   config.py              KoopmanLMConfig dataclass + YAML loader + CONFIG_REGISTRY
   models/
-    koopman_lm.py        KoopmanLM — assembles the layer stack. SKABlock lives here too.
+    koopman_lm.py        KoopmanLM — assembles the layer stack (nothing else)
     recurrent.py         RecurrentKoopmanLM — step-by-step decode path
     baselines.py         ablation arms (mamba_only, mamba_attn, transformer, ...)
-  modules/
-    token_mixer/         things that mix across SEQUENCE: mamba.py, ska.py, attention.py
-    channel_mixer/       things that mix across FEATURES: mlp.py (SwiGLUMLP),
-                         koopman.py, koopman_diag.py, norm.py
-    kernels/             numerical machinery, no nn.Module opinions:
-                         prefix_scan.py, cuda_prefix_scan.py, cholesky_update*.py,
-                         chunk_stats*.py, ska_operator.py, factor_scan.py,
-                         inverse_cholesky.py, csrc/*.cu
+  modules/               layer components; see its __init__.py docstring
+    seq/                 mix across SEQUENCE  -> KoopmanLM.seq_layers
+                         mamba.py, ska.py, ska_block.py, attention.py
+    mlp/                 mix across FEATURES  -> KoopmanLM.mlp_layers
+                         swiglu.py, koopman.py, koopman_diag.py
+    norm.py              make_norm() — shared by seq/, mlp/ AND models/
     wip/                 not wired into training: memory.py (LastLayerRidgeMemory)
+  kernels/               numerics, a SIBLING of modules/ (see its README)
+                         lin_alg.py, prefix_scan.py, cuda_prefix_scan.py,
+                         cholesky_update*.py, chunk_stats*.py, ska_operator.py,
+                         factor_scan.py, inverse_cholesky.py, csrc/*.cu
   training/
     train.py             the training loop (entry point)
     repro.py             seeding / determinism
@@ -49,11 +51,16 @@ scripts/                 pretrain.sh, train_50m.sh, train_180m.sh, build_*, benc
 code-tests/              the test suite
 ```
 
-**The organizing idea:** `modules/` is split by *role*, not by technology.
-A token mixer mixes across sequence positions; a channel mixer mixes across
-features; kernels are numerics with no module opinions. If you're adding a new
-attention variant it goes in `token_mixer/`; a new MLP goes in `channel_mixer/`;
-a new Cholesky routine goes in `kernels/`.
+**The organizing idea:** `modules/` is split by *role*, not by technology, and
+the directory names match the model's own attribute names — `seq/` holds what
+goes in `KoopmanLM.seq_layers`, `mlp/` holds what goes in `.mlp_layers`. One
+vocabulary, not two. If it needs neighbouring tokens it is a seq mixer; if it
+works on one position independently it is an mlp mixer.
+
+`kernels/` is a **sibling** of `modules/`, not a child: 15 files of autograd
+Functions and numerical routines, exactly one of which defines an `nn.Module`.
+A new attention variant goes in `seq/`; a new MLP goes in `mlp/`; a new
+Cholesky routine goes in `kernels/`.
 
 `wip/` is a real signal, not a dumping ground: nothing in it is on the training
 path. `memory.py` is reachable only through `forward_with_memory`.
@@ -192,7 +199,8 @@ where a human made a judgment call, so they're where review pays.
 **a) `cb7680d` — the doubled-segment import fix.**
 The old tree had a package `ska/` containing a module `ska.py`. My rewrite map
 had a key for the package path but not the deeper module path, so a prefix match
-stranded a trailing segment: `token_mixer.ska.ska`. One file was affected
+stranded a trailing segment: `token_mixer.ska.ska` (the directory was still
+called `token_mixer` at that commit; it is `seq/` now). One file was affected
 (`scripts/benchmark_prefix_scan.py`). Worth confirming there's no sibling case I
 missed. The map now has both keys, and the static checker was widened to scan
 `scripts/` (it previously only walked `koopman_lm/`, which is how this reached a
@@ -200,7 +208,7 @@ commit).
 
 **b) `84b1cbc` — the two hand-fixes.** Neither could be automated.
 
-- `modules/kernels/cholesky_update.py:128` — was
+- `kernels/cholesky_update.py:128` — was
   `from koopman_lm import cholesky_update_triton`. It's inside
   `except Exception`, so a wrong path fails **silently** and permanently
   disables the Triton kernel. No test can catch this class of bug. Verify by
@@ -208,7 +216,16 @@ commit).
 - `config.py:306` — `_CONFIGS_ROOT` lost one `.parent` because `config.py` moved
   up a directory. Off-by-one here means every config load fails.
 
-**c) The `wip/` placement.** `last_layer_memory.py` → `modules/wip/memory.py`
+**c) The `lin_alg.py` consolidation.** Five primitives previously existed in
+four places under three names, including a `try/except` in `factor_scan.py`
+that **silently reimplemented** four of them — the same swallowed-exception
+shape as the Triton bug above. That fallback was dead (the import always
+succeeded), but any future path change would have quietly switched the math to
+a divergent copy. Now one definition, imported by all four consumers.
+Deliberately NOT merged: `fused_state_reference._solve_lower`, which despite
+the name also handles vector right-hand sides.
+
+**d) The `wip/` placement.** `last_layer_memory.py` → `modules/wip/memory.py`
 follows `pr/module-reorg`'s intent, but it's a naming judgment. If that code is
 closer to production than "wip" suggests, say so.
 
@@ -224,7 +241,7 @@ git diff --name-status -M b2d965e HEAD | grep "^R" | grep -v "^R100"     # expec
 git diff --stat b2d965e HEAD -- MQAR echo-ska lowrank_residual_cuda 'sys+toolcall'
 
 # history survived the moves
-git log --follow --oneline koopman_lm/modules/token_mixer/ska.py
+git log --follow --oneline koopman_lm/modules/seq/ska.py
 ```
 
 I also diffed every public symbol between `b2d965e` and this branch:
