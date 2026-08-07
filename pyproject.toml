@@ -12,7 +12,25 @@ requires-python = ">=3.10"
 # actual module-level imports of koopman_lm/*.py.
 dependencies = [
     # torch is intentionally NOT upper-pinned: it must match your CUDA + mamba_ssm
-    # build. Install torch FIRST for your platform, then `pip install -e .`.
+    # build, and no version range here can express that.
+    #
+    # DO NOT run `pip install -e .` (or `.[cuda,dev]`) directly on a machine
+    # that already has a working CUDA torch installed: "install torch first,
+    # then pip install -e ." is NOT sufficient -- pip re-resolves this
+    # unbounded spec against the default index during the second command and
+    # will happily replace your working torch+cu129 build with whatever
+    # torch+cu130 (or newer) build the default index prefers, silently
+    # breaking CUDA on drivers that only forward-compat within a CUDA major
+    # version. This is exactly what killed build 414632 (torch.cuda.is_available()
+    # went False after `pip install -e '.[cuda,dev]'` clobbered a working
+    # torch+cu129 with a default-index torch+cu130).
+    #
+    # Use `scripts/setup_env.sh` instead: it installs this project with
+    # `--no-deps` (so pip never looks at this dependency list at all) and
+    # installs every other declared dependency explicitly, so torch is never
+    # a candidate for resolution after the CUDA-enabled build you installed
+    # is verified present. It also asserts CUDA is still available afterward
+    # and fails loudly if it isn't.
     "torch>=2.1",
     "numpy>=1.24",
     "transformers>=4.40,<5.0",   # AutoTokenizer (Llama-2 / Mistral)
