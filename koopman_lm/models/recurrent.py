@@ -25,9 +25,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from contextlib import nullcontext
 
-from koopman_lm.models.koopman_lm import (
-    KoopmanLM, Mamba2Block, SKABlock, MambaSKAParallelBlock,
-)
+from koopman_lm.models.koopman_lm import KoopmanLM
+from koopman_lm.modules.seq.mamba import Mamba2Block
+from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
 from koopman_lm.kernels.lin_alg import whiten_M, spec_w, tri_solve_lower, tri_solve_lowerT
 from koopman_lm.kernels.chunk_stats import symmetric_key_value, causal_normalize
 from koopman_lm.kernels.prefix_scan import (

@@ -31,9 +31,9 @@ from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
 from koopman_lm.training.repro import seed_everything, enable_determinism, seed_worker
-from koopman_lm.models.koopman_lm import (
-    KoopmanLM, Mamba2Block, SKABlock, MambaSKAParallelBlock,
-)
+from koopman_lm.models.koopman_lm import KoopmanLM
+from koopman_lm.modules.seq.mamba import Mamba2Block
+from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
 from koopman_lm.models.baselines import (
     build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
     build_mamba_ska_koopman, CausalAttentionBlock,
