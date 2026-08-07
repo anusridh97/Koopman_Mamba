@@ -6,7 +6,20 @@ from koopman_lm.modules.channel_mixer.norm import make_norm
 
 
 def _apply_rope(x):
-    """Rotary position embeddings applied to x of shape (B, H, T, D)."""
+    """Rotary position embeddings applied to x of shape (B, H, T, D).
+
+    The angle tables are built in float32 for precision, but the result is cast
+    back to x's dtype. Without that cast the float32 tables silently PROMOTE q
+    and k to float32 while v -- which never goes through RoPE -- stays in the
+    activation dtype, and scaled_dot_product_attention then rejects the mixed
+    dtypes ("Expected query, key, and value to have the same dtype").
+
+    Under torch.autocast this was invisible, because autocast casts every SDPA
+    input to bf16 regardless. It only surfaces when the model runs in pure bf16
+    with no autocast, e.g. under DeepSpeed bf16. Casting here is numerically
+    identical for the autocast path (same float32 value, same single rounding to
+    bf16) and makes the non-autocast path correct.
+    """
     B, H, T, D = x.shape
     half = D // 2
     device = x.device
@@ -15,9 +28,9 @@ def _apply_rope(x):
     ang   = pos.unsqueeze(1) * theta.unsqueeze(0)        # (T, D/2)
     cos   = ang.cos()[None, None]                         # (1, 1, T, D/2)
     sin   = ang.sin()[None, None]
-    x1, x2 = x[..., :half], x[..., half:]
+    x1, x2 = x[..., :half].float(), x[..., half:].float()
     return torch.cat([x1 * cos - x2 * sin,
-                      x1 * sin + x2 * cos], dim=-1)
+                      x1 * sin + x2 * cos], dim=-1).to(x.dtype)
 
 
 class CausalAttentionBlock(nn.Module):
