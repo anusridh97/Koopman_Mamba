@@ -1,9 +1,10 @@
 # `koopman_lm/kernels/` — numerics and CUDA
 
 Everything here is numerical machinery: `torch.autograd.Function`s, triangular
-solves, Cholesky updates, prefix scans, and the CUDA sources. Exactly one file
-defines an `nn.Module`, which is why this is a sibling of `modules/` rather
-than a child of it.
+solves, Cholesky updates, prefix scans, and the CUDA sources. No file here
+defines an `nn.Module` -- that's why this is a sibling of `modules/` rather
+than a child of it. (`fast.py`, the one file that used to define an
+`nn.Module` here, moved to `modules/seq/fast.py`.)
 
 ## What's in here
 
@@ -19,7 +20,7 @@ than a child of it.
 | `chunk_stats.py`, `chunk_stats_exact.py` | per-chunk / per-token sufficient statistics |
 | `factor_scan.py` | all-prefix Cholesky factors via a PSD square-root scan |
 | `inverse_cholesky.py`, `incremental_transport.py`, `fused_state_reference.py` | alternative/reference state formulations |
-| `adaptive_chunking.py`, `fast.py`, `small_rank_backend.py` | chunking policy, fused projections, JIT loader |
+| `adaptive_chunking.py`, `small_rank_backend.py` | chunking policy, JIT loader |
 
 **The PyTorch prefix scan is the correctness reference.** The CUDA path must
 match it; it is never silently substituted for it.

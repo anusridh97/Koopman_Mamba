@@ -29,7 +29,7 @@ koopman_lm/
     baselines.py         ablation arms (mamba_only, mamba_attn, transformer, ...)
   modules/               layer components; see its __init__.py docstring
     seq/                 mix across SEQUENCE  -> KoopmanLM.seq_layers
-                         mamba.py, ska.py, ska_block.py, attention.py
+                         mamba.py, ska.py, ska_block.py, attention.py, fast.py
     mlp/                 mix across FEATURES  -> KoopmanLM.mlp_layers
                          swiglu.py, koopman.py, koopman_diag.py
     norm.py              make_norm() — shared by seq/, mlp/ AND models/
@@ -57,10 +57,11 @@ goes in `KoopmanLM.seq_layers`, `mlp/` holds what goes in `.mlp_layers`. One
 vocabulary, not two. If it needs neighbouring tokens it is a seq mixer; if it
 works on one position independently it is an mlp mixer.
 
-`kernels/` is a **sibling** of `modules/`, not a child: 15 files of autograd
-Functions and numerical routines, exactly one of which defines an `nn.Module`.
-A new attention variant goes in `seq/`; a new MLP goes in `mlp/`; a new
-Cholesky routine goes in `kernels/`.
+`kernels/` is a **sibling** of `modules/`, not a child: 14 files of autograd
+Functions and numerical routines, none of which define an `nn.Module` (the
+one that used to, `fast.py`, moved to `modules/seq/fast.py`). A new attention
+variant goes in `seq/`; a new MLP goes in `mlp/`; a new Cholesky routine goes
+in `kernels/`.
 
 `wip/` is a real signal, not a dumping ground: nothing in it is on the training
 path. `memory.py` is reachable only through `forward_with_memory`.
