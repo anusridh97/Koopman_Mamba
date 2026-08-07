@@ -102,6 +102,22 @@ def test_param_counts_in_band(size, band):
     assert lo <= pm <= hi, f"{size}: {pm:.1f}M not in [{lo}, {hi}]M"
 
 
+def test_50m_param_count_matches_real_gpu_instantiation():
+    """param_count_estimate() must match reality, not just fall in a band.
+
+    50,034,044 is what a real GPU instantiation reported (build 415208), not
+    a derived constant -- the estimator's Mamba-2 term previously mismatched
+    mamba_ssm.Mamba2's actual parameter layout (missing ngroups*d_state/nheads
+    in in_proj's width and the internal RMSNormGated entirely), a 1.4%
+    (731,172-parameter) overcount. This pins the fix so a future edit to
+    param_count_estimate can't silently regress it. mamba_ssm isn't installed
+    here (CPU venv) -- the 50,034,044 figure is the real, measured total from
+    that GPU run, cross-checked term-by-term against mamba_ssm.Mamba2's
+    public source (see koopman_lm/config.py's param_count_estimate comments).
+    """
+    assert build_config("50m").param_count_estimate() == 50_034_044
+
+
 def test_param_counts_monotonic():
     order = ["50m", "180m", "370m", "440m", "880m", "1p5b", "3b"]
     counts = [build_config(s).param_count_estimate() for s in order]

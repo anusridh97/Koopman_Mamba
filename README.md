@@ -8,8 +8,8 @@ hold everything else fixed.
 
 | Config | Width | Depth | SKA layers | SKA rank | Parameters |
 |---|---:|---:|---:|---:|---:|
-| `configs/50m.yaml` | 384 | 17 | 4 | 24 | 50,765,216 |
-| `configs/180m.yaml` | 640 | 25 | 6 | 24 | 180,049,352 |
+| `configs/50m.yaml` | 384 | 17 | 4 | 24 | 50,034,044 |
+| `configs/180m.yaml` | 640 | 25 | 6 | 24 | 176,342,680 |
 
 Both use SwiGLU, RMSNorm, fixed η=γ=1, causal norm clipping, LayerScale, and
 the strict `cuda_prefix` backend.

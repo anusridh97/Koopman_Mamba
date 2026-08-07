@@ -237,13 +237,31 @@ class KoopmanLMConfig:
 
         embed = V * d * (1 if self.tie_embeddings else 2)
 
+        # mamba_ssm.Mamba2's REAL parameter layout (koopman_lm never overrides
+        # ngroups, so it is always mamba_ssm's own default of 1; headdim
+        # likewise falls back to mamba_ssm's default of 64 unless
+        # mamba_headdim pins it). The previous formula here
+        # (d*d_inner*2 + d_inner*d_state*2 + d_inner*d_conv + d_inner + d_inner*d)
+        # was never checked against mamba_ssm.Mamba2's actual __init__ and
+        # both mis-sized in_proj (its true width is 2*d_inner +
+        # 2*ngroups*d_state + nheads, not a plain 2*d_inner) and omitted
+        # Mamba2's own internal gated RMSNorm (RMSNormGated(d_inner), weight
+        # only) entirely -- a 1.4% (731k-parameter) overcount on 50m,
+        # confirmed against a real GPU instantiation (build 415208:
+        # 50,034,044 measured vs 50,765,216 estimated). Mamba2Block's own
+        # separate wrapping pre-norm is counted in `norms` below, not here.
         d_inner = d * self.mamba_expand
+        headdim = self.mamba_headdim if self.mamba_headdim is not None else 64
+        nheads = d_inner // headdim
+        ngroups = 1
+        d_in_proj = 2 * d_inner + 2 * ngroups * self.d_state + nheads
+        conv_dim = d_inner + 2 * ngroups * self.d_state
         per_mamba = (
-            d * d_inner * 2 +
-            d_inner * self.d_state * 2 +
-            d_inner * self.d_conv +
-            d_inner +
-            d_inner * d
+            d * d_in_proj +                        # in_proj (bias=False)
+            conv_dim * self.d_conv + conv_dim +    # conv1d: depthwise weight + bias
+            3 * nheads +                           # dt_bias + A_log + D
+            d_inner +                              # internal RMSNormGated(d_inner)
+            d_inner * d                            # out_proj (bias=False)
         )
         mamba_total = per_mamba * n_mamba
 
@@ -255,7 +273,12 @@ class KoopmanLMConfig:
             (self.d_model if self.ska_layerscale else 0) +
             (d * (self.ska_short_conv_kernel + 1) + d
              if self.ska_short_conv else 0) +
-            2
+            # eta/gamma are each a single learnable scalar ONLY when their
+            # *_learnable flag is set (config.py's own scale-parameter
+            # policy) -- the unconditional "+ 2" here counted them even when
+            # both are fixed (as every current production YAML does).
+            (1 if self.ska_eta_learnable else 0) +
+            (1 if self.ska_gamma_learnable else 0)
         )
         ska_total = per_ska * n_ska
 
@@ -275,7 +298,16 @@ class KoopmanLMConfig:
                 per_mlp += d_k * b
         mlp_total = per_mlp * n
 
-        norms = n * d * 2 + d
+        # Every layer's sequence mixer and its MLP each own a pre-norm (d
+        # params): 2 per layer, plus the final norm. In 'parallel' mode the
+        # n_ska layers get a THIRD: MambaSKAParallelBlock = Mamba2Block(cfg)
+        # + SKABlock(cfg) run side by side, each with its own separate
+        # wrapping norm, on top of that layer's usual MLP norm. 'replace'
+        # mode has no such layer (SKA swaps in for Mamba 1-for-1, so every
+        # layer keeps exactly 2 norms) -- this term was previously flat
+        # regardless of ska_mode.
+        extra_parallel_norms = n_ska * d if self.ska_mode == 'parallel' else 0
+        norms = n * d * 2 + extra_parallel_norms + d
 
         total = embed + mamba_total + ska_total + mlp_total + norms
         return total

@@ -2,7 +2,10 @@
 # Mamba-2 remains at every depth. Four intermediate parallel SKA adapters
 # restore meaningful SKA depth without deleting local recurrent mixers.
 # Rank 24 and value width 64 match the fused SM100 CUDA specialization.
-# Estimated parameter count: 50,765,216.
+# Estimated parameter count: 50,034,044 (matches a real GPU instantiation
+# exactly -- build 415208 -- confirming param_count_estimate()'s Mamba-2/SKA/
+# norms terms; the previous 50,765,216 figure came from an estimator formula
+# that didn't match mamba_ssm.Mamba2's actual layout, since fixed).
 d_model: 384
 n_layers: 17
 vocab_size: 32000

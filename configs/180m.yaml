@@ -1,6 +1,10 @@
 # Exact prefix-scan, parameter-matched 180M configuration.
 # One depth is traded for six parallel SKA adapters, leaving a Mamba-only final
-# depth after the last SKA block. Estimated parameter count: 180,049,352.
+# depth after the last SKA block. Estimated parameter count: 176,342,680
+# (param_count_estimate()'s Mamba-2 term was fixed to match mamba_ssm.Mamba2's
+# actual layout -- see koopman_lm/config.py -- after a real GPU
+# instantiation of 50m came in 1.4% under the old formula's estimate;
+# 180,049,352 was that old, over-counting formula's figure).
 d_model: 640
 n_layers: 25
 vocab_size: 32000
