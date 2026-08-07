@@ -43,7 +43,7 @@ def main(argv=None):
         verify_shard(spec.data)
 
     run_dir = run_dir_path(args.run_root, spec)
-    create_run_dir(run_dir, resume=args.resume, force=args.force)
+    create_run_dir(run_dir, resume=args.resume, force=args.force, code_id=git_commit())
 
     materialize(spec, run_dir)
     append_attempt(run_dir, make_attempt_record(

@@ -111,10 +111,19 @@ def to_flat_dict(spec: RunSpec) -> Dict[str, Any]:
 def materialize(spec: RunSpec, run_dir) -> Path:
     """Write the fully-flattened spec + provenance to run_dir/spec.yaml,
     atomically. The only file downstream consumers (eval, resume, analysis)
-    read."""
+    read.
+
+    `code_id` (the git commit that produced these bytes) is stamped
+    top-level, orthogonal to `run_id`: a code-only change must not perturb
+    run_id (that would make every unrelated commit spawn a new run identity),
+    but it must still be recoverable so two runs that collide on run_id
+    (same declared science) but ran different code can be told apart (§3.7's
+    create_run_dir collision check reads this back).
+    """
     run_dir = Path(run_dir)
     payload = to_flat_dict(spec)
     payload["provenance"] = provenance()
+    payload["code_id"] = payload["provenance"]["git_commit"]
     out_path = run_dir / "spec.yaml"
     atomic_write_text(out_path, yaml.safe_dump(payload, sort_keys=False))
     return out_path

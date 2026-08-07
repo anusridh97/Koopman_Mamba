@@ -78,6 +78,52 @@ def test_make_attempt_record_shape():
     assert "timestamp" in record
 
 
+def test_make_attempt_record_includes_code_id():
+    """Every attempts.jsonl entry must carry code_id (the commit that actually
+    executed), independently of run_id -- so an attempt against a stale
+    code_id is identifiable directly from the audit trail."""
+    from koopman_lm.run.artifacts import make_attempt_record
+
+    record = make_attempt_record(host="node01", job_id="12345",
+                                   git_commit="deadbeef", forced=False)
+    assert record["code_id"] == "deadbeef"
+
+
+def test_create_run_dir_reports_code_id_mismatch_explicitly(tmp_path):
+    """If the target dir is finished and its spec.yaml recorded a different
+    code_id, the collision error must say so explicitly -- not just report a
+    generic clobber conflict -- so a code-only change that collides on run_id
+    (a real bug this fix corrects) is not mistaken for relaunching the exact
+    same experiment."""
+    import yaml
+
+    from koopman_lm.run.artifacts import RunDirConflictError, create_run_dir
+
+    run_dir = tmp_path / "run"
+    (run_dir / "final").mkdir(parents=True)
+    (run_dir / "spec.yaml").write_text(yaml.safe_dump({"code_id": "aaaaaaa"}))
+
+    with pytest.raises(RunDirConflictError, match="code_id"):
+        create_run_dir(run_dir, code_id="bbbbbbb")
+
+
+def test_create_run_dir_same_code_id_gives_generic_conflict(tmp_path):
+    """Same code_id (a genuine identical relaunch) keeps the plain, generic
+    clobber message -- the explicit code_id language is reserved for actual
+    mismatches."""
+    import yaml
+
+    from koopman_lm.run.artifacts import RunDirConflictError, create_run_dir
+
+    run_dir = tmp_path / "run"
+    (run_dir / "final").mkdir(parents=True)
+    (run_dir / "spec.yaml").write_text(yaml.safe_dump({"code_id": "aaaaaaa"}))
+
+    with pytest.raises(RunDirConflictError) as excinfo:
+        create_run_dir(run_dir, code_id="aaaaaaa")
+    assert "different code_id" not in str(excinfo.value)
+
+
 def test_atomic_torch_save_round_trips_and_leaves_no_tmp(tmp_path):
     import torch
     from koopman_lm.run.artifacts import atomic_torch_save

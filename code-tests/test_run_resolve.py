@@ -111,3 +111,29 @@ def test_materialize_writes_spec_yaml_with_provenance(tmp_path):
     reloaded = load_materialized_spec(out_path)
     assert reloaded.name == spec.name
     assert run_id(reloaded) == run_id(spec)
+
+
+def test_materialize_writes_code_id_distinct_from_run_id(tmp_path):
+    """code_id (§4.2/§3.7 provenance) records what code actually executed,
+    separately from run_id (declared science). A code change must not alter
+    run_id -- that would make every commit spawn a new run identity -- but it
+    must be recoverable from spec.yaml so two runs that collide on run_id but
+    ran different code can be told apart."""
+    from koopman_lm.config import build_config
+    from koopman_lm.run.resolve import git_commit, materialize
+    from koopman_lm.run.spec import (
+        OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec, run_id,
+    )
+
+    spec = RunSpec(
+        name="50m-mqar-smoke", model=build_config("50m"),
+        data=SyntheticDataSpec(generator="mqar", params={"num_kv_pairs": 8}),
+        optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100),
+        runtime=RuntimeSpec(),
+    )
+    run_dir = tmp_path / "run"
+    out_path = materialize(spec, run_dir)
+    raw = yaml.safe_load(out_path.read_text())
+
+    assert raw["code_id"] == git_commit()
+    assert raw["code_id"] != run_id(spec)
