@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+
+# Training / eval artifacts
+*.log
+runs/
+checkpoints/
+wandb/

@@ -35,7 +35,7 @@ koopman_lm/
     recurrent.py               <- globals/modules/utils/recurrent.py
   modules/
     token_mixer/               attention.py, mamba.py, ska.py
-    channel_mixer/             koopman.py, swiglu.py, (mlp.py, koopman_mlp_diag.py, norm.py)
+    channel_mixer/             koopman.py, koopman_diag.py, mlp.py (SwiGLUMLP), norm.py
     kernels/                   cholesky_update*.py, chunk_stats*.py, ska_operator.py,
                                factor_scan.py, lin_alg.py, + 10 new SKA/CUDA files
     wip/                       memory.py <- globals/modules/utils/last_layer_memory.py
