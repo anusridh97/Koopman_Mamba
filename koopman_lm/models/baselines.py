@@ -25,25 +25,25 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from koopman_lm.config import KoopmanLMConfig
-from koopman_lm.modules.channel_mixer.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
-from koopman_lm.modules.channel_mixer.mlp import SwiGLUMLP
-from koopman_lm.modules.channel_mixer.norm import make_norm
-from koopman_lm.modules.token_mixer.mamba import Mamba2Block      # noqa: F401 (re-exported)
-from koopman_lm.models.koopman_lm import SKABlock, MambaSKAParallelBlock
-from koopman_lm.modules.token_mixer.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
+from koopman_lm.modules.mlp.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
+from koopman_lm.modules.mlp.swiglu import SwiGLUMLP
+from koopman_lm.modules.norm import make_norm
+from koopman_lm.modules.seq.mamba import Mamba2Block      # noqa: F401 (re-exported)
+from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
+from koopman_lm.modules.seq.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
 
 
 # ============================================================================
 # Sequence layer blocks
 # ============================================================================
 
-# CausalAttentionBlock is defined in globals/modules/attention.py and imported above.
+# CausalAttentionBlock is defined in modules/seq/attention.py and imported above.
 
 
-# SKABlock is imported from models/koopman_lm.py so full and baseline
+# SKABlock is imported from modules/seq/ska_block.py so full and baseline
 # models use identical statistics, residual initialization, and local-path policy.
 
-# Mamba2Block is defined in globals/modules/mamba.py and imported above.
+# Mamba2Block is defined in modules/seq/mamba.py and imported above.
 
 
 # ============================================================================

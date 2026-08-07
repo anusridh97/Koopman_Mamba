@@ -25,12 +25,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from contextlib import nullcontext
 
-from koopman_lm.models.koopman_lm import (
-    KoopmanLM, Mamba2Block, SKABlock, MambaSKAParallelBlock,
-)
-from koopman_lm.modules.kernels.ska_operator import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
-from koopman_lm.modules.kernels.chunk_stats import symmetric_key_value, causal_normalize
-from koopman_lm.modules.kernels.prefix_scan import (
+from koopman_lm.models.koopman_lm import KoopmanLM
+from koopman_lm.modules.seq.mamba import Mamba2Block
+from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
+from koopman_lm.kernels.lin_alg import whiten_M, spec_w, tri_solve_lower, tri_solve_lowerT
+from koopman_lm.kernels.chunk_stats import symmetric_key_value, causal_normalize
+from koopman_lm.kernels.prefix_scan import (
     _advance_whitened_state,
     _read_state,
     boundary_whitened_states,
@@ -41,12 +41,12 @@ def _ska_apply_whitened(L, M, Cv, q, K, gamma_value):
     """y = C_v L^{-T}(alpha W)^K L^{-1} q, given Cholesky L of G. Matches the
     training core's forward (no grad needed at decode).
     L:(N,r,r) M:(N,r,r) Cv:(N,P,r) q:(N,r,1) -> (N,P,1)."""
-    W = _whiten_M(L, M)
-    alpha = _spec_w(W).unsqueeze(-1)                  # (N,1,1)
-    U = _tri_solve_lower(L, q)
+    W = whiten_M(L, M)
+    alpha = spec_w(W).unsqueeze(-1)                  # (N,1,1)
+    U = tri_solve_lower(L, q)
     for _ in range(K):
         U = alpha * (W @ U)
-    XK = _tri_solve_lowerT(L, U)
+    XK = tri_solve_lowerT(L, U)
     y = Cv @ XK
     if isinstance(gamma_value, float):
         if gamma_value != 1.0:
@@ -471,7 +471,7 @@ class RecurrentKoopmanLM(nn.Module):
                 st.M = st.M + torch.einsum('bhr,bhs->bhrs', x1, st.x_last)
             st.C_v = st.C_v + torch.einsum('bhp,bhr->bhpr', vbar1, x1)
             st.x_last = x1
-            from koopman_lm.modules.kernels.factor_scan import rank1_chol_update_
+            from koopman_lm.kernels.factor_scan import rank1_chol_update_
             rank1_chol_update_(st.L.reshape(N, r, r), x1.reshape(N, r))
         return out
 

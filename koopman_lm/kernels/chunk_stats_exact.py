@@ -27,13 +27,9 @@ Returns flattened (B*T*H, ...) ready for ska_core, plus shape tuple.
 
 import torch
 
+from koopman_lm.kernels.lin_alg import exclusive_cumsum
 
-def _excl_cumsum(x, dim=1):
-    """Exclusive cumulative sum: out[t] = sum_{i<t} x[i]."""
-    c = torch.cumsum(x, dim=dim)
-    z0 = torch.zeros_like(x.index_select(dim, torch.tensor([0], device=x.device)))
-    return torch.cat([z0, c.index_select(dim, torch.arange(0, x.shape[dim] - 1,
-                                                           device=x.device))], dim=dim)
+
 
 
 def exact_stats(z, zb, zq, v, ridge):
@@ -49,9 +45,9 @@ def exact_stats(z, zb, zq, v, ridge):
     C_contrib = torch.einsum('bthp,bthr->bthpr', v, zb)                 # (B,T,H,P,r)
 
     eye = torch.eye(r, dtype=z.dtype, device=z.device)
-    G = _excl_cumsum(G_contrib, dim=1) + ridge * eye                    # (B,T,H,r,r)
-    M = _excl_cumsum(M_contrib, dim=1)
-    Cv = _excl_cumsum(C_contrib, dim=1)                                 # (B,T,H,P,r)
+    G = exclusive_cumsum(G_contrib, dim=1) + ridge * eye                    # (B,T,H,r,r)
+    M = exclusive_cumsum(M_contrib, dim=1)
+    Cv = exclusive_cumsum(C_contrib, dim=1)                                 # (B,T,H,P,r)
 
     N = B * T * H
     Gf = 0.5 * (G + G.transpose(-1, -2)).reshape(N, r, r) + 1e-4 * eye

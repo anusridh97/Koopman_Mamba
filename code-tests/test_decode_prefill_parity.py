@@ -16,8 +16,8 @@ import math
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.ska_operator import ska_core
-from koopman_lm.modules.kernels.factor_scan import ska_core_given_L, rank1_chol_update_
+from koopman_lm.kernels.ska_operator import ska_core
+from koopman_lm.kernels.factor_scan import ska_core_given_L, rank1_chol_update_
 
 pytestmark = pytest.mark.correctness
 

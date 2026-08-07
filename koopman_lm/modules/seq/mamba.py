@@ -1,6 +1,6 @@
 import torch.nn as nn
 from koopman_lm.config import KoopmanLMConfig
-from koopman_lm.modules.channel_mixer.norm import make_norm
+from koopman_lm.modules.norm import make_norm
 
 
 class Mamba2Block(nn.Module):

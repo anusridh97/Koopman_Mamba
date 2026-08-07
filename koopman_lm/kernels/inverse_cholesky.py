@@ -44,7 +44,7 @@ numerics-only; dG/dM/dCv/dq flow through the (linear) prefix sums.
 
 import torch
 
-from koopman_lm.modules.kernels.chunk_stats_exact import exact_stats
+from koopman_lm.kernels.chunk_stats_exact import exact_stats
 
 
 @torch.no_grad()

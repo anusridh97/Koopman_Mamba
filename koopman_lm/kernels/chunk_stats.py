@@ -26,6 +26,8 @@ Returns flattened (BCH=B*nchunks*H) tensors ready for the whitened core:
 import torch
 import torch.nn.functional as F
 
+from koopman_lm.kernels.lin_alg import exclusive_cumsum
+
 
 def causal_normalize(u, clip_c=None, eps=1e-12):
     """Per-token causal key/query normalization (memo §6).
@@ -67,11 +69,6 @@ def symmetric_key_value(z_n, beta, v):
     return sb * z_n, sb * v
 
 
-def _excl_prefix(x):
-    """Exclusive prefix sum along dim=1 (chunk axis)."""
-    c = torch.cumsum(x, dim=1)
-    z0 = torch.zeros_like(x[:, :1])
-    return torch.cat([z0, c[:, :-1]], dim=1)
 
 
 def chunk_stats(z, zb, zq, v, ridge, CS):
@@ -100,9 +97,9 @@ def chunk_stats(z, zb, zq, v, ridge, CS):
     bnd = torch.cat([torch.zeros(B, 1, H, r, r, dtype=z.dtype, device=z.device), bnd], dim=1)
 
     eye = torch.eye(r, dtype=z.dtype, device=z.device)
-    G = _excl_prefix(Gc) + ridge * eye                # Eq.8
-    M = _excl_prefix(Mc) + _excl_prefix(bnd)          # Eq.9 (i=1..c-1)
-    Cv = _excl_prefix(Cc)                             # Eq.10
+    G = exclusive_cumsum(Gc, dim=1) + ridge * eye                # Eq.8
+    M = exclusive_cumsum(Mc, dim=1) + exclusive_cumsum(bnd, dim=1)          # Eq.9 (i=1..c-1)
+    Cv = exclusive_cumsum(Cc, dim=1)                             # Eq.10
 
     N = B * nc * H
     Gf = (0.5 * (G + G.transpose(-1, -2))).reshape(N, r, r) + 1e-4 * eye   # symmetrize + jitter

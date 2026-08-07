@@ -114,9 +114,9 @@ def patch_ska_module(ska):
         v = combined[:, :, 2 * Hh * rr:].reshape(B, T, Hh, Pp)
         beta = torch.sigmoid(self.beta_proj(hidden_states))
         ctx = torch.amp.autocast('cuda', enabled=False) if hidden_states.is_cuda else nullcontext()
-        from koopman_lm.modules.kernels.chunk_stats import (
+        from koopman_lm.kernels.chunk_stats import (
             chunk_stats as _cs, symmetric_key_value, causal_normalize)
-        from koopman_lm.modules.kernels.ska_operator import ska_core
+        from koopman_lm.kernels.ska_operator import ska_core
         with ctx:
             z_f = z.float(); zq_f = zq.float(); v_f = v.float(); beta_f = beta.float()
             z_n = causal_normalize(z_f, self.norm_clip_c)
