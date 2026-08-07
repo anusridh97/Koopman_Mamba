@@ -84,7 +84,11 @@ def test_config_hash_changes_on_replace():
 
 
 def test_gated_variant_differs_only_in_mlp_gated():
-    base = build_config("180m")
+    # 180m_gated is a variant of the 768x24 backbone (180m_dense), not of
+    # "180m" -- the current 180m.yaml is an unrelated 640x25 prefix-scan
+    # production config that happened to reuse the "180m" name. See
+    # configs/180m_dense.yaml for the history.
+    base = build_config("180m_dense")
     gated = build_config("180m_gated")
     assert base.mlp_gated is False
     assert gated.mlp_gated is True

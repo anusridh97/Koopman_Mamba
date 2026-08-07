@@ -291,7 +291,11 @@ def test_utilization_report_runs_and_detects_planted_pathologies():
 
 
 def test_param_count_estimate_reflects_v2_additions():
-    base = build_config("180m")
+    # 180m_v2 is "the same backbone" relative to 180m_dense (the 768x24
+    # config its docstring calls "180m.yaml"), not the current 180m.yaml --
+    # that's an unrelated 640x25 prefix-scan production config that happened
+    # to reuse the "180m" name. See configs/180m_dense.yaml for the history.
+    base = build_config("180m_dense")
     v2 = build_config("180m_v2")
     # v2 only adds the learned mixer + per-row gains on top of the same backbone;
     # a few M more, not a doubling.

@@ -318,6 +318,11 @@ CONFIG_REGISTRY = {
     # Canonical fused-prefix production configurations.
     "50m": "50m.yaml",
     "180m": "180m.yaml",
+    # 768x24 backbone that "180m" used to mean before it was overwritten by
+    # the 640x25 prefix-scan design above; 180m_gated and 180m_v2 are variants
+    # of THIS config, not of the current "180m". Kept under its own name so
+    # neither lineage overwrites the other -- see configs/180m_dense.yaml.
+    "180m_dense": "180m_dense.yaml",
     "180m_gated": "180m_gated.yaml",
     "180m_v2": "180m_v2.yaml",
     # Scaling ladder.

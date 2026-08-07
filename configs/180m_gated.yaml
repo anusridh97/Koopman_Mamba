@@ -4,5 +4,10 @@ vocab_size: 32000
 d_state: 128
 ska_n_heads: 12
 ska_rank: 48
-ska_layer_indices: [3, 7, 11, 15, 19, 23]
+# ska_layer_indices matches configs/180m_dense.yaml (its base) -- restored
+# 2026-07-06/09 by ati-phase0-refactor's merge to keep this variant
+# differing from its base ONLY in mlp_gated, then accidentally regressed
+# back to the pre-sync value by the 2026-08-07 "restore lost config YAMLs"
+# commit, which pulled from a stale pre-merge snapshot. Fixed again here.
+ska_layer_indices: [8, 16]
 mlp_gated: true
