@@ -179,9 +179,14 @@ def test_variants_build_and_stay_submillion_scale(model_type):
 
 @pytest.mark.gpu
 def test_table2_forward_and_shifted_loss_smoke():
+    # mamba_ssm's Mamba2Block dispatches to CUDA-only kernels (causal_conv1d,
+    # selective scan) -- both model and inputs must be on the GPU device, like
+    # the neighboring test_niah_eval_is_zero_shot_smoke does.
+    device = torch.device("cuda")
     cfg = table2.build_config("1m")
-    model = table2.build_model("mamba_ska_swiglu", cfg)
+    model = table2.build_model("mamba_ska_swiglu", cfg).to(device)
     inputs, labels = table2.make_train_batch(0, _Args)
+    inputs, labels = inputs.to(device), labels.to(device)
     out = model(input_ids=inputs)
     logits = out["logits"]
     loss = torch.nn.functional.cross_entropy(

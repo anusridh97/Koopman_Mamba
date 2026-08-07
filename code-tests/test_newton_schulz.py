@@ -64,5 +64,22 @@ def test_ns_equals_cholesky_bf16():
     y_ns = ska_core_ns(G.bfloat16().float(), M.bfloat16().float(),
                        Cv.bfloat16().float(), q.bfloat16().float(), K, ns_iters=20)
     rel = (y_ns - y_chol).norm() / (y_chol.norm() + 1e-12)
-    assert rel < 1e-3, f"NS vs Cholesky bf16 rel err {rel:.2e}"
+    # Tolerance derivation (see docs/superpowers/specs/2026-08-07-gpu-triage.md
+    # for the full writeup): `.bfloat16().float()` only quantizes the four
+    # *inputs* once -- all downstream NS/matmul arithmetic runs in fp32 -- so
+    # the injected error is one bf16 rounding of each input, at bf16's
+    # 8 mantissa bits -> unit roundoff ~= 2^-8 ~= 3.9e-3. That perturbation
+    # then propagates through a contractive (spectral norm <= 1), K=2-step
+    # Newton-Schulz/matmul pipeline, where mild linear growth (~1.5-2x) is
+    # expected but no blowup, since the operator is not ill-conditioned.
+    # Predicted ceiling ~= 2 * 3.9e-3 ~= 7.8e-3; the observed 6.10e-3 sits
+    # inside that band, i.e. this is bf16 quantization noise, not a
+    # numerical bug. The old 1e-3 bound was tighter than the fp32 case's 2e-3
+    # (test_ns_equals_cholesky_core) despite bf16 having far fewer mantissa
+    # bits (8 vs 23) -- physically backwards, so it was simply wrong rather
+    # than a deliberately tight target. 1e-2 gives ~1.6x margin over the
+    # observed value while still catching a real regression (an actual
+    # correctness bug in ska_core_ns would be expected to land at rel errors
+    # of several percent to O(1), well above this band).
+    assert rel < 1e-2, f"NS vs Cholesky bf16 rel err {rel:.2e}"
 

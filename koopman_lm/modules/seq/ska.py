@@ -374,6 +374,20 @@ class SKAModule(nn.Module):
         self.decay_alpha = decay_alpha
         self.layerscale = layerscale
 
+        # NOTE: `backend` here selects the legacy post-Cholesky matmul chain
+        # ('triton' vs 'pytorch'), which is DEAD when prefix_scan=True (see
+        # the chunk_strategy warning above) -- it is resolved eagerly against
+        # local triton availability purely for the old chunked path and for
+        # extra_repr(). It must NOT be reused to select ska_prefix_scan's
+        # backend (whose allowed values are auto/cuda/cuda_prefix/reference/
+        # pytorch, and which has no 'triton' implementation): doing so used
+        # to make any prefix_scan=True model with the default backend='auto'
+        # crash on any machine with triton installed, since 'auto' resolved
+        # to 'triton' here and ska_prefix_scan(backend='triton') raises
+        # ValueError. Keep the raw, unresolved string for that call so
+        # prefix_scan gets its own real 'auto' (try CUDA, else fall back)
+        # semantics instead of this module's triton/pytorch choice.
+        self._prefix_scan_backend = backend
         if backend == 'auto':
             self.backend = 'triton' if _TRITON_AVAILABLE else 'pytorch'
         else:
@@ -524,7 +538,7 @@ class SKAModule(nn.Module):
                 Y = ska_prefix_scan(
                     x_n, zq_n, v_w, self.ridge_eps, self.power_K,
                     self.prefix_scan_block_size, self.prefix_scan_jitter,
-                    backend=self.backend)
+                    backend=self._prefix_scan_backend)
                 gamma_apply = self._resolve_gamma()
                 if isinstance(gamma_apply, float):
                     if gamma_apply != 1.0:
