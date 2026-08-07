@@ -23,6 +23,8 @@ _SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --nodes={nodes}
 #SBATCH --gpus-per-node={gpus}
 #SBATCH --time={time_limit}
+#SBATCH --signal=B:USR1@300
+#SBATCH --requeue
 #SBATCH --output={run_dir}/slurm-%j.out
 
 set -euo pipefail

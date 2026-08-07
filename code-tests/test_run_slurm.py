@@ -58,6 +58,18 @@ def test_render_sbatch_multi_gpu_uses_torchrun(tmp_path):
     assert "--nproc_per_node=2" in text
 
 
+def test_render_sbatch_requests_preemption_signal_and_requeue(tmp_path):
+    """§5.4: Slurm must warn the job 300s before killing it (SIGUSR1) so
+    train.py's handler can write resume.pt and exit cleanly, and --requeue so
+    a preempted/timed-out job is resubmitted rather than lost."""
+    from koopman_lm.run.slurm import SlurmLauncher
+
+    spec = _shard_spec()
+    text = SlurmLauncher().render_sbatch(spec, tmp_path)
+    assert "#SBATCH --signal=B:USR1@300" in text
+    assert "#SBATCH --requeue" in text
+
+
 def test_submit_dry_run_writes_sbatch_without_calling_sbatch(tmp_path, monkeypatch):
     from koopman_lm.run.slurm import SlurmLauncher
 
