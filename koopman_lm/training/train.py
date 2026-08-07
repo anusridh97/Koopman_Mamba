@@ -188,13 +188,33 @@ def train(args):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_ddp = args.ddp and world_size > 1
+    is_main = local_rank == 0
+
+    # §5.4: install the SIGUSR1 handler FIRST, before any of the setup below
+    # (tokenizer load, model construction, torch.compile, DDP init, dataset
+    # indexing, optimizer/scheduler construction) -- all of which can take
+    # anywhere from seconds to minutes. The handler used to be installed only
+    # after all of that, deep in this function; a SIGUSR1 landing during
+    # setup hit Python's default disposition (terminate) instead of being
+    # caught, and the process died raw instead of writing resume.pt and
+    # exiting cleanly. That's exactly what build 415208's e2e run hit: its
+    # SIGUSR1 arrived ~3s after the subprocess spawned, well inside the old
+    # setup window, and `subprocess.CalledProcessError` reported the child
+    # "died with <Signals.SIGUSR1: 10>". Installing here first means the
+    # worst case is now "the flag is set before there's a model to
+    # checkpoint," which the training loop below still exits cleanly from
+    # (no raw signal death) -- not "the process is killed outright."
+    preempt_flag = PreemptionFlag()
+    install_sigusr1_handler(preempt_flag)
+    if is_main:
+        print("  SIGUSR1 handler installed", flush=True)
+
     if is_ddp:
         torch.distributed.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
         device = torch.device(f"cuda:{local_rank}")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    is_main = local_rank == 0
     # deterministic seeding (per-rank offset so DDP replicas differ but are reproducible)
     data_gen = seed_everything(args.seed + local_rank)
     if args.deterministic:
@@ -280,9 +300,8 @@ def train(args):
     # scheduler + RNG + epoch + samples-consumed, always written together
     # with the matching step_<N>/ archival checkpoint (see _save_all below)
     # so resume.pt's named step always has real weights to pair with.
-    preempt_flag = PreemptionFlag()
-    install_sigusr1_handler(preempt_flag)
-
+    # (preempt_flag/install_sigusr1_handler moved to the top of this
+    # function -- see the comment there.)
     start_step, start_epoch, start_samples_consumed = 0, 0, 0
     if args.resume:
         resume_path = os.path.join(args.output_dir, "resume.pt")
