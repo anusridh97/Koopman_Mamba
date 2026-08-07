@@ -42,9 +42,9 @@ def test_musique_positive_is_supporting():
 
 def test_wiki_pairs_have_distinct_neg():
     ex = {"title": "Photosynthesis",
-          "text": ("Intro paragraph long enough to survive the stub filter here.\n\n"
-                   "== History ==\n\nHistory paragraph also long enough to pass the filter.\n\n"
-                   "== Process ==\n\nProcess paragraph likewise long enough to be usable.")}
+          "text": ("Intro paragraph that is comfortably long enough to survive the stub filter here.\n\n"
+                   "== History ==\n\nHistory paragraph that is also comfortably long enough to pass the filter.\n\n"
+                   "== Process ==\n\nProcess paragraph that is likewise comfortably long enough to be usable.")}
     pairs = wiki_to_pairs(ex, random.Random(0), max_pairs=3)
     assert pairs, "expected at least one self-supervised wiki pair"
     for p in pairs:
