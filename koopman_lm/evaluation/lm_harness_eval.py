@@ -39,7 +39,7 @@ from koopman_lm.models.baselines import (
     build_mamba_ska_swiglu,
     build_mamba_ska_koopman,
 )
-from koopman_lm.modules.token_mixer.attention import CausalAttentionBlock
+from koopman_lm.modules.seq.attention import CausalAttentionBlock
 from koopman_lm.models.recurrent import RecurrentKoopmanLM
 
 

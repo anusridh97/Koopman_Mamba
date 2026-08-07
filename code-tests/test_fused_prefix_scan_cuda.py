@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from koopman_lm.modules.kernels.cuda_prefix_scan import fused_ska_prefix_scan
-from koopman_lm.modules.kernels.prefix_scan import dense_exact_oracle
+from koopman_lm.kernels.cuda_prefix_scan import fused_ska_prefix_scan
+from koopman_lm.kernels.prefix_scan import dense_exact_oracle
 
 pytestmark = [pytest.mark.gpu, pytest.mark.correctness]
 

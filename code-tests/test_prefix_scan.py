@@ -1,6 +1,6 @@
 import torch
 
-from koopman_lm.modules.kernels.prefix_scan import (
+from koopman_lm.kernels.prefix_scan import (
     compose_summaries,
     dense_exact_oracle,
     singleton_summary,
@@ -108,7 +108,7 @@ def test_blocked_backward_is_invariant_to_checkpoint_block_size():
 
 
 def test_compact_write_state_matches_fresh_raw_reconstruction():
-    from koopman_lm.modules.kernels.prefix_scan import (
+    from koopman_lm.kernels.prefix_scan import (
         _advance_whitened_state,
     )
 
@@ -204,7 +204,7 @@ def test_prefix_scan_model_recurrent_decode_matches_full_prefix():
 
 
 def test_compact_state_is_exactly_reversible_by_cholesky_downdate():
-    from koopman_lm.modules.kernels.prefix_scan import (
+    from koopman_lm.kernels.prefix_scan import (
         _advance_whitened_state,
         _retreat_whitened_state,
     )

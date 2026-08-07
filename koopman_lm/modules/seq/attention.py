@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from koopman_lm.config import KoopmanLMConfig
-from koopman_lm.modules.channel_mixer.norm import make_norm
+from koopman_lm.modules.norm import make_norm
 
 
 def _apply_rope(x):

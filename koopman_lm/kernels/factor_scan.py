@@ -50,7 +50,7 @@ import math
 import torch
 
 try:
-    from koopman_lm.modules.kernels.ska_operator import (
+    from koopman_lm.kernels.ska_operator import (
         _spec_w, _tri_solve_lower, _tri_solve_lowerT, _whiten_M)
 except Exception:  # standalone use / tests
     def _tri_solve_lower(L, A):

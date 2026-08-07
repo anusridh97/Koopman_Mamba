@@ -14,10 +14,10 @@ from koopman_lm.config import (
     CONFIG_FACTORIES,
 )
 from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.modules.token_mixer.ska import SKAModule
-from koopman_lm.modules.channel_mixer.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
+from koopman_lm.modules.seq.ska import SKAModule
+from koopman_lm.modules.mlp.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
 from koopman_lm.models.recurrent import RecurrentKoopmanLM
-from koopman_lm.modules.kernels.adaptive_chunking import (
+from koopman_lm.kernels.adaptive_chunking import (
     compute_chunk_stats_overlap,
     compute_chunk_stats_decay,
 )

@@ -174,7 +174,7 @@ def build_model(args, tokenizer):
 
     if args.model_type in {"koopman", "mamba_ska_swiglu", "mamba_ska_koopman"}:
         if args.ska_fast:
-            from koopman_lm.modules.kernels.fast import patch_ska_module
+            from koopman_lm.kernels.fast import patch_ska_module
             for layer in model.modules():
                 if isinstance(layer, SKABlock):
                     patch_ska_module(layer.ska)
