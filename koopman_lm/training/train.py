@@ -42,6 +42,10 @@ from koopman_lm.models.baselines import (
     build_mamba_ska_koopman,
 )
 from koopman_lm.training.data.dataset import MemmapPackedDataset
+from koopman_lm.training.resume import (
+    apply_resume_state, epoch_permutation, load_resume_state,
+    resume_indices, save_resume_state,
+)
 
 
 class PreemptionFlag:
@@ -251,12 +255,6 @@ def train(args):
     if is_ddp:
         sampler = torch.utils.data.distributed.DistributedSampler(
             train_ds, num_replicas=world_size, rank=local_rank, shuffle=True)
-    train_loader = DataLoader(
-        train_ds, batch_size=args.per_device_train_batch_size,
-        shuffle=(sampler is None), sampler=sampler, num_workers=args.num_workers,
-        pin_memory=True, prefetch_factor=2 if args.num_workers > 0 else None,
-        drop_last=True, persistent_workers=args.num_workers > 0,
-        generator=data_gen, worker_init_fn=seed_worker)
 
     optimizer = torch.optim.AdamW(
         _param_groups(raw_model, args.weight_decay),
@@ -278,8 +276,43 @@ def train(args):
                    group=group,
                    config={**vars(args), "cfg_hash": ch})
 
+    # §5: exact resume. resume.pt is a rolling file holding optimizer +
+    # scheduler + RNG + epoch + samples-consumed, always written together
+    # with the matching step_<N>/ archival checkpoint (see _save_all below)
+    # so resume.pt's named step always has real weights to pair with.
+    preempt_flag = PreemptionFlag()
+    install_sigusr1_handler(preempt_flag)
+
+    start_step, start_epoch, start_samples_consumed = 0, 0, 0
+    if args.resume:
+        resume_path = os.path.join(args.output_dir, "resume.pt")
+        if not os.path.exists(resume_path):
+            raise SystemExit(f"--resume given but no resume.pt at {resume_path}")
+        resume_state = load_resume_state(resume_path)
+        ckpt_dir = os.path.join(args.output_dir, f"step_{resume_state['step']}")
+        model_path = os.path.join(ckpt_dir, "model.pt")
+        if not os.path.exists(model_path):
+            raise SystemExit(
+                f"resume.pt names step {resume_state['step']} but {model_path} "
+                f"is missing -- archival checkpoint and resume.pt must be "
+                f"written together")
+        raw_model.load_state_dict(
+            torch.load(model_path, map_location="cpu", weights_only=True))
+        start_step, start_epoch, start_samples_consumed = apply_resume_state(
+            resume_state, optimizer=optimizer, scheduler=scheduler)
+        if is_main:
+            print(f"  Resumed from {ckpt_dir} at step {start_step}, "
+                  f"epoch {start_epoch}, samples_consumed {start_samples_consumed}")
+
+    def _save_all(step, epoch, samples_consumed, dirname=None):
+        _save_checkpoint(raw_model, cfg, tokenizer, step, args, dirname=dirname)
+        resume_path = os.path.join(args.output_dir, "resume.pt")
+        save_resume_state(resume_path, step=step, epoch=epoch,
+                           samples_consumed=samples_consumed,
+                           optimizer=optimizer, scheduler=scheduler)
+
     model.train()
-    step = 0; micro_step = 0
+    step = start_step; micro_step = 0
     running_loss = torch.tensor(0.0, device=device); loss_count = 0
     t_start = time.time(); tokens_seen = 0
     if is_main:
@@ -288,11 +321,32 @@ def train(args):
               f"tok/step={eff*args.max_seq_len:,}")
     optimizer.zero_grad(set_to_none=True)
 
-    epoch = 0
+    epoch = start_epoch
+    preempted = False
     while step < args.max_steps:
-        if sampler is not None: sampler.set_epoch(epoch)
         if hasattr(train_ds, 'set_epoch'): train_ds.set_epoch(epoch)
-        for batch in train_loader:
+        # §5.2: the epoch's sample order is built explicitly (index
+        # arithmetic, no data read) instead of relying on DataLoader's
+        # implicit shuffle=True RandomSampler, so a mid-epoch resume can skip
+        # forward over already-consumed indices without re-reading them.
+        if is_ddp:
+            sampler.set_epoch(epoch)
+            indices = list(sampler)
+        else:
+            indices = epoch_permutation(len(train_ds), args.seed + local_rank, epoch)
+        samples_consumed = 0
+        if epoch == start_epoch and start_samples_consumed > 0:
+            if is_ddp:
+                indices = indices[start_samples_consumed:]
+            else:
+                indices = resume_indices(len(train_ds), args.seed + local_rank,
+                                          epoch, start_samples_consumed)
+            samples_consumed = start_samples_consumed
+        epoch_loader = DataLoader(
+            train_ds, batch_size=args.per_device_train_batch_size,
+            sampler=indices, num_workers=args.num_workers,
+            pin_memory=True, drop_last=True, worker_init_fn=seed_worker)
+        for batch in epoch_loader:
             if step >= args.max_steps: break
             ids = batch["input_ids"].to(device, non_blocking=True)
             labels = batch["labels"].to(device, non_blocking=True)
@@ -305,6 +359,7 @@ def train(args):
             scaled_loss.backward()
             running_loss += raw_loss.detach(); loss_count += 1
             tokens_seen += ids.numel(); micro_step += 1
+            samples_consumed += ids.size(0)
             if micro_step % args.gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step(); scheduler.step()
@@ -321,8 +376,20 @@ def train(args):
                                    "tokens_per_sec": tps}, step=step)
                     running_loss = torch.tensor(0.0, device=device); loss_count = 0
                 if is_main and step > 0 and step % args.save_steps == 0:
-                    _save_checkpoint(raw_model, cfg, tokenizer, step, args)
+                    _save_all(step, epoch, samples_consumed)
+                if is_main and preempt_flag.is_set():
+                    _save_all(step, epoch, samples_consumed)
+                    print(f"  SIGUSR1 received -- wrote resume.pt at step {step}, exiting cleanly")
+                    preempted = True
+                    break
+        if preempted:
+            break
         epoch += 1
+
+    if preempted:
+        if is_ddp:
+            torch.distributed.destroy_process_group()
+        return
 
     if is_main:
         _save_checkpoint(raw_model, cfg, tokenizer, step, args, dirname="final")
@@ -404,6 +471,10 @@ def parse_args():
     p.add_argument("--deterministic", action="store_true", default=False,
                    help="enable torch deterministic algorithms + seeded dataloader "
                         "(reproducible loss curves; lower throughput)")
+    p.add_argument("--resume", action="store_true", default=False,
+                   help="resume from <output_dir>/resume.pt + its matching "
+                        "step_<N>/model.pt (optimizer, scheduler, RNG, and "
+                        "dataloader position restored exactly; §5)")
     return p.parse_args()
 
 

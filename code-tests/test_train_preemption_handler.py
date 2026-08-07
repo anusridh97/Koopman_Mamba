@@ -28,3 +28,15 @@ def test_sigusr1_sets_the_preemption_flag():
         assert flag.is_set()
     finally:
         signal.signal(signal.SIGUSR1, signal.SIG_DFL)
+
+
+def test_parse_args_accepts_resume_flag(monkeypatch):
+    from koopman_lm.training.train import parse_args
+
+    monkeypatch.setattr("sys.argv", ["train.py", "--data_dir", "/tmp/x"])
+    args = parse_args()
+    assert args.resume is False
+
+    monkeypatch.setattr("sys.argv", ["train.py", "--data_dir", "/tmp/x", "--resume"])
+    args = parse_args()
+    assert args.resume is True
