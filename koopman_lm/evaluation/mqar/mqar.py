@@ -14,6 +14,12 @@ and Transformer numbers.
 import torch
 
 
+def mqar_cell_fits(seq_len, num_kv_pairs, num_queries=None):
+    """Whether the repo-local KV and query blocks fit, including exact fits."""
+    num_queries = num_kv_pairs if num_queries is None else num_queries
+    return 2 * num_kv_pairs + 2 * num_queries <= seq_len
+
+
 def make_mqar(batch, seq_len, num_kv_pairs, vocab_size,
               num_queries=None, seed=0):
     """Build a batch of MQAR sequences.
@@ -29,7 +35,7 @@ def make_mqar(batch, seq_len, num_kv_pairs, vocab_size,
     """
     num_queries = num_queries or num_kv_pairs
     assert vocab_size >= 4, "need room for disjoint key/value halves"
-    assert 2 * num_kv_pairs + 2 * num_queries <= seq_len, \
+    assert mqar_cell_fits(seq_len, num_kv_pairs, num_queries), \
         f"seq_len={seq_len} too short for {num_kv_pairs} pairs + {num_queries} queries"
     half = vocab_size // 2
     assert num_kv_pairs <= half, "not enough distinct keys/values for num_kv_pairs"
