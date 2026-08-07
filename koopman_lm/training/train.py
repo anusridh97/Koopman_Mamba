@@ -342,10 +342,18 @@ def train(args):
                 indices = resume_indices(len(train_ds), args.seed + local_rank,
                                           epoch, start_samples_consumed)
             samples_consumed = start_samples_consumed
+        # generator= is REQUIRED for exact resume, not an optimisation.
+        # DataLoader.__iter__ draws one int64 from the GLOBAL torch RNG on every
+        # fresh iteration to seed _base_seed (torch/utils/data/dataloader.py),
+        # even at num_workers=0 with an explicit sampler. A resumed run builds a
+        # new DataLoader mid-epoch and so pays a draw its uninterrupted twin
+        # never pays there, desyncing dropout masks from the first resumed step.
+        # Passing an explicit generator takes that draw off the global stream.
         epoch_loader = DataLoader(
             train_ds, batch_size=args.per_device_train_batch_size,
             sampler=indices, num_workers=args.num_workers,
-            pin_memory=True, drop_last=True, worker_init_fn=seed_worker)
+            pin_memory=True, drop_last=True, worker_init_fn=seed_worker,
+            generator=torch.Generator())
         for batch in epoch_loader:
             if step >= args.max_steps: break
             ids = batch["input_ids"].to(device, non_blocking=True)
