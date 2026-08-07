@@ -31,6 +31,23 @@ def atomic_write_json(path, data: Dict[str, Any], indent: int = 2) -> None:
     atomic_write_text(path, json.dumps(data, indent=indent, default=str))
 
 
+def atomic_torch_save(path, obj: Any) -> None:
+    """Binary counterpart of atomic_write_text: temp file + os.replace, so a
+    kill mid-write (a preemption, e.g.) cannot leave a truncated resume.pt.
+    torch is imported lazily so this module keeps working without it."""
+    import torch
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / (path.name + f".tmp{os.getpid()}")
+    try:
+        torch.save(obj, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if tmp.exists():
+            tmp.unlink()
+        raise
+
+
 def create_run_dir(run_dir, *, resume: bool = False, force: bool = False) -> Path:
     """Create (or reuse) a run directory, refusing to clobber a finished run.
 

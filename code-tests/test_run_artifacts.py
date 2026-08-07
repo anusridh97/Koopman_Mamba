@@ -76,3 +76,35 @@ def test_make_attempt_record_shape():
     assert record["git_commit"] == "deadbeef"
     assert record["forced"] is False
     assert "timestamp" in record
+
+
+def test_atomic_torch_save_round_trips_and_leaves_no_tmp(tmp_path):
+    import torch
+    from koopman_lm.run.artifacts import atomic_torch_save
+
+    target = tmp_path / "resume.pt"
+    atomic_torch_save(target, {"step": 7, "tensor": torch.arange(4)})
+    loaded = torch.load(target, map_location="cpu", weights_only=False)
+    assert loaded["step"] == 7
+    assert torch.equal(loaded["tensor"], torch.arange(4))
+    leftovers = list(tmp_path.rglob("*.tmp*"))
+    assert leftovers == []
+
+
+def test_atomic_torch_save_failure_does_not_corrupt_existing_file(tmp_path, monkeypatch):
+    import torch
+    from koopman_lm.run.artifacts import atomic_torch_save
+
+    target = tmp_path / "resume.pt"
+    atomic_torch_save(target, {"step": 1})
+
+    def _boom(*a, **k):
+        raise RuntimeError("simulated kill mid-write")
+
+    monkeypatch.setattr("torch.save", _boom)
+    with pytest.raises(RuntimeError):
+        atomic_torch_save(target, {"step": 2})
+    # old contents survive -- a kill mid-write must not corrupt the rolling file
+    loaded = torch.load(target, map_location="cpu", weights_only=False)
+    assert loaded["step"] == 1
+    assert list(tmp_path.rglob("*.tmp*")) == []
