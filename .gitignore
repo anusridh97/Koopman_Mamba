@@ -13,3 +13,6 @@ venv/
 runs/
 checkpoints/
 wandb/
+
+# Worktrees
+.worktrees/
