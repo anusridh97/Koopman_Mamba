@@ -108,15 +108,24 @@ leftover from the old flat echo-ska-440m layout and does not exist in the
 package layout. Because the import is lazy, nothing catches it until
 stream_write is actually called -- and it IS called, from
 models/koopman_lm.py and models/recurrent.py.
+
+NOTE ON THE CURRENT FAILURE MODE: until the module reorg lands, this test
+fails on `No module named 'koopman_lm.modules'` -- the NEW home of the
+memory class, which does not exist yet. That is a different error from the
+stale-import bug above. Both are resolved by the reorg. The import is done
+inside the test body rather than at module scope so that this transitional
+failure stays a single failing test instead of aborting collection for the
+whole suite.
 """
 import pytest
 import torch
 
-from koopman_lm.modules.wip.memory import LastLayerRidgeMemory
-
 
 @pytest.mark.correctness
 def test_stream_write_import_resolves():
+    # Imported inside the test on purpose -- see the module docstring.
+    from koopman_lm.modules.wip.memory import LastLayerRidgeMemory
+
     # Signatures verified against the real class:
     #   __init__(self, d_model, rank=64, ridge=0.01, ...)
     #   stream_reset(self, batch=1, device=None, dtype=torch.float32)
@@ -137,10 +146,14 @@ def test_stream_write_import_resolves():
 
 ```bash
 VENV=/tmp/claude-851721614/-users-jkli/53e14a4c-7ea7-4dad-90f7-cd3441a7ea97/scratchpad/venv
-PYTHONPATH=. $VENV/bin/pytest code-tests/test_streaming_memory_imports.py -q 2>&1 | tail -15
+PYTHONPATH=. $VENV/bin/pytest code-tests -q; echo "exit=$?"
 ```
 
-Expected right now: a **collection error**, `ModuleNotFoundError: No module named 'koopman_lm.modules'` — because the test imports the *post-reorg* path, which does not exist yet. That is intended: this test is written against the target layout and goes green during Task 3/4.
+Run the FULL suite, with no `--ignore` and no extra flags. Using `--ignore` here hides exactly the failure mode this step exists to catch.
+
+Expected right now: `16 passed, 1 failed, 10 skipped`, exit code 1. The new test FAILS with `ModuleNotFoundError: No module named 'koopman_lm.modules'` because it targets the post-reorg path, which does not exist yet. It goes green during Task 3/4.
+
+CRITICAL: the import must be inside the test body, not at module scope. At module scope pytest aborts the whole session on the collection error -- exit code 2, ZERO tests run -- which violates the Global Constraint that the suite never drop below 16 passes.
 
 To confirm the underlying bug independently of the rename, run:
 
