@@ -27,6 +27,13 @@ class KoopmanLMConfig:
     d_state: int = 128          # multiple of 8
     d_conv: int = 4
     mamba_expand: int = 2
+    # Mamba-2 head width. None keeps mamba_ssm's own default (64).
+    # Must be set explicitly at small d_model: mamba_ssm packs z/x/B/C/dt into
+    # one in_proj of width 2*d_inner + 2*ngroups*d_state + nheads, and the
+    # channel-last causal_conv1d kernel requires that width to be a multiple
+    # of 8. At d_model=64 the default headdim=64 gives nheads=2 and width 290,
+    # which the kernel rejects at runtime; headdim=16 gives nheads=8 and 296.
+    mamba_headdim: int | None = None
 
     # SKA config
     ska_n_heads: int = 12
@@ -306,11 +313,21 @@ def _evenly_spaced_indices(n_layers, n_special):
 _CONFIGS_ROOT = Path(__file__).parent.parent / "configs"
 
 CONFIG_REGISTRY = {
+    # Synthetic-transfer scale (paper Sec 4.1 / Table 2).
+    "1m": "1m.yaml",
     # Canonical fused-prefix production configurations.
     "50m": "50m.yaml",
     "50m_prefix_scan": "50m_prefix_scan.yaml",
     "180m": "180m.yaml",
     "180m_prefix_scan": "180m_prefix_scan.yaml",
+    "180m_gated": "180m_gated.yaml",
+    "180m_v2": "180m_v2.yaml",
+    # Scaling ladder.
+    "370m": "370m.yaml",
+    "440m": "440m.yaml",
+    "880m": "880m.yaml",
+    "1p5b": "1p5b.yaml",
+    "3b": "3b.yaml",
 }
 
 
