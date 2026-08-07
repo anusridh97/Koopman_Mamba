@@ -1225,7 +1225,7 @@ def ska_prefix_scan(
         raise ValueError(f"unknown prefix-scan backend: {backend!r}")
 
     if backend in {"auto", "cuda", "cuda_prefix"}:
-        from koopman_lm.globals.modules.ska.cuda_prefix_scan import (
+        from koopman_lm.modules.kernels.cuda_prefix_scan import (
             fused_ska_prefix_scan,
             is_supported as cuda_prefix_supported,
         )

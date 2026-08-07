@@ -42,7 +42,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import AutoTokenizer
 import dataclasses
-from koopman_lm.globals.config import build_config, config_hash
+from koopman_lm.config import build_config, config_hash
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import (
     build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
@@ -407,7 +407,7 @@ def _score_niah_parallel(model, tokenizer, device, examples, batch_size=4):
 
 def _score_niah_recurrent(model, tokenizer, device, examples):
     """Score NIAH using O(1) recurrent generation (Koopman only)."""
-    from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
+    from koopman_lm.models.recurrent import RecurrentKoopmanLM
 
     wrapper = RecurrentKoopmanLM(model)
     correct = 0

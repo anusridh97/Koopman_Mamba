@@ -125,7 +125,7 @@ def _try_triton():
     global _TRITON
     if _TRITON is None:
         try:
-            from koopman_lm import cholesky_update_triton as t
+            from koopman_lm.modules.kernels import cholesky_update_triton as t
             _TRITON = t
         except Exception:
             _TRITON = False

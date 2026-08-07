@@ -1,7 +1,7 @@
 """Regression: stream_write's lazy import must resolve.
 
 `LastLayerRidgeMemory.stream_write` does a function-level
-`from koopman_lm.cholesky_update import update_L_only`. That path is a
+`from koopman_lm.modules.kernels.cholesky_update import update_L_only`. That path is a
 leftover from the old flat echo-ska-440m layout and does not exist in the
 package layout. Because the import is lazy, nothing catches it until
 stream_write is actually called -- and it IS called, from

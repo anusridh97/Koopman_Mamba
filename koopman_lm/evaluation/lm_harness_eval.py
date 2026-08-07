@@ -31,7 +31,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import dataclasses
-from koopman_lm.globals.config import build_config
+from koopman_lm.config import build_config
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import (
     build_mamba_only,
@@ -39,8 +39,8 @@ from koopman_lm.models.baselines import (
     build_mamba_ska_swiglu,
     build_mamba_ska_koopman,
 )
-from koopman_lm.globals.modules.attention import CausalAttentionBlock
-from koopman_lm.globals.modules.utils.recurrent import RecurrentKoopmanLM
+from koopman_lm.modules.token_mixer.attention import CausalAttentionBlock
+from koopman_lm.models.recurrent import RecurrentKoopmanLM
 
 
 MODEL_BUILDERS = {

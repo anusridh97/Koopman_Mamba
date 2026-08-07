@@ -1,4 +1,4 @@
-from koopman_lm.globals.config import build_config
+from koopman_lm.config import build_config
 
 
 def test_50m_production_config():

@@ -28,9 +28,9 @@ from contextlib import nullcontext
 from koopman_lm.models.koopman_lm import (
     KoopmanLM, Mamba2Block, SKABlock, MambaSKAParallelBlock,
 )
-from koopman_lm.globals.modules.ska.core import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
-from koopman_lm.globals.modules.ska.chunk_stats import symmetric_key_value, causal_normalize
-from koopman_lm.globals.modules.ska.prefix_scan import (
+from koopman_lm.modules.kernels.ska_operator import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
+from koopman_lm.modules.kernels.chunk_stats import symmetric_key_value, causal_normalize
+from koopman_lm.modules.kernels.prefix_scan import (
     _advance_whitened_state,
     _read_state,
     boundary_whitened_states,
@@ -471,7 +471,7 @@ class RecurrentKoopmanLM(nn.Module):
                 st.M = st.M + torch.einsum('bhr,bhs->bhrs', x1, st.x_last)
             st.C_v = st.C_v + torch.einsum('bhp,bhr->bhpr', vbar1, x1)
             st.x_last = x1
-            from koopman_lm.globals.modules.ska.factor_scan import rank1_chol_update_
+            from koopman_lm.modules.kernels.factor_scan import rank1_chol_update_
             rank1_chol_update_(st.L.reshape(N, r, r), x1.reshape(N, r))
         return out
 

@@ -25,7 +25,7 @@ import os
 
 import torch
 
-from koopman_lm.globals.config import config_hash, CONFIG_FACTORIES
+from koopman_lm.config import config_hash, CONFIG_FACTORIES
 
 # tasks the harness can run; --tasks selects a subset
 ALL_TASKS = ["ppl", "niah", "mqar", "ruler", "babilong", "ska_delta"]

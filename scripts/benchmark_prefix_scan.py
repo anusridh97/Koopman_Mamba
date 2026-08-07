@@ -12,7 +12,7 @@ import statistics
 
 import torch
 
-from koopman_lm.globals.modules.ska.ska import SKAModule
+from koopman_lm.modules.token_mixer.ska.ska import SKAModule
 
 
 def make_module(args: argparse.Namespace, *, fused: bool) -> SKAModule:

@@ -26,8 +26,8 @@ from contextlib import nullcontext
 #   ska_core  -- whitened L^{-1}M L^{-T} forward + custom O(K r^2) backward
 #                ("It Cancels"; Cholesky never differentiated)
 #   chunk_stats -- beta-gated, strictly-causal sufficient statistics
-from koopman_lm.globals.modules.ska.core import ska_core
-from koopman_lm.globals.modules.ska.chunk_stats import (
+from koopman_lm.modules.kernels.ska_operator import ska_core
+from koopman_lm.modules.kernels.chunk_stats import (
     chunk_stats as _causal_chunk_stats, symmetric_key_value, causal_normalize)
 
 # ============================================================================
@@ -474,12 +474,12 @@ class SKAModule(nn.Module):
         H, P = self.H, self.P
         CS = self.chunk_size
         if self.chunk_strategy == 'overlap':
-            from koopman_lm.globals.modules.ska.adaptive_chunking import compute_chunk_stats_overlap
+            from koopman_lm.modules.kernels.adaptive_chunking import compute_chunk_stats_overlap
             return compute_chunk_stats_overlap(
                 z_f, zq_f, v_f, r, H, P, CS, self.ridge_eps,
                 overlap_fraction=self.overlap_fraction)
         elif self.chunk_strategy == 'decay':
-            from koopman_lm.globals.modules.ska.adaptive_chunking import compute_chunk_stats_decay
+            from koopman_lm.modules.kernels.adaptive_chunking import compute_chunk_stats_decay
             return compute_chunk_stats_decay(
                 z_f, zq_f, v_f, r, H, P, CS, self.ridge_eps,
                 decay_alpha=self.decay_alpha)
@@ -520,7 +520,7 @@ class SKAModule(nn.Module):
                 # Exact two-level prefix scan.  Raw sufficient statistics form
                 # the associative block monoid; each block is then evaluated
                 # with exact O(r^2) rank-1 Cholesky writes.
-                from koopman_lm.globals.modules.ska.prefix_scan import ska_prefix_scan
+                from koopman_lm.modules.kernels.prefix_scan import ska_prefix_scan
                 Y = ska_prefix_scan(
                     x_n, zq_n, v_w, self.ridge_eps, self.power_K,
                     self.prefix_scan_block_size, self.prefix_scan_jitter,
@@ -540,7 +540,7 @@ class SKAModule(nn.Module):
                 # against P = L^{-1} with NO spectral power iteration (the
                 # symmetric sqrt(beta) keys make A_w contractive). This
                 # replaces chunk-64 stats + the cross-chunk boundary term.
-                from koopman_lm.globals.modules.ska.inverse_cholesky import (
+                from koopman_lm.modules.kernels.inverse_cholesky import (
                     ska_exact_inverse_cholesky)
                 Y = ska_exact_inverse_cholesky(
                     x_n, zq_n, v_w, self.ridge_eps, self.power_K)  # (B,T,H,P)
@@ -555,8 +555,8 @@ class SKAModule(nn.Module):
                 # EXACT per-token causal stats (across + within chunk). Fixes
                 # within-chunk staleness; reuses the same verified ska_core.
                 # Cost: B*T*H solves instead of B*nchunks*H.
-                from koopman_lm.globals.modules.ska.chunk_stats_exact import exact_stats
-                from koopman_lm.globals.modules.ska.factor_scan import all_prefix_chol, ska_core_given_L
+                from koopman_lm.modules.kernels.chunk_stats_exact import exact_stats
+                from koopman_lm.modules.kernels.factor_scan import all_prefix_chol, ska_core_given_L
                 Gf, Mf, Cf, qf, (Be, Te, He, Pe) = exact_stats(
                     x_n, x_n, zq_n, v_w, self.ridge_eps)
                 # factor scan over per-token update vectors (numerics-only):

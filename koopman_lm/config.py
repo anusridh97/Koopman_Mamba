@@ -303,7 +303,7 @@ def _evenly_spaced_indices(n_layers, n_special):
 # YAML / JSON loader
 # ============================================================================
 
-_CONFIGS_ROOT = Path(__file__).parent.parent.parent / "configs"
+_CONFIGS_ROOT = Path(__file__).parent.parent / "configs"
 
 CONFIG_REGISTRY = {
     # Canonical fused-prefix production configurations.

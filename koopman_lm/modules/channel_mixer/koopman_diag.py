@@ -22,7 +22,7 @@ cheap enough to log periodically during training.
 import torch
 import torch.nn.functional as F
 
-from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP
+from koopman_lm.modules.channel_mixer.koopman import SpectralKoopmanMLP
 
 
 def iter_koopman_mlps(model):

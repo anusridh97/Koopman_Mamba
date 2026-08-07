@@ -27,7 +27,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import dataclasses
-from koopman_lm.globals.config import build_config
+from koopman_lm.config import build_config
 from koopman_lm.models.koopman_lm import KoopmanLM
 
 

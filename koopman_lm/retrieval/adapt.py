@@ -37,7 +37,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
-from koopman_lm.globals.config import build_config, config_hash
+from koopman_lm.config import build_config, config_hash
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.retrieval.encoder import RetrievalEncoder, info_nce
 from koopman_lm.retrieval.data import build_iterable_dataset, extract_pairs, RETRIEVAL_SOURCE_SPECS

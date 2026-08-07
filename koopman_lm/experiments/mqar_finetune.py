@@ -49,7 +49,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-from koopman_lm.globals.config import build_config, config_hash
+from koopman_lm.config import build_config, config_hash
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
 from koopman_lm.experiments.curricula import make_mqar, eval_mqar

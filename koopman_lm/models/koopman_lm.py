@@ -3,12 +3,12 @@ import math
 
 import torch
 import torch.nn as nn
-from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.globals.modules.ska import SKAModule
-from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
-from koopman_lm.globals.modules.mlp import SwiGLUMLP
-from koopman_lm.globals.modules.norm import make_norm
-from koopman_lm.globals.modules.mamba import Mamba2Block  # noqa: F401 (re-exported)
+from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.modules.token_mixer.ska import SKAModule
+from koopman_lm.modules.channel_mixer.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
+from koopman_lm.modules.channel_mixer.mlp import SwiGLUMLP
+from koopman_lm.modules.channel_mixer.norm import make_norm
+from koopman_lm.modules.token_mixer.mamba import Mamba2Block  # noqa: F401 (re-exported)
 
 
 class SKABlock(nn.Module):
@@ -359,7 +359,7 @@ class KoopmanLM(nn.Module):
         """Attach the inference-only last-layer ridge memory (BOM-LM-v0).
         Backbone stays frozen; this only adds a session-scoped causal readout.
         """
-        from koopman_lm.globals.modules.utils.last_layer_memory import LastLayerRidgeMemory
+        from koopman_lm.modules.wip.memory import LastLayerRidgeMemory
         self.last_layer_memory = LastLayerRidgeMemory(
             self.cfg.d_model, rank=rank, ridge=ridge, gate_init=gate_init,
             proj=proj, gen_token_weight=gen_token_weight).to(self.embed.weight.device)
@@ -403,7 +403,7 @@ class KoopmanLM(nn.Module):
         logits_out = torch.empty(B, T, E.shape[0], device=dev, dtype=h.dtype)
         if token_weights is None:
             if prompt_len is not None:
-                from koopman_lm.globals.modules.utils.last_layer_memory import make_memory_token_weights
+                from koopman_lm.modules.wip.memory import make_memory_token_weights
                 token_weights = make_memory_token_weights(
                     input_ids, prompt_len=prompt_len,
                     gen_w=mem.gen_w if gen_w is None else gen_w)

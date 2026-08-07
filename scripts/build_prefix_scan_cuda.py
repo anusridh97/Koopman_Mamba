@@ -11,12 +11,12 @@ from typing import Iterable
 import torch
 from torch.utils.cpp_extension import CUDA_HOME
 
-from koopman_lm.globals.modules.ska.cuda_prefix_scan import (
+from koopman_lm.modules.kernels.cuda_prefix_scan import (
     fused_ska_prefix_scan,
     launch_info,
     load_prefix_scan_ext,
 )
-from koopman_lm.globals.modules.ska.prefix_scan import dense_exact_oracle
+from koopman_lm.modules.kernels.prefix_scan import dense_exact_oracle
 
 
 def _version_tuple(version: str | None) -> tuple[int, int]:
