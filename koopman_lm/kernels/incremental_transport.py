@@ -34,9 +34,7 @@ All tensors carry a leading batch dim N (= B*H, flattened heads).
 """
 import torch
 
-
-def _tri_solve_lower(L, B):
-    return torch.linalg.solve_triangular(L, B, upper=False)
+from koopman_lm.kernels.lin_alg import _tri_solve_lower
 
 
 def phase1_chol_update(L_prev, x):

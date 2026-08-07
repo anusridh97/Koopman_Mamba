@@ -28,7 +28,7 @@ from contextlib import nullcontext
 from koopman_lm.models.koopman_lm import (
     KoopmanLM, Mamba2Block, SKABlock, MambaSKAParallelBlock,
 )
-from koopman_lm.kernels.ska_operator import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
+from koopman_lm.kernels.lin_alg import _whiten_M, _spec_w, _tri_solve_lower, _tri_solve_lowerT
 from koopman_lm.kernels.chunk_stats import symmetric_key_value, causal_normalize
 from koopman_lm.kernels.prefix_scan import (
     _advance_whitened_state,

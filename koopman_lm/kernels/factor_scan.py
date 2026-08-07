@@ -49,32 +49,8 @@ Integration points
 import math
 import torch
 
-try:
-    from koopman_lm.kernels.ska_operator import (
-        _spec_w, _tri_solve_lower, _tri_solve_lowerT, _whiten_M)
-except Exception:  # standalone use / tests
-    def _tri_solve_lower(L, A):
-        return torch.linalg.solve_triangular(L, A, upper=False)
-
-    def _tri_solve_lowerT(L, A):
-        return torch.linalg.solve_triangular(L.transpose(-1, -2), A, upper=True)
-
-    def _whiten_M(L, M):
-        LiM = _tri_solve_lower(L, M)
-        return _tri_solve_lower(L, LiM.transpose(-1, -2)).transpose(-1, -2)
-
-    def _spec_w(W, iters=20):
-        r = W.shape[-1]
-        v = torch.ones(*W.shape[:-1], 1, device=W.device, dtype=W.dtype) / (r ** 0.5)
-        with torch.no_grad():
-            for _ in range(iters):
-                u = W @ v
-                u = u / (u.norm(dim=-2, keepdim=True) + 1e-8)
-                v = W.transpose(-1, -2) @ u
-                v = v / (v.norm(dim=-2, keepdim=True) + 1e-8)
-            sigma = (W @ v).norm(dim=-2, keepdim=True).squeeze(-1)
-            alpha = 1.0 / torch.clamp(sigma, min=1.0)
-        return alpha
+from koopman_lm.kernels.lin_alg import (
+    _spec_w, _tri_solve_lower, _tri_solve_lowerT, _whiten_M)
 
 
 # canonical thin square root (upsweep merge primitive)
