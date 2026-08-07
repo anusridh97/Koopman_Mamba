@@ -722,23 +722,38 @@ def test_package_data_points_at_the_real_cuda_sources():
 
     A stale key here excludes the CUDA sources from any built wheel or sdist.
     Editable installs mask it completely, so only this assertion catches it.
+
+    The TOML is scanned textually rather than parsed: this project supports
+    Python 3.10 (pyproject requires-python = ">=3.10") and tomllib is 3.11+.
+    Depending on the third-party tomli would add a test-only dependency for
+    one assertion.
     """
-    import tomllib
+    import re
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
-    with open(root / "pyproject.toml", "rb") as f:
-        cfg = tomllib.load(f)
+    text = (root / "pyproject.toml").read_text()
 
-    pkg_data = cfg["tool"]["setuptools"]["package-data"]
-    assert pkg_data, "package-data is empty; the .cu sources would not ship"
+    m = re.search(r"^\[tool\.setuptools\.package-data\]\s*$(.*?)(?=^\[|\Z)",
+                  text, re.MULTILINE | re.DOTALL)
+    assert m, "pyproject.toml has no [tool.setuptools.package-data] section"
 
-    for pkg, globs in pkg_data.items():
+    entries = re.findall(r'^\s*"([^"]+)"\s*=\s*\[([^\]]*)\]',
+                         m.group(1), re.MULTILINE)
+    assert entries, "package-data section is empty; the .cu sources would not ship"
+
+    for pkg, globs_raw in entries:
         pkg_dir = root / Path(*pkg.split("."))
-        assert pkg_dir.is_dir(), f"package-data names {pkg!r}, which is not a directory"
-        for g in globs:
+        assert pkg_dir.is_dir(), (
+            f"package-data names {pkg!r}, which is not a directory")
+        for g in re.findall(r'"([^"]+)"', globs_raw):
             assert list(pkg_dir.glob(g)), f"{pkg!r} glob {g!r} matches no files"
 ```
+
+This exact code was validated both ways before the plan was written: it raises
+`AssertionError: package-data names 'koopman_lm.globals.modules.ska', which is
+not a directory` against the current file, and passes against the corrected
+one.
 
 - [ ] **Step 2: Run it and watch it fail**
 
