@@ -107,13 +107,25 @@ def _qa_context_text(name, ex):
 
 
 def write_synthetic_corpus(output_dir, n_tokens=200_000, vocab_size=32000,
-                           recall_weight=4, seed=0):
-    """Write a tiny self-contained dual-stream corpus (NO network/tokenizer).
+                           recall_weight=4, seed=0,
+                           tokenizer="NousResearch/Llama-2-7b-hf"):
+    """Write a tiny self-contained dual-stream corpus (NO network for the
+    token generation itself -- tokens are drawn from a synthetic RNG, not
+    produced by `tokenizer`).
 
     Produces train.bin (uint16), weights.bin (uint8), meta.json in the exact
     format MemmapPackedDataset reads. Periodic spans get the recall weight so the
     weighted-CE path is exercised. Used by the end-to-end smoke test so a fresh
     clone can train without downloading FineWeb/PG-19/SCROLLS.
+
+    `tokenizer` is recorded into meta.json as-is and must be an id
+    AutoTokenizer.from_pretrained can resolve: train.py calls
+    AutoTokenizer.from_pretrained(args.tokenizer), and
+    koopman_lm.run.data_verify compares that same string against meta.json --
+    the literal "synthetic" satisfies neither, making the smoke path
+    otherwise unusable through the run system. Default is
+    NousResearch/Llama-2-7b-hf (ungated, vocab 32000, matching the default
+    vocab_size here).
     """
     assert vocab_size <= 65535, "uint16 packing requires vocab < 65536"
     os.makedirs(output_dir, exist_ok=True)
@@ -127,7 +139,7 @@ def write_synthetic_corpus(output_dir, n_tokens=200_000, vocab_size=32000,
     weights.tofile(os.path.join(output_dir, "weights.bin"))
     with open(os.path.join(output_dir, "meta.json"), "w") as f:
         json.dump({"n_tokens": int(n_tokens), "vocab_size": int(vocab_size),
-                   "tokenizer": "synthetic", "dtype": "uint16",
+                   "tokenizer": tokenizer, "dtype": "uint16",
                    "weight_dtype": "uint8", "mix": "synthetic",
                    "recall_weight": int(recall_weight)}, f)
     return output_dir
@@ -139,6 +151,12 @@ def main():
     p.add_argument("--smoke", action="store_true",
                    help="write a tiny synthetic corpus (no network) for the e2e smoke test")
     p.add_argument("--smoke_tokens", type=int, default=200_000)
+    p.add_argument("--smoke_tokenizer", type=str,
+                   default="NousResearch/Llama-2-7b-hf",
+                   help="tokenizer id recorded into the smoke corpus's "
+                        "meta.json -- must be AutoTokenizer-resolvable so "
+                        "train.py and koopman_lm.run.data_verify agree "
+                        "(token generation itself stays synthetic/network-free)")
     p.add_argument("--tokenizer", type=str, default="meta-llama/Llama-2-7b-hf",
                    help="Llama-2 tokenizer (use NousResearch/Llama-2-7b-hf if gated)")
     p.add_argument("--fineweb", type=str, default="HuggingFaceFW/fineweb-edu")
@@ -180,7 +198,8 @@ def main():
     a = p.parse_args()
 
     if a.smoke:
-        write_synthetic_corpus(a.output_dir, n_tokens=a.smoke_tokens, seed=a.seed)
+        write_synthetic_corpus(a.output_dir, n_tokens=a.smoke_tokens, seed=a.seed,
+                                tokenizer=a.smoke_tokenizer)
         print(f"Wrote synthetic smoke corpus ({a.smoke_tokens:,} tokens) -> {a.output_dir}")
         return
 

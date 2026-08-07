@@ -11,6 +11,7 @@ target is the full 1K-step / PPL+NIAH loop in < 30 min; this is the scaffolding
 proving the train/checkpoint/reload/decode path end to end.
 """
 import dataclasses
+import json
 
 import pytest
 import torch
@@ -19,6 +20,39 @@ from koopman_lm.training.data.pretokenize import write_synthetic_corpus
 from koopman_lm.training.data.dataset import MemmapPackedDataset
 
 pytestmark = pytest.mark.correctness
+
+
+def test_synthetic_corpus_meta_records_a_resolvable_tokenizer_by_default(tmp_path):
+    """meta.json's "tokenizer" must be an id AutoTokenizer.from_pretrained can
+    resolve -- train.py calls AutoTokenizer.from_pretrained(args.tokenizer) on
+    the same string koopman_lm.run.data_verify compares against meta, and
+    "synthetic" satisfies neither. Vocab stays 32000 (matches
+    NousResearch/Llama-2-7b-hf); only the recorded tokenizer id changes --
+    token generation itself stays synthetic and network-free."""
+    d = write_synthetic_corpus(str(tmp_path), n_tokens=1000, seed=0)
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["tokenizer"] == "NousResearch/Llama-2-7b-hf"
+    assert meta["vocab_size"] == 32000
+
+
+def test_synthetic_corpus_meta_tokenizer_is_overridable(tmp_path):
+    d = write_synthetic_corpus(str(tmp_path), n_tokens=1000, vocab_size=512,
+                                seed=0, tokenizer="some/other-tokenizer")
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["tokenizer"] == "some/other-tokenizer"
+
+
+def test_smoke_cli_writes_the_default_resolvable_tokenizer(tmp_path, monkeypatch):
+    from koopman_lm.training.data import pretokenize
+
+    out_dir = tmp_path / "smoke"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["pretokenize.py", "--smoke", "--output_dir", str(out_dir),
+         "--smoke_tokens", "1000"])
+    pretokenize.main()
+    meta = json.loads((out_dir / "meta.json").read_text())
+    assert meta["tokenizer"] == "NousResearch/Llama-2-7b-hf"
 
 
 def test_synthetic_corpus_roundtrips(tmp_path):
