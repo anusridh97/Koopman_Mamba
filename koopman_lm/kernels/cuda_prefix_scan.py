@@ -48,7 +48,7 @@ def load_prefix_scan_ext(*, verbose: bool | None = None):
             cuda_flags = [
                 "-O3",
                 "--use_fast_math",
-                "--lineinfo",
+                "-lineinfo",
                 "--extra-device-vectorization",
                 "-std=c++17",
                 "-DNDEBUG",
