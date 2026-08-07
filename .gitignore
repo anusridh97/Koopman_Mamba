@@ -16,3 +16,7 @@ wandb/
 
 # Worktrees
 .worktrees/
+
+# ...but configs/runs/ holds authored RunSpec YAMLs, not run output -- track it.
+!configs/runs/
+!configs/runs/**
