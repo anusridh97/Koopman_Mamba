@@ -95,6 +95,88 @@ def test_all_prefix_chol_matches_fresh_over_all_prefixes():
         assert err < 1e-9, f"all_prefix_chol({mode}) err {err:.2e}"
 
 
+def test_unbatched_and_batched_core_are_bit_identical_at_batch_one():
+    """cholesky_rank1_update_ (unbatched) and rank1_chol_update_ (batched) are
+    two entry points onto the SAME Givens-rotation math (see
+    docs/superpowers/specs/2026-08-07-structural-review.md, issue 2). This
+    locks in bit-for-bit agreement at batch=1 so a future unification of the
+    two cores cannot silently change either one's numerics."""
+    for trial in range(200):
+        r = 1 + (trial * 7) % 32
+        G = _spd(r, ridge=1.0, seed=1000 + trial)
+        L = torch.linalg.cholesky(G)
+        z = torch.randn(r, dtype=torch.float64,
+                        generator=torch.Generator().manual_seed(2000 + trial))
+
+        L_un = L.clone()
+        cs, ss = cholesky_rank1_update_(L_un, z)
+
+        L_b = L.clone().unsqueeze(0)
+        rank1_chol_update_(L_b, z.clone().unsqueeze(0))
+
+        err = (L_un - L_b.squeeze(0)).abs().max().item()
+        assert err == 0.0, f"trial {trial} (r={r}): unbatched vs batched err {err:.3e}"
+
+        # the rotation params must be valid Givens coefficients: c^2+s^2==1
+        # (exactly, since c=a/rho, s=b/rho, rho=sqrt(a^2+b^2)), except where
+        # rho==0 and the guard sets (c,s)=(1,0), also satisfying c^2+s^2==1.
+        one = (cs * cs + ss * ss)
+        assert torch.allclose(one, torch.ones_like(one), atol=1e-12), \
+            f"trial {trial}: cs^2+ss^2 != 1, max dev {(one - 1).abs().max():.3e}"
+
+
+def test_batched_core_matches_looped_unbatched_calls():
+    """rank1_chol_update_ at B=8 must equal 8 independent unbatched
+    cholesky_rank1_update_ calls -- the property the batched kernel is
+    supposed to subsume."""
+    torch.manual_seed(0)
+    B, r = 8, 12
+    for trial in range(50):
+        Gs = [_spd(r, ridge=1.0, seed=trial * 100 + b) for b in range(B)]
+        Ls = [torch.linalg.cholesky(G) for G in Gs]
+        zs = [torch.randn(r, dtype=torch.float64,
+                          generator=torch.Generator().manual_seed(trial * 100 + 50 + b))
+              for b in range(B)]
+
+        L_loop = torch.stack([L.clone() for L in Ls])
+        for b in range(B):
+            cholesky_rank1_update_(L_loop[b], zs[b])
+
+        L_batch = torch.stack([L.clone() for L in Ls])
+        z_batch = torch.stack(zs)
+        rank1_chol_update_(L_batch, z_batch.clone())
+
+        err = (L_loop - L_batch).abs().max().item()
+        assert err == 0.0, f"trial {trial}: batched vs looped err {err:.3e}"
+
+
+def test_cholesky_rank1_update_cs_ss_reproduce_the_column_update():
+    """Characterizes the (cs, ss) return path: replaying the returned
+    rotation coefficients against the ORIGINAL L must reproduce the mutated
+    L exactly. This is the API surface update_reference/update_L_only rely on
+    (they use cs, ss to also propagate Aw and recover vz) and that the batched
+    core (which discards cs, ss) does not provide."""
+    r = 10
+    G = _spd(r, ridge=1.0, seed=42)
+    L0 = torch.linalg.cholesky(G)
+    z = torch.randn(r, dtype=torch.float64, generator=torch.Generator().manual_seed(43))
+
+    L = L0.clone()
+    cs, ss = cholesky_rank1_update_(L, z)
+    assert cs.shape == (r,) and ss.shape == (r,)
+    assert cs.dtype == L0.dtype and ss.dtype == L0.dtype
+
+    # replay the rotations against a fresh copy of the pre-update L and z
+    L_replay = L0.clone()
+    zc = z.clone()
+    for k in range(r):
+        c, s = cs[k], ss[k]
+        col_k = L_replay[:, k].clone()
+        L_replay[:, k] = c * col_k + s * zc
+        zc = -s * col_k + c * zc
+    assert (L_replay - L).abs().max().item() == 0.0
+
+
 def test_streaming_rank1_matches_prefix_factors():
     # carried-L decode: read with carried L, then rank-1 update; must equal the
     # exclusive-prefix factors at every step (decode == prefill at factor level)

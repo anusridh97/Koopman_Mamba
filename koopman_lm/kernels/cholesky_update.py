@@ -24,29 +24,29 @@ Aw/M double-sided machinery is for the intra-chunk SKA operator path.
 import math
 import torch
 
+from koopman_lm.kernels.factor_scan import rank1_chol_update_ as _batched_rank1_update_
+
 
 @torch.no_grad()
 def cholesky_rank1_update_(L, z):
     """In-place rank-1 Cholesky update of L (lower-tri) for G+=G+zz^T, via
     Givens rotations on [L | z]. Returns (cs, ss) rotation params. Modifies
-    L and a copy of z. Vectorized over columns (no per-element .item())."""
-    r = L.shape[0]
-    cs = torch.empty(r, dtype=L.dtype, device=L.device)
-    ss = torch.empty(r, dtype=L.dtype, device=L.device)
-    zc = z.clone()
-    for k in range(r):
-        a = L[k, k]
-        b = zc[k]
-        rho = torch.sqrt(a * a + b * b)
-        # guard rho==0
-        c = torch.where(rho == 0, torch.ones_like(rho), a / rho)
-        s = torch.where(rho == 0, torch.zeros_like(rho), b / rho)
-        cs[k] = c
-        ss[k] = s
-        col_k = L[:, k].clone()
-        L[:, k] = c * col_k + s * zc
-        zc = -s * col_k + c * zc
-    return cs, ss
+    L and a copy of z.
+
+    This is the unbatched entry point onto factor_scan.rank1_chol_update_'s
+    batched Givens sweep -- the two are the same rotation math (verified
+    bit-for-bit identical at batch=1), differing only in whether a leading
+    batch dimension is present and whether (cs, ss) are returned. This
+    module's double-sided (Aw-carrying) machinery below needs (cs, ss);
+    factor_scan's own callers don't, so that entry point defaults to
+    discarding them. See
+    docs/superpowers/specs/2026-08-07-structural-review.md, issue 2.
+    """
+    # L.unsqueeze(0)/z.unsqueeze(0) are views: the in-place update inside
+    # the batched core still lands in L's own storage.
+    _, cs, ss = _batched_rank1_update_(
+        L.unsqueeze(0), z.unsqueeze(0), return_rotations=True)
+    return cs.squeeze(0), ss.squeeze(0)
 
 
 @torch.no_grad()

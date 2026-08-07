@@ -162,7 +162,7 @@ class LastLayerRidgeMemory(nn.Module):
     def stream_write(self, h, v, weight=1.0):
         """Write (h,v) and rank-1-update the carried L by sqrt(weight)*z, so
         L stays consistent with G += weight z z^T. O(r^2) per item."""
-        from koopman_lm.kernels.cholesky_update import update_L_only
+        from koopman_lm.kernels.factor_scan import rank1_chol_update_
         z = self._feat(h)
         if not torch.is_tensor(weight):
             weight = torch.full((z.shape[0],), float(weight),
@@ -177,11 +177,12 @@ class LastLayerRidgeMemory(nn.Module):
         # stream_read uses, but maintaining G too means read()/serialization/
         # debugging after streaming see a non-stale covariance.
         self.G = self.G + torch.einsum('br,bs->brs', wz * z, z)
-        # rank-1 cholupdate of L per batch element: G += w z z^T = (sqrt(w) z)(.)^T
+        # rank-1 cholupdate of L: G += w z z^T = (sqrt(w) z)(.)^T. Vectorized
+        # over the batch (a zero update row is an exact no-op: rho=|a|, s=0,
+        # c=sign(a), so no per-item skip is needed for correctness -- see
+        # docs/superpowers/specs/2026-08-07-structural-review.md, issue 2).
         zu = (weight.clamp_min(0.0).sqrt().view(-1, 1) * z)  # (B,r)
-        for b in range(z.shape[0]):
-            if zu[b].abs().sum() > 0:
-                update_L_only(self._L[b], zu[b].clone())
+        rank1_chol_update_(self._L, zu)
 
 
 def make_memory_token_weights(input_ids, prompt_len, gen_w=0.0):

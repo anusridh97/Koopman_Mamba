@@ -74,7 +74,7 @@ def _canon(W):
 # rank-1 / rank-k SPD Cholesky update (downsweep merge primitive)
 
 @torch.no_grad()
-def rank1_chol_update_(L, x):
+def rank1_chol_update_(L, x, return_rotations=False):
     """Batched in-place rank-1 Cholesky update: L L^T += x x^T.
 
     L: (B, r, r) lower-triangular (SPD factor), modified in place.
@@ -82,9 +82,24 @@ def rank1_chol_update_(L, x):
     Givens sweep, vectorized over batch and rows; r sequential panel steps
     (the sequential panel dependency the note flags; the vendored Triton
     kernel in cholesky_update_triton.py is the fused version of this).
+
+    This is the canonical rank-1 Givens sweep: ``cholesky_update.py``'s
+    unbatched ``cholesky_rank1_update_`` calls into this with a leading
+    batch dim of 1 rather than duplicating the loop (verified bit-for-bit
+    identical at batch=1, see
+    docs/superpowers/specs/2026-08-07-structural-review.md, issue 2).
+
+    If return_rotations, also returns (cs, ss), the per-step Givens
+    coefficients (each (B, r)) -- needed by cholesky_update.py's
+    double-sided (Aw-carrying) machinery, which this batched entry point's
+    other callers (rankk_chol_update_, all_prefix_chol, recurrent.py's
+    decode write) don't need.
     """
     B, r, _ = L.shape
     x = x.clone()
+    if return_rotations:
+        cs = torch.empty(B, r, dtype=L.dtype, device=L.device)
+        ss = torch.empty(B, r, dtype=L.dtype, device=L.device)
     for k in range(r):
         a = L[:, k, k]
         b = x[:, k]
@@ -92,9 +107,14 @@ def rank1_chol_update_(L, x):
         zero = rho == 0
         c = torch.where(zero, torch.ones_like(rho), a / rho)
         s = torch.where(zero, torch.zeros_like(rho), b / rho)
+        if return_rotations:
+            cs[:, k] = c
+            ss[:, k] = s
         col = L[:, :, k].clone()
         L[:, :, k] = c.unsqueeze(1) * col + s.unsqueeze(1) * x
         x = -s.unsqueeze(1) * col + c.unsqueeze(1) * x
+    if return_rotations:
+        return L, cs, ss
     return L
 
 
