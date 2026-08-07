@@ -46,6 +46,8 @@ def aggregate(root) -> List[Dict[str, Any]]:
             "data_kind": (spec.get("data") or {}).get("kind"),
             "lr": (spec.get("optim") or {}).get("lr"),
             "seed": (spec.get("runtime") or {}).get("seed"),
+            "sweep_id": spec.get("sweep_id"),
+            "sweep_name": spec.get("sweep_name"),
         }
         eval_dir = run_dir / "eval"
         if not eval_dir.is_dir():

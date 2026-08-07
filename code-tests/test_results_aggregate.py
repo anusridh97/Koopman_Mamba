@@ -7,12 +7,18 @@ import pytest
 pytestmark = pytest.mark.correctness
 
 
-def _make_run(run_root, name, group_id, run_id, seed, lr, d_model, results):
+def _make_run(run_root, name, group_id, run_id, seed, lr, d_model, results,
+              sweep_id=None, sweep_name=None):
     from koopman_lm.run.eval_result import write_result
 
     run_dir = run_root / f"{name}.{group_id}" / f"seed{seed}.{run_id}"
     run_dir.mkdir(parents=True)
     spec_yaml = run_dir / "spec.yaml"
+    extra = ""
+    if sweep_id is not None:
+        extra += f"sweep_id: {sweep_id}\n"
+    if sweep_name is not None:
+        extra += f"sweep_name: {sweep_name}\n"
     spec_yaml.write_text(
         "name: {name}\n"
         "run_id: {run_id}\n"
@@ -21,9 +27,10 @@ def _make_run(run_root, name, group_id, run_id, seed, lr, d_model, results):
         "data:\n  kind: shard\n"
         "optim:\n  lr: {lr}\n"
         "runtime:\n  seed: {seed}\n"
-        "provenance:\n  git_commit: traincommit\n".format(
+        "provenance:\n  git_commit: traincommit\n"
+        "{extra}".format(
             name=name, run_id=run_id, group_id=group_id, d_model=d_model,
-            lr=lr, seed=seed))
+            lr=lr, seed=seed, extra=extra))
     for checkpoint, task, metrics in results:
         write_result(run_dir, checkpoint=checkpoint, task=task, metrics=metrics,
                       run_id=run_id, git_commit="evalcommit")
@@ -51,6 +58,26 @@ def test_aggregate_emits_one_row_per_run_checkpoint_task(tmp_path):
     assert row["seed"] == 42
     assert row["d_model"] == 384
     assert row["group_id"] == "gA"
+
+
+def test_aggregate_carries_sweep_id_and_name_for_grouping(tmp_path):
+    """§4.2: the sweep grid is declared exactly once and materialized into
+    every cell's spec.yaml -- aggregate() must surface it so
+    `python -m koopman_lm.results` can group a sweep's cells together."""
+    from koopman_lm.results import aggregate
+
+    _make_run(tmp_path, "ska-rank-lr", "gA", "rA", seed=42, lr=0.0002, d_model=384,
+              results=[("final", "fineweb_ppl", {"ppl": 15.0})],
+              sweep_id="deadbeef", sweep_name="ska-rank-lr")
+    _make_run(tmp_path, "50m-fineweb-3b", "gB", "rB", seed=1337, lr=0.0004, d_model=384,
+              results=[("final", "fineweb_ppl", {"ppl": 16.2})])   # not part of any sweep
+
+    rows = aggregate(tmp_path)
+    by_run_id = {r["run_id"]: r for r in rows}
+    assert by_run_id["rA"]["sweep_id"] == "deadbeef"
+    assert by_run_id["rA"]["sweep_name"] == "ska-rank-lr"
+    assert by_run_id["rB"]["sweep_id"] is None
+    assert by_run_id["rB"]["sweep_name"] is None
 
 
 def test_aggregate_skips_runs_with_no_eval_dir(tmp_path):
