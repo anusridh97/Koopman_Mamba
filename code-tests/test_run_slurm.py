@@ -82,3 +82,84 @@ def test_submit_dry_run_writes_sbatch_without_calling_sbatch(tmp_path, monkeypat
     assert path == tmp_path / "launch.sbatch"
     assert path.is_file()
     assert (tmp_path / "model_config.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Array support (§4.2/§4.3): "the sweep grid is declared exactly once ... the
+# array job indexes into that materialized list. Bash never knows the grid."
+# koopman_lm.sweep materializes the (RunSpec, run_dir) pairs; this module
+# only renders/writes the array script and the per-cell launch lines.
+# ---------------------------------------------------------------------------
+
+def test_render_array_sbatch_uses_shared_runtime_and_array_range(tmp_path):
+    from koopman_lm.run.slurm import render_array_sbatch
+
+    cells = [(_shard_spec(), tmp_path / f"cell{i}") for i in range(3)]
+    text = render_array_sbatch("ska-rank-lr", cells, tmp_path, concurrency=2)
+    assert "#SBATCH --array=0-2%2" in text
+    assert "#SBATCH --account=marlowe-m000151-pm06" in text
+    assert "SLURM_ARRAY_TASK_ID" in text
+    assert str(tmp_path / "cells.txt") in text
+
+
+def test_render_array_sbatch_without_concurrency_omits_percent_cap(tmp_path):
+    from koopman_lm.run.slurm import render_array_sbatch
+
+    cells = [(_shard_spec(), tmp_path / "cell0")]
+    text = render_array_sbatch("x", cells, tmp_path)
+    array_line = next(l for l in text.splitlines() if l.startswith("#SBATCH --array="))
+    assert array_line == "#SBATCH --array=0-0"
+
+
+def test_render_array_sbatch_rejects_heterogeneous_runtime_across_cells(tmp_path):
+    from koopman_lm.run.slurm import render_array_sbatch
+
+    cells = [(_shard_spec(), tmp_path / "cell0"),
+             (_shard_spec(gpus=2), tmp_path / "cell1")]
+    with pytest.raises(ValueError, match="gpus"):
+        render_array_sbatch("x", cells, tmp_path)
+
+
+def test_render_array_sbatch_rejects_empty_cell_list(tmp_path):
+    from koopman_lm.run.slurm import render_array_sbatch
+
+    with pytest.raises(ValueError):
+        render_array_sbatch("x", [], tmp_path)
+
+
+def test_submit_array_dry_run_writes_cells_txt_and_per_cell_launch_lines(tmp_path, monkeypatch):
+    from koopman_lm.run.slurm import SlurmLauncher
+
+    def _boom(*a, **k):
+        raise AssertionError("subprocess.run must not be called under dry_run")
+
+    monkeypatch.setattr("koopman_lm.run.slurm.subprocess.run", _boom)
+
+    cells = [(_shard_spec(), tmp_path / "cell0"), (_shard_spec(), tmp_path / "cell1")]
+    sweep_dir = tmp_path / "sweep"
+    array_path = SlurmLauncher().submit_array("ska-rank-lr", cells, sweep_dir, dry_run=True)
+
+    assert array_path == sweep_dir / "launch_array.sbatch"
+    assert array_path.is_file()
+    cells_txt = (sweep_dir / "cells.txt").read_text().splitlines()
+    assert cells_txt == [str(tmp_path / "cell0"), str(tmp_path / "cell1")]
+    for run_dir in (tmp_path / "cell0", tmp_path / "cell1"):
+        assert (run_dir / "launch_line.sh").is_file()
+        assert (run_dir / "model_config.json").is_file()
+        assert "-m koopman_lm.training.train" in (run_dir / "launch_line.sh").read_text()
+
+
+def test_submit_array_dry_run_script_is_valid_bash(tmp_path):
+    import subprocess
+
+    from koopman_lm.run.slurm import SlurmLauncher
+
+    cells = [(_shard_spec(), tmp_path / "cell0"), (_shard_spec(), tmp_path / "cell1")]
+    array_path = SlurmLauncher().submit_array("x", cells, tmp_path / "sweep", dry_run=True)
+    result = subprocess.run(["bash", "-n", str(array_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+    for run_dir in (tmp_path / "cell0", tmp_path / "cell1"):
+        r = subprocess.run(["bash", "-n", str(run_dir / "launch_line.sh")],
+                            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
