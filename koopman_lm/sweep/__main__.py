@@ -88,10 +88,10 @@ def _print_plan(sweep: SweepSpec, cells: List[SweepCell], run_root) -> None:
 
 
 def _materialize_cell(cell: SweepCell, run_root, sweep: SweepSpec, *,
-                       dirty: bool, force: bool) -> Path:
+                       dirty: bool, force: bool, dry_run: bool) -> Path:
     spec = cell.spec
     if isinstance(spec.data, ShardDataSpec):
-        verify_shard(spec.data)
+        verify_shard(spec.data, dry_run=dry_run)
     run_dir = run_dir_path(run_root, spec)
     create_run_dir(run_dir, force=force, code_id=git_commit())
     materialize(spec, run_dir, dirty=dirty,
@@ -127,7 +127,8 @@ def main(argv=None):
 
     materialized: List[Tuple[RunSpec, Path]] = [
         (cell.spec, _materialize_cell(cell, args.run_root, sweep,
-                                       dirty=dirty, force=args.force))
+                                       dirty=dirty, force=args.force,
+                                       dry_run=args.dry_run))
         for cell in pending
     ]
 

@@ -9,6 +9,8 @@ the orchestration itself is exercised), but never calls subprocess/sbatch.
 """
 import json
 import re
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -168,6 +170,57 @@ def test_slurm_launcher_dry_run_writes_one_array_script_for_the_whole_sweep(tmp_
 
     result = subprocess.run(["bash", "-n", str(array_path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path):
+    """A dry run's whole point is to inspect the expanded plan *before* the
+    data exists -- typically from a login node. Regression: verify_shard's
+    "no meta.json found" used to propagate as an uncaught
+    DataVerificationError, turning `--dry_run` into a nonzero exit and
+    failing any CI check that shells out to it (the cell list had already
+    printed correctly by then). Exercised as a real subprocess so the
+    actual CLI exit code is checked, not just whether main() raises
+    in-process."""
+    shard_dir = tmp_path / "shard_not_pretokenized_yet"
+    base_path = tmp_path / "base.yaml"
+    base_path.write_text(textwrap.dedent(f"""
+        name: 50m-fineweb-3b
+        model: 50m
+        data:
+          kind: shard
+          shard_dir: {shard_dir}
+          tokenizer: NousResearch/Llama-2-7b-hf
+          mix: {{fineweb: 1.0}}
+          n_tokens: 3000000000
+        optim:
+          lr: 4.0e-4
+          warmup_steps: 300
+          max_steps: 15000
+          effective_batch: 96
+          per_device_batch_size: 16
+        runtime:
+          seed: 42
+    """))
+    sweep_path = tmp_path / "sweep.yaml"
+    sweep_path.write_text(
+        f"name: ska-rank-lr\n"
+        f"base: {base_path}\n"
+        f"axes:\n  optim.lr: [1.0e-4, 2.0e-4]\n"
+    )
+    run_root = tmp_path / "runs"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "koopman_lm.sweep", str(sweep_path),
+         "--run_root", str(run_root), "--dry_run", "--allow-dirty"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"expected clean exit 0, got {proc.returncode}\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    assert "2 cell(s)" in proc.stdout
+    assert "run_id=" in proc.stdout
+    assert not shard_dir.exists()  # dry_run must not have tried to create it
 
 
 def test_refuses_to_launch_from_a_dirty_tree(tmp_path, monkeypatch):
