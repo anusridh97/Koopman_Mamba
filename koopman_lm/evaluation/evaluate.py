@@ -36,9 +36,12 @@ import json
 import os
 import random
 import time
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import AutoTokenizer
 import dataclasses
@@ -48,6 +51,50 @@ from koopman_lm.models.baselines import (
     build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
     build_mamba_ska_koopman,
 )
+from koopman_lm.run.eval_result import write_result
+from koopman_lm.run.resolve import git_commit
+
+
+# ============================================================================
+# Result-envelope wiring (§4.2): koopman_lm.run.eval_result.write_result +
+# the <run_dir>/eval/<checkpoint>/<task>.json layout, for checkpoints that
+# live inside a koopman_lm.run-materialized run directory.
+# ============================================================================
+
+def find_run_dir(checkpoint_path):
+    """Walk up from checkpoint_path's directory looking for a materialized
+    spec.yaml (koopman_lm.run.resolve.materialize's marker for a run
+    directory). Returns the run_dir Path, or None if the checkpoint isn't
+    inside one (e.g. a hand-run checkpoint outside koopman_lm.run) -- callers
+    should fall back to an explicit --output in that case."""
+    start = Path(checkpoint_path).resolve().parent
+    for candidate in (start, *start.parents):
+        if (candidate / "spec.yaml").is_file():
+            return candidate
+    return None
+
+
+def write_checkpoint_result(checkpoint_path, task, metrics):
+    """Wire a single checkpoint's eval metrics into its run's result
+    envelope, if the checkpoint lives inside a run directory. `run_id` is
+    read back from the run's own spec.yaml rather than recomputed (that hash
+    is a function of the RunSpec, which this never reconstructs);
+    `git_commit` is the *current* (eval-time) code provenance -- deliberately
+    not spec.yaml's provenance.git_commit, which is the training run's own
+    provenance and belongs to a different envelope field
+    (koopman_lm.results' `eval_git_commit` column distinguishes the two).
+
+    Returns the written Path, or None if checkpoint_path isn't inside a run
+    directory -- the caller should fall back to an explicit --output path.
+    """
+    run_dir = find_run_dir(checkpoint_path)
+    if run_dir is None:
+        return None
+    raw_spec = yaml.safe_load((run_dir / "spec.yaml").read_text())
+    checkpoint_name = Path(checkpoint_path).resolve().parent.name
+    return write_result(
+        run_dir, checkpoint=checkpoint_name, task=task, metrics=metrics,
+        run_id=raw_spec["run_id"], git_commit=git_commit())
 
 
 # ============================================================================
@@ -623,11 +670,20 @@ def main():
     if args.checkpoint2:
         results2 = evaluate_checkpoint(args.checkpoint2, args, device)
         compare_results(results1, results2, args.output)
-    elif args.output:
-        os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-        with open(args.output, 'w') as f:
-            json.dump(results1, f, indent=2, default=str)
-        print(f"\nResults saved to {args.output}")
+    else:
+        # Inside a koopman_lm.run run directory: always wire into that run's
+        # result envelope (§4.2) at the default <run_dir>/eval/<checkpoint>/
+        # <task>.json path -- no --output needed. Outside a run directory
+        # (e.g. an ad hoc checkpoint), there's no run to write an envelope
+        # into, so --output keeps its old, explicit, raw-JSON behavior.
+        path = write_checkpoint_result(args.checkpoint, args.mode, results1)
+        if path is not None:
+            print(f"\nResults saved to {path}")
+        elif args.output:
+            os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+            with open(args.output, 'w') as f:
+                json.dump(results1, f, indent=2, default=str)
+            print(f"\nResults saved to {args.output}")
 
 
 if __name__ == "__main__":

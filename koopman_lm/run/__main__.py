@@ -46,7 +46,7 @@ def main(argv=None):
     spec = resolve_run_spec(args.spec)
 
     if isinstance(spec.data, ShardDataSpec):
-        verify_shard(spec.data)
+        verify_shard(spec.data, dry_run=args.dry_run)
 
     run_dir = run_dir_path(args.run_root, spec)
     create_run_dir(run_dir, resume=args.resume, force=args.force, code_id=git_commit())

@@ -4,6 +4,8 @@ to a Launcher. Always invoked with --dry_run so no real training subprocess
 or GPU is ever touched.
 """
 import json
+import subprocess
+import sys
 import textwrap
 
 import pytest
@@ -146,6 +148,46 @@ def test_main_verifies_data_before_creating_the_run_dir(tmp_path):
     spec = resolve_run_spec(spec_path)
     run_dir = run_dir_path(run_root, spec)
     assert not run_dir.exists()   # verification failed before any dir was created
+
+
+def test_main_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path):
+    """Same regression as koopman_lm.sweep: a dry run must be inspectable
+    before the data shard exists (typically from a login node). verify_shard
+    raising DataVerificationError on a missing meta.json used to turn
+    `python -m koopman_lm.run --dry_run` into a nonzero exit. Exercised as a
+    real subprocess so the actual CLI exit code is checked."""
+    shard_dir = tmp_path / "shard_not_pretokenized_yet"
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(textwrap.dedent(f"""
+        name: 50m-smoke
+        model: 50m
+        data:
+          kind: shard
+          shard_dir: {shard_dir}
+          tokenizer: NousResearch/Llama-2-7b-hf
+          mix: {{fineweb: 1.0}}
+          n_tokens: 1000
+        optim:
+          lr: 0.0004
+          warmup_steps: 10
+          max_steps: 100
+          effective_batch: 16
+          per_device_batch_size: 16
+        runtime:
+          seed: 42
+    """))
+    run_root = tmp_path / "runs"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "koopman_lm.run", str(spec_path),
+         "--run_root", str(run_root), "--dry_run", "--allow-dirty"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"expected clean exit 0, got {proc.returncode}\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    assert not shard_dir.exists()  # dry_run must not have tried to create it
 
 
 def test_main_refuses_to_launch_from_a_dirty_tree(tmp_path, monkeypatch):
