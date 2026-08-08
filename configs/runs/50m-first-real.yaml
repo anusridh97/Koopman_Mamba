@@ -1,0 +1,86 @@
+# The repo's first genuinely real training run through koopman_lm/run/,
+# on a real 100M-token FineWeb-Edu shard, with ska_backend left at
+# configs/50m.yaml's own value (cuda_prefix -- the fused CUDA prefix-scan
+# kernel). model: is configs/50m.yaml inlined with max_seq_len overridden
+# to 2048 (there is no field-level override of a registry model name yet,
+# see koopman_lm/run/resolve.py:_resolve_model). data.n_tokens is the
+# ACTUAL count /scratch/m000151-pm06/jkli/fineweb_small_train/meta.json recorded (pretokenize.py's
+# per-document overshoot makes the exact figure only knowable after
+# tokenizing -- see scripts/first_real_run.sbatch step 2). Generated and
+# committed by that script; not hand-authored.
+name: 50m-first-real
+model:
+  d_model: 384
+  n_layers: 17
+  vocab_size: 32000
+  d_state: 64
+  d_conv: 4
+  mamba_expand: 2
+  ska_n_heads: 6
+  ska_rank: 24
+  ska_ridge: 0.01
+  ska_power_K: 1
+  ska_chunk_size: 64
+  ska_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  ska_mode: parallel
+  ska_backend: cuda_prefix
+  ska_inverse_cholesky: false
+  ska_exact_intrachunk: false
+  ska_prefix_scan: true
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+  ska_norm_clip: true
+  ska_norm_clip_c: 4.0
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.0
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 1.0e-05
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 2048
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix:
+    fineweb: 1.0
+    pg19: 0.0
+    scrolls: 0.0
+  n_tokens: 100000536
+optim:
+  lr: 0.0004
+  warmup_steps: 30
+  max_steps: 300
+  schedule: cosine
+  effective_batch: 64
+  per_device_batch_size: 16
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  seed: 42
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: 01:45:00
+  gpu_arch: '9.0'

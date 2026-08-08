@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import torch
 import yaml
@@ -152,7 +152,8 @@ def to_flat_dict(spec: RunSpec) -> Dict[str, Any]:
     }
 
 
-def materialize(spec: RunSpec, run_dir, *, dirty: bool = False) -> Path:
+def materialize(spec: RunSpec, run_dir, *, dirty: bool = False,
+                 extra: Optional[Dict[str, Any]] = None) -> Path:
     """Write the fully-flattened spec + provenance to run_dir/spec.yaml,
     atomically. The only file downstream consumers (eval, resume, analysis)
     read.
@@ -167,6 +168,13 @@ def materialize(spec: RunSpec, run_dir, *, dirty: bool = False) -> Path:
     `dirty=True` records that this launch proceeded with uncommitted local
     changes (--allow-dirty, the escape hatch from check_git_clean's default
     refusal) -- omitted entirely when the tree was clean.
+
+    `extra`, if given, is merged into the top-level payload after
+    provenance/code_id/dirty -- e.g. koopman_lm.sweep stamps `sweep_id` and
+    `sweep_name` here so `python -m koopman_lm.results` can group cells by
+    the sweep that produced them. This is metadata only: it plays no part in
+    run_id/group_id, which are computed purely from `spec` (§3.3) before this
+    function is ever called.
     """
     run_dir = Path(run_dir)
     payload = to_flat_dict(spec)
@@ -174,6 +182,8 @@ def materialize(spec: RunSpec, run_dir, *, dirty: bool = False) -> Path:
     payload["code_id"] = payload["provenance"]["git_commit"]
     if dirty:
         payload["dirty"] = True
+    if extra:
+        payload.update(extra)
     out_path = run_dir / "spec.yaml"
     atomic_write_text(out_path, yaml.safe_dump(payload, sort_keys=False))
     return out_path
@@ -211,3 +221,23 @@ def load_materialized_spec(spec_yaml_path) -> RunSpec:
     optim = OptimSpec(**raw["optim"])
     runtime = RuntimeSpec(**raw["runtime"])
     return RunSpec(name=raw["name"], model=model, data=data, optim=optim, runtime=runtime)
+
+
+def load_raw_spec(path) -> Dict[str, Any]:
+    """Public entry point to the `extends:` chain loader (`_load_raw_chain`),
+    for callers that need the flattened raw dict *before* RunSpec
+    construction -- namely koopman_lm.sweep, which must apply per-cell
+    "<section>.<field>" overrides onto a base run spec's raw sections before
+    building each cell's RunSpec. resolve_run_spec itself only ever returns
+    the fully-built RunSpec, which is too late for that."""
+    return _load_raw_chain(Path(path))
+
+
+def resolve_model_config(value) -> KoopmanLMConfig:
+    """Public wrapper around the same model-value resolution
+    resolve_run_spec uses internally (a registry name, a path to a YAML/
+    JSON config, or an inline dict) -- exposed so callers building RunSpecs
+    outside the single-file `extends:` flow (koopman_lm.sweep) can resolve a
+    base spec's `model:` field the same way, regardless of how that base
+    spelled it."""
+    return _resolve_model(value)

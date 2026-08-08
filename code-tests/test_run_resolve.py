@@ -139,6 +139,77 @@ def test_materialize_writes_code_id_distinct_from_run_id(tmp_path):
     assert raw["code_id"] != run_id(spec)
 
 
+def test_materialize_extra_kwarg_merges_additional_top_level_fields(tmp_path):
+    """koopman_lm.sweep stamps sweep_id/sweep_name onto each cell's
+    spec.yaml through this kwarg, without duplicating materialize()'s own
+    provenance/atomic-write logic."""
+    from koopman_lm.config import build_config
+    from koopman_lm.run.resolve import materialize
+    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+
+    spec = RunSpec(
+        name="x", model=build_config("50m"),
+        data=SyntheticDataSpec(generator="mqar", params={}),
+        optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100),
+        runtime=RuntimeSpec(),
+    )
+    out_path = materialize(spec, tmp_path,
+                            extra={"sweep_id": "abc12345", "sweep_name": "ska-rank-lr"})
+    raw = yaml.safe_load(out_path.read_text())
+    assert raw["sweep_id"] == "abc12345"
+    assert raw["sweep_name"] == "ska-rank-lr"
+
+
+def test_materialize_without_extra_omits_sweep_fields(tmp_path):
+    from koopman_lm.config import build_config
+    from koopman_lm.run.resolve import materialize
+    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+
+    spec = RunSpec(
+        name="x", model=build_config("50m"),
+        data=SyntheticDataSpec(generator="mqar", params={}),
+        optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100),
+        runtime=RuntimeSpec(),
+    )
+    out_path = materialize(spec, tmp_path)
+    raw = yaml.safe_load(out_path.read_text())
+    assert "sweep_id" not in raw
+    assert "sweep_name" not in raw
+
+
+def test_load_raw_spec_follows_extends_chain(tmp_path):
+    """Public wrapper around the same _load_raw_chain resolve_run_spec uses
+    internally -- koopman_lm.sweep needs the raw (pre-RunSpec) dict to apply
+    per-cell overrides onto a base spec's sections."""
+    from koopman_lm.run.resolve import load_raw_spec
+
+    _write(tmp_path / "base.yaml", """
+        optim:
+          lr: 0.0004
+    """)
+    _write(tmp_path / "leaf.yaml", """
+        extends: base.yaml
+        name: x
+        model: 50m
+        data: {kind: synthetic, generator: mqar, params: {}}
+    """)
+    raw = load_raw_spec(tmp_path / "leaf.yaml")
+    assert raw["name"] == "x"
+    assert raw["optim"]["lr"] == 0.0004
+    assert "extends" not in raw
+
+
+def test_resolve_model_config_accepts_registry_name_and_inline_dict():
+    from koopman_lm.run.resolve import resolve_model_config
+
+    cfg = resolve_model_config("50m")
+    assert cfg.d_model == 384
+
+    cfg2 = resolve_model_config({"mlp_type": "swiglu"})
+    assert cfg2.mlp_type == "swiglu"
+    assert cfg2.d_model == 768   # KoopmanLMConfig's own default
+
+
 def _fake_run(stdout):
     def _inner(*args, **kwargs):
         class _Result:
