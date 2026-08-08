@@ -55,6 +55,53 @@ except ImportError:
     pytestmark = None
 
 
+# --------------------------------------------------------------------------
+# Central-difference tolerance (was a bare `< 1e-6` relative check, which is
+# flaky: it failed on some CI runners and passed on others for the SAME
+# fixed seed, because it silently divides by whatever the analytic/FD
+# derivative happens to be for that particular random draw).
+#
+# All FD checks in this file use central differences with step h = FD_H on
+# float64 quantities. Central-difference error has two parts:
+#   * truncation:  O(h^2 * |f'''|)                    -- deterministic, tiny
+#   * roundoff:    O(eps64 * |f(x)| / h)               -- from cancellation
+#                                                          in f(x+h)-f(x-h)
+# With h = 1e-6, h^2 = 1e-12 while eps64/h = 2.22e-16/1e-6 ~= 2.22e-10 --
+# roundoff dominates by many orders of magnitude for these smooth
+# (sigmoid/quadratic) functions, so the truncation term is negligible here.
+#
+# The scalar losses these tests differentiate are 0.5*||y - ystar||^2 with
+# y, ystar in R^16 of O(1) entries, i.e. |f(x)| = O(1) to O(10) (observed:
+# ~5.6-6.2 across the seeds used below). Using a generous bound of 30 for
+# margin: the roundoff floor on the ABSOLUTE error of a central-difference
+# derivative estimate is ~ eps64 * 30 / h ~= 6.7e-9. A further ~30x safety
+# margin (covering platform-to-platform BLAS/summation-order differences,
+# which is the actual source of the CI flakiness -- the same fixed seed
+# gets slightly different low-order bits on different runners) gives
+# FD_ATOL below.
+#
+# Critically, a PURE relative check (error / |fd| < tol) has no floor: for
+# any random draw where the true derivative |fd| is small (e.g. a component
+# where the query has a small entry), the fixed absolute roundoff above
+# becomes an arbitrarily large relative error. That is exactly what
+# happened: test_c2 hit d/dw[23] ~= -7.07e-4 with the SAME ~1e-9 absolute
+# roundoff as every other component, giving 1e-6-scale relative error on
+# some runners. Combining an absolute floor with a relative term (the
+# standard np.allclose/torch.allclose pattern) fixes this: FD_ATOL dominates
+# when |fd| is small (bounding absolute error near the roundoff floor with
+# ~2 orders of magnitude of margin), FD_RTOL dominates when |fd| is large
+# (preserving the original tight relative sensitivity to real bugs).
+FD_H = 1e-6
+FD_ATOL = 2e-7
+FD_RTOL = 1e-6
+
+
+def _fd_close(analytic, fd, atol=FD_ATOL, rtol=FD_RTOL):
+    """True if `analytic` matches the central-difference estimate `fd`
+    within the roundoff-derived tolerance above."""
+    return abs(analytic - fd) <= atol + rtol * abs(fd)
+
+
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
@@ -149,10 +196,10 @@ def test_c2_gate_gradient_matches_fd():
     qw = st["Li"] @ q
     D = eta * (st["R"] @ (st["A"] @ (st["A"] @ qw) - qw))
     ana_lam = g @ D
-    h = 1e-6
+    h = FD_H
     fd_lam = (0.5 * np.sum((read_lam(st, q, lam + h, eta) - ystar) ** 2)
               - 0.5 * np.sum((read_lam(st, q, lam - h, eta) - ystar) ** 2)) / (2 * h)
-    assert abs(ana_lam - fd_lam) / max(1e-12, abs(fd_lam)) < 1e-6
+    assert _fd_close(ana_lam, fd_lam), (ana_lam, fd_lam)
 
     def loss(w_, b_):
         y_, _ = gated_read(st, q, w_, b_, eta)
@@ -162,12 +209,12 @@ def test_c2_gate_gradient_matches_fd():
     for k in [0, 7, 23]:
         wp, wm = w.copy(), w.copy(); wp[k] += h; wm[k] -= h
         fd = (loss(wp, b) - loss(wm, b)) / (2 * h)
-        assert abs(ana_w[k] - fd) / max(1e-12, abs(fd)) < 1e-6
+        assert _fd_close(ana_w[k], fd), (k, ana_w[k], fd)
     fd_b = (loss(w, b + h) - loss(w, b - h)) / (2 * h)
-    assert abs(ana_b - fd_b) / max(1e-12, abs(fd_b)) < 1e-6
+    assert _fd_close(ana_b, fd_b), (ana_b, fd_b)
     # aux loss (ships OFF): L_aux = -log lam ; dL/db = -(1-lam)
     fd_aux_b = (-np.log(gate(st, q, w, b + h)) + np.log(gate(st, q, w, b - h))) / (2 * h)
-    assert abs(-(1 - lam) - fd_aux_b) / max(1e-12, abs(fd_aux_b)) < 1e-6
+    assert _fd_close(-(1 - lam), fd_aux_b), (-(1 - lam), fd_aux_b)
 
 
 def test_c3_init_equivalence_to_fixed_blend():
@@ -303,7 +350,7 @@ def test_c7_threeway_softmax_gradient_matches_fd():
     ana_b = (np.diag(w3) - np.outer(w3, w3)) @ dLdw       # softmax Jacobian
     ana_b_bug = w3 * (1.0 - w3) * dLdw                    # independent-sigmoid (WRONG)
     ana_W = np.outer(ana_b, q / np.sqrt(24))
-    h = 1e-6
+    h = FD_H
 
     def loss(W_, b_):
         return 0.5 * np.sum((read3(st, q, gate3(st, q, W_, b_), eta) - ystar) ** 2)
@@ -311,11 +358,11 @@ def test_c7_threeway_softmax_gradient_matches_fd():
     for k in range(3):
         bp, bm = b.copy(), b.copy(); bp[k] += h; bm[k] -= h
         fd_b[k] = (loss(W, bp) - loss(W, bm)) / (2 * h)
-        assert abs(ana_b[k] - fd_b[k]) / max(1e-12, abs(fd_b[k])) < 1e-5
+        assert _fd_close(ana_b[k], fd_b[k]), (k, ana_b[k], fd_b[k])
     for (i, j) in [(0, 0), (1, 7), (2, 23)]:
         Wp, Wm = W.copy(), W.copy(); Wp[i, j] += h; Wm[i, j] -= h
         fd = (loss(Wp, b) - loss(Wm, b)) / (2 * h)
-        assert abs(ana_W[i, j] - fd) / max(1e-12, abs(fd)) < 1e-5
+        assert _fd_close(ana_W[i, j], fd), (i, j, ana_W[i, j], fd)
     # teeth: the independent-sigmoid formula diverges on the joint check
     assert np.max(np.abs(ana_b_bug - fd_b) / (np.abs(fd_b) + 1e-12)) > 1e-2
 
