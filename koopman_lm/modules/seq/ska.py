@@ -12,9 +12,12 @@ CHANGES in the 440M rewrite (see CHANGES_440M.md):
     This breaks the exact-zero gradient stall so SKA internals receive gradient
     from step 1, while staying near-zero in magnitude for early stability.
 
-Two backends, selected automatically (unchanged):
-  - 'triton':  Fused Triton kernel for post-Cholesky matmul chain
-  - 'pytorch': Batched PyTorch (always available)
+forward() selects one of four kernels (prefix_scan / inverse_cholesky /
+exact_intrachunk / chunked); all of them compute the WHITENED operator
+L^-1 M L^-T (kernels/lin_alg.py::whiten_M). There is no longer a
+post-Cholesky triton/pytorch matmul chain to choose between -- that route
+computed M G^-1 instead and was unreachable; see the commit removing
+_post_cholesky_pytorch / _post_cholesky_triton / _get_chunk_stats.
 """
 
 import math
@@ -35,10 +38,13 @@ from koopman_lm.kernels.lin_alg import whiten_M, spec_w
 # Backend detection
 # ============================================================================
 
+# Vestigial: no triton kernel lives in this file anymore, so this probe only
+# decides the cosmetic backend='auto' -> 'triton'/'pytorch' string that
+# extra_repr() prints. Kept so that string does not silently change meaning on
+# triton-equipped machines; see extra_repr and the __init__ note on `backend`.
 _TRITON_AVAILABLE = False
 try:
     import triton
-    import triton.language as tl
     _TRITON_AVAILABLE = True
 except ImportError:
     pass
@@ -47,33 +53,6 @@ except ImportError:
 # ============================================================================
 # Shared utilities
 # ============================================================================
-
-def _spectral_normalize_power_iter(A, n_iters=6):
-    """
-    Spectral normalization via power iteration. Batched over leading dims.
-
-    Uses straight-through estimation: the scale factor is treated as a
-    constant during backprop (power iteration is inside no_grad).
-    """
-    v = torch.ones(*A.shape[:-1], 1, device=A.device, dtype=A.dtype) / math.sqrt(A.shape[-1])
-    with torch.no_grad():
-        for _ in range(n_iters):
-            Av = A @ v
-            u = Av / Av.norm(dim=-2, keepdim=True).clamp(min=1e-8)
-            Atu = A.transpose(-1, -2) @ u
-            v = Atu / Atu.norm(dim=-2, keepdim=True).clamp(min=1e-8)
-        sigma_max = (A @ v).norm(dim=-2, keepdim=False).squeeze(-1)
-    scale = torch.clamp(sigma_max, min=1.0).unsqueeze(-1).unsqueeze(-1)
-    return A / scale, sigma_max
-
-
-def _power_spectral_filter(A_w, w_q, power_K=2):
-    """Apply A_w^power_K @ w_q by iterating on w_q (cheaper than building A_w^K)."""
-    result = w_q
-    for _ in range(power_K):
-        result = A_w @ result
-    return result
-
 
 def _squash(raw, lo, hi):
     """Smooth bound to (lo, hi) via sigmoid -- matches echo_jax.py's _squash."""
@@ -104,225 +83,6 @@ def _spectral_radius(A, n_iters=12):
         v = A @ v
         v = v / v.norm(dim=-2, keepdim=True).clamp(min=1e-12)
     return (A @ v).norm(dim=-2).squeeze(-1)
-
-
-# ============================================================================
-# Shared: batched statistics + cumsum + cholesky (STANDARD strategy)
-# ============================================================================
-
-def _compute_chunk_stats_and_cholesky(z_f, zq_f, v_f, r, H, P, CS, ridge_eps):
-    B, T = z_f.shape[:2]
-    device = z_f.device
-    dtype = z_f.dtype
-
-    n_chunks = (T + CS - 1) // CS
-    T_padded = n_chunks * CS
-    pad_len = T_padded - T
-
-    if pad_len > 0:
-        z_f = torch.nn.functional.pad(z_f, (0, 0, 0, 0, 0, pad_len))
-        zq_f = torch.nn.functional.pad(zq_f, (0, 0, 0, 0, 0, pad_len))
-        v_f = torch.nn.functional.pad(v_f, (0, 0, 0, 0, 0, pad_len))
-
-    C = n_chunks
-    z_c = z_f.reshape(B, C, CS, H, r)
-    zq_c = zq_f.reshape(B, C, CS, H, r)
-    v_c = v_f.reshape(B, C, CS, H, P)
-
-    G_chunks = torch.einsum('bcthr,bcths->bchrs', z_c, z_c)
-    M_chunks = torch.einsum('bcthr,bcths->bchrs',
-                            z_c[:, :, 1:], z_c[:, :, :-1])
-    C_chunks = torch.einsum('bcthp,bcthr->bchpr', v_c, z_c)
-
-    if C > 1:
-        M_boundary = torch.einsum('bchr,bchs->bchrs',
-                                  z_c[:, 1:, 0], z_c[:, :-1, -1])
-
-    eye_r = torch.eye(r, device=device, dtype=dtype)
-
-    G_cumsum = torch.cumsum(G_chunks, dim=1)
-    G_excl = torch.zeros_like(G_cumsum)
-    G_excl[:, 1:] = G_cumsum[:, :-1]
-    G_excl = G_excl + ridge_eps * eye_r
-
-    M_cumsum = torch.cumsum(M_chunks, dim=1)
-    M_excl = torch.zeros_like(M_cumsum)
-    M_excl[:, 1:] = M_cumsum[:, :-1]
-
-    if C > 1:
-        M_bnd_full = torch.zeros(B, C, H, r, r, device=device, dtype=dtype)
-        M_bnd_full[:, 1:] = M_boundary
-        M_bnd_inclusive = torch.cumsum(M_bnd_full, dim=1)
-        M_excl = M_excl + M_bnd_inclusive
-
-    C_cumsum = torch.cumsum(C_chunks, dim=1)
-    C_excl = torch.zeros_like(C_cumsum)
-    C_excl[:, 1:] = C_cumsum[:, :-1]
-
-    BCH = B * C * H
-    G_flat = G_excl.reshape(BCH, r, r)
-    G_flat = 0.5 * (G_flat + G_flat.transpose(-1, -2))
-
-    L_flat, info = torch.linalg.cholesky_ex(G_flat)
-
-    G_jittered = G_flat + 1e-4 * eye_r.unsqueeze(0)
-    L_jittered, _ = torch.linalg.cholesky_ex(G_jittered)
-    needs_fix = (info > 0).unsqueeze(-1).unsqueeze(-1)
-    L_flat = torch.where(needs_fix, L_jittered, L_flat)
-
-    M_flat = M_excl.reshape(BCH, r, r)
-    C_flat = C_excl.reshape(BCH, P, r)
-    zq_flat = zq_c.permute(0, 1, 3, 4, 2).reshape(BCH, r, CS)
-
-    return L_flat, M_flat, C_flat, zq_flat, (B, C, H, P, CS, T, T_padded, pad_len)
-
-
-# ============================================================================
-# Phase 1: Batched PyTorch post-Cholesky
-# ============================================================================
-
-def _post_cholesky_pytorch(L_flat, M_flat, C_flat, zq_flat, gamma_value,
-                           power_K, shapes):
-    """Post-Cholesky operations using batched PyTorch calls.
-
-    gamma_value is now a plain float constant (default 1.0), not a clamped
-    learnable parameter. With gamma=1.0 the operator is left exactly at the
-    spectral-norm cap (radius<=1).
-    """
-    B, C, H, P, CS, T, T_padded, pad_len = shapes
-    r = L_flat.shape[-1]
-
-    Aw_T = torch.cholesky_solve(M_flat.transpose(-1, -2), L_flat)
-    A_w = Aw_T.transpose(-1, -2)
-    A_w, _ = _spectral_normalize_power_iter(A_w)
-    # gamma_value: python float (fixed regime; skip multiply if 1.0) OR a tensor
-    # (learnable+clamped baseline; always multiply).
-    if isinstance(gamma_value, float):
-        if gamma_value != 1.0:
-            A_w = A_w * gamma_value
-    else:
-        A_w = A_w * gamma_value
-
-    Bv_T = torch.cholesky_solve(C_flat.transpose(-1, -2), L_flat)
-    B_v = Bv_T.transpose(-1, -2)
-
-    w_q = torch.linalg.solve_triangular(L_flat, zq_flat, upper=False)
-
-    w_f = _power_spectral_filter(A_w, w_q, power_K)
-    z_out = L_flat @ w_f
-    y_flat = B_v @ z_out
-
-    y_hat = y_flat.reshape(B, C, H, P, CS).permute(0, 1, 4, 2, 3)
-    y_hat = y_hat.reshape(B, T_padded, H, P)
-    if pad_len > 0:
-        y_hat = y_hat[:, :T]
-    return y_hat
-
-
-# ============================================================================
-# Phase 2: Triton fused post-Cholesky kernel
-# ============================================================================
-
-if _TRITON_AVAILABLE:
-
-    @triton.jit
-    def _fused_filter_readout_kernel(
-        Aw_ptr, Bv_ptr, Wq_ptr, L_ptr, Y_ptr,
-        actual_P: tl.constexpr, actual_CS: tl.constexpr,
-        R_PAD: tl.constexpr, P_PAD: tl.constexpr, CS_PAD: tl.constexpr,
-        power_K: tl.constexpr,
-    ):
-        pid = tl.program_id(0)
-        aw_base = pid * R_PAD * R_PAD
-        l_base = pid * R_PAD * R_PAD
-        bv_base = pid * P_PAD * R_PAD
-        wq_base = pid * R_PAD * CS_PAD
-        y_base = pid * P_PAD * CS_PAD
-
-        ri = tl.arange(0, R_PAD)
-        rj = tl.arange(0, R_PAD)
-        pi = tl.arange(0, P_PAD)
-        ci = tl.arange(0, CS_PAD)
-
-        Aw = tl.load(Aw_ptr + aw_base + ri[:, None] * R_PAD + rj[None, :])
-        wq = tl.load(Wq_ptr + wq_base + ri[:, None] * CS_PAD + ci[None, :])
-
-        w_f = wq
-        for _k in range(power_K):
-            w_f = tl.dot(Aw, w_f)
-
-        L = tl.load(L_ptr + l_base + ri[:, None] * R_PAD + rj[None, :])
-        z_out = tl.dot(L, w_f)
-
-        Bv = tl.load(Bv_ptr + bv_base + pi[:, None] * R_PAD + rj[None, :])
-        y = tl.dot(Bv, z_out)
-
-        p_mask = pi < actual_P
-        c_mask = ci < actual_CS
-        mask = p_mask[:, None] & c_mask[None, :]
-        tl.store(Y_ptr + y_base + pi[:, None] * CS_PAD + ci[None, :], y, mask=mask)
-
-
-    def _post_cholesky_triton(L_flat, M_flat, C_flat, zq_flat, gamma_value,
-                              power_K, shapes):
-        B, C, H, P, CS, T, T_padded, pad_len = shapes
-        r = L_flat.shape[-1]
-        BCH = L_flat.shape[0]
-        device = L_flat.device
-        dtype = L_flat.dtype
-
-        Aw_T = torch.cholesky_solve(M_flat.transpose(-1, -2), L_flat)
-        A_w = Aw_T.transpose(-1, -2).contiguous()
-        A_w, _ = _spectral_normalize_power_iter(A_w)
-        if isinstance(gamma_value, float):
-            if gamma_value != 1.0:
-                A_w = A_w * gamma_value
-        else:
-            A_w = A_w * gamma_value
-
-        Bv_T = torch.cholesky_solve(C_flat.transpose(-1, -2), L_flat)
-        B_v = Bv_T.transpose(-1, -2).contiguous()
-
-        w_q = torch.linalg.solve_triangular(L_flat, zq_flat, upper=False)
-        w_q = w_q.contiguous()
-        L_flat = L_flat.contiguous()
-
-        R_PAD = triton.next_power_of_2(r)
-        P_PAD = triton.next_power_of_2(P)
-        CS_PAD = triton.next_power_of_2(CS)
-
-        r_pad = R_PAD - r
-        p_pad = P_PAD - P
-        cs_pad = CS_PAD - CS
-        needs_padding = (r_pad > 0) or (p_pad > 0) or (cs_pad > 0)
-
-        if needs_padding:
-            A_w_pad = torch.nn.functional.pad(A_w, (0, r_pad, 0, r_pad))
-            L_pad = torch.nn.functional.pad(L_flat, (0, r_pad, 0, r_pad))
-            Bv_pad = torch.nn.functional.pad(B_v, (0, r_pad, 0, p_pad))
-            wq_pad = torch.nn.functional.pad(w_q, (0, cs_pad, 0, r_pad))
-        else:
-            A_w_pad = A_w; L_pad = L_flat; Bv_pad = B_v; wq_pad = w_q
-
-        y_pad = torch.empty(BCH, P_PAD, CS_PAD, device=device, dtype=dtype)
-
-        _fused_filter_readout_kernel[(BCH,)](
-            A_w_pad, Bv_pad, wq_pad, L_pad, y_pad,
-            actual_P=P, actual_CS=CS,
-            R_PAD=R_PAD, P_PAD=P_PAD, CS_PAD=CS_PAD,
-            power_K=power_K,
-        )
-
-        if needs_padding:
-            y_flat = y_pad[:, :P, :CS].contiguous()
-        else:
-            y_flat = y_pad
-
-        y_hat = y_flat.reshape(B, C, H, P, CS).permute(0, 1, 4, 2, 3)
-        y_hat = y_hat.reshape(B, T_padded, H, P)
-        if pad_len > 0:
-            y_hat = y_hat[:, :T]
-        return y_hat
 
 
 # ============================================================================
@@ -376,30 +136,32 @@ class SKAModule(nn.Module):
         self.P = head_dim or (d_model // n_heads)
         self.d_model = d_model
         self.chunk_size = chunk_size
-        # NOTE: the JAX-parity forward() calls _causal_chunk_stats (strict
-        # causal beta-gated stats) DIRECTLY and does NOT route through
-        # _get_chunk_stats(). So chunk_strategy='overlap'/'decay' and the old
-        # _post_cholesky_* backend are DEAD in the active path -- they exist
-        # only for the legacy ska_fast/baseline route. Setting chunk_strategy
-        # to anything but 'standard' has NO effect on the 440M forward. Warn so
-        # nobody believes they are ablating overlap/decay when they are not.
+        # chunk_strategy / overlap_fraction / decay_alpha are INERT. forward()
+        # calls _causal_chunk_stats (strict causal beta-gated stats) directly;
+        # the legacy route that consumed these knobs has been deleted, so there
+        # is no longer any path that reads them. They survive as attributes
+        # only because KoopmanLMConfig still declares the matching fields and
+        # run/resolve.py validates materialized spec.yaml field-for-field --
+        # dropping them would make every archived run's spec unloadable. Warn
+        # so nobody believes they are ablating overlap/decay when they are not.
+        # (code-tests/test_ska_dead_route_inert.py pins the inertness.)
         if chunk_strategy not in ('standard',):
             import warnings
             warnings.warn(
-                f"ska chunk_strategy={chunk_strategy!r} is IGNORED by the "
-                "JAX-parity forward (which uses strict causal stats). It has "
-                "no effect unless you route through the legacy _get_chunk_stats "
-                "path.", RuntimeWarning)
+                f"ska chunk_strategy={chunk_strategy!r} is IGNORED: the "
+                "forward uses strict causal stats unconditionally and the "
+                "overlap/decay route no longer exists. Setting this has no "
+                "effect on any output.", RuntimeWarning)
         self.chunk_strategy = chunk_strategy
         self.overlap_fraction = overlap_fraction
         self.decay_alpha = decay_alpha
         self.layerscale = layerscale
 
-        # NOTE: `backend` here selects the legacy post-Cholesky matmul chain
-        # ('triton' vs 'pytorch'), which is DEAD when prefix_scan=True (see
-        # the chunk_strategy warning above) -- it is resolved eagerly against
-        # local triton availability purely for the old chunked path and for
-        # extra_repr(). It must NOT be reused to select ska_prefix_scan's
+        # NOTE: `backend` is half-live. The RAW string is real: it is handed to
+        # ska_prefix_scan below. The eagerly RESOLVED self.backend used to pick
+        # the legacy post-Cholesky matmul chain ('triton' vs 'pytorch'); that
+        # chain is gone, so self.backend now feeds extra_repr() and nothing
+        # else. It must NOT be reused to select ska_prefix_scan's
         # backend (whose allowed values are auto/cuda/cuda_prefix/reference/
         # pytorch, and which has no 'triton' implementation): doing so used
         # to make any prefix_scan=True model with the default backend='auto'
@@ -503,24 +265,6 @@ class SKAModule(nn.Module):
             lo, hi = self.gamma_clamp
             return torch.clamp(self.ssn_gamma, min=lo, max=hi)
         return self.ssn_gamma
-
-    def _get_chunk_stats(self, z_f, zq_f, v_f):
-        r = self.rank
-        H, P = self.H, self.P
-        CS = self.chunk_size
-        if self.chunk_strategy == 'overlap':
-            from koopman_lm.kernels.adaptive_chunking import compute_chunk_stats_overlap
-            return compute_chunk_stats_overlap(
-                z_f, zq_f, v_f, r, H, P, CS, self.ridge_eps,
-                overlap_fraction=self.overlap_fraction)
-        elif self.chunk_strategy == 'decay':
-            from koopman_lm.kernels.adaptive_chunking import compute_chunk_stats_decay
-            return compute_chunk_stats_decay(
-                z_f, zq_f, v_f, r, H, P, CS, self.ridge_eps,
-                decay_alpha=self.decay_alpha)
-        else:
-            return _compute_chunk_stats_and_cholesky(
-                z_f, zq_f, v_f, r, H, P, CS, self.ridge_eps)
 
     def forward(self, hidden_states):
         B, T, _ = hidden_states.shape
