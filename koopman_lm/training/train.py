@@ -259,6 +259,28 @@ def train(args):
                     pass
         if is_main: print(f"    Compiled {n_compiled} modules")
 
+    # SKA health instrumentation (Phase 1). Hooks live on the raw model's
+    # sequence blocks; cheap when inactive. Only meaningful for the koopman
+    # model (the only one with SKA layers). Opt-in via --diag_enable.
+    monitor = None
+    grad_monitor = None
+    if args.diag_enable and is_main and args.model_type == "koopman":
+        from koopman_lm.training.diagnostics import SKAHealthMonitor, GradFlowMonitor
+        try:
+            monitor = SKAHealthMonitor(raw_model)
+            print(f"  SKA health monitor attached: {monitor.n_ska} SKA layers, "
+                  f"diag_every={args.diag_every}")
+        except Exception as e:
+            print(f"  SKA health monitor disabled: {e}")
+            monitor = None
+        if args.diag_grad:
+            if is_ddp:
+                # rank-0-only backward would desync the DDP reducer
+                print("  SKA grad-flow monitor skipped under DDP")
+            else:
+                grad_monitor = GradFlowMonitor(raw_model)
+                print("  SKA grad-flow monitor attached")
+
     if is_ddp:
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], find_unused_parameters=False)
@@ -402,6 +424,49 @@ def train(args):
                         wandb.log({"loss": avg, "ppl": ppl, "lr": lr,
                                    "tokens_per_sec": tps}, step=step)
                     running_loss = torch.tensor(0.0, device=device); loss_count = 0
+
+                # ---- SKA health diagnostics (separate cheap fwd, amortized) ----
+                if monitor is not None and step % args.diag_every == 0:
+                    was_training = raw_model.training
+                    with torch.no_grad(), monitor.capture():
+                        raw_model(input_ids=ids)        # labels=None -> no loss
+                    if was_training:
+                        raw_model.train()
+                    health = monitor.collect()
+                    scal = {k: v for k, v in health.items()
+                            if isinstance(v, (int, float))}
+                    radii = [v for k, v in scal.items()
+                             if k.endswith("/spectral_radius_mean")]
+                    gates = [v for k, v in scal.items() if k.endswith("/gate_mag")]
+                    rad_avg = sum(radii) / len(radii) if radii else float("nan")
+                    gate_avg = sum(gates) / len(gates) if gates else float("nan")
+                    rr = scal.get("ska/residual_ratio", float("nan"))
+                    lmr = min((v for k, v in scal.items()
+                               if k.endswith("/lambda_min_over_ridge")), default=float("nan"))
+                    print(f"  [ska-health] step {step}: radius~{rad_avg:.3f} "
+                          f"gate~{gate_avg:.2e} resid_ratio~{rr:.2e} "
+                          f"lmin/ridge~{lmr:.2f}")
+                    if args.wandb_project:
+                        import wandb
+                        wandb.log(health, step=step)
+
+                # ---- SKA gradient-flow diagnostics (extra fwd+bwd, amortized) ----
+                if grad_monitor is not None and step % args.diag_every == 0:
+                    # dedicated fwd+bwd on the current micro-batch; grads are
+                    # cleared afterwards so the next accumulation window starts
+                    # clean (we are right after optimizer.zero_grad anyway).
+                    with grad_monitor.capture():
+                        gout = raw_model(input_ids=ids, labels=labels, loss_weights=lw)
+                        gout["loss"].backward()
+                    raw_model.zero_grad(set_to_none=True)
+                    gflow = grad_monitor.collect()
+                    if gflow:
+                        gr = gflow.get("ska/grad_norm_ratio", float("nan"))
+                        print(f"  [ska-grad] step {step}: grad_norm_ratio~{gr:.2e}")
+                        if args.wandb_project:
+                            import wandb
+                            wandb.log(gflow, step=step)
+
                 if is_main and step > 0 and step % args.save_steps == 0:
                     _save_all(step, epoch, samples_consumed)
                 if is_main and preempt_flag.is_set():
@@ -487,6 +552,15 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--ddp", action="store_true", default=False)
     p.add_argument("--logging_steps", type=int, default=10)
+    p.add_argument("--diag_enable", action="store_true", default=False,
+                   help="emit SKA health metrics (spectral radius, lambda_min, "
+                        "gap, write-gate, residual ratio) to console/wandb")
+    p.add_argument("--diag_every", type=int, default=500,
+                   help="SKA health diagnostics cadence (steps). 100 for 50M, "
+                        "500 for 440M+.")
+    p.add_argument("--diag_grad", action="store_true", default=False,
+                   help="also track SKA vs Mamba gradient-norm flow (one extra "
+                        "fwd+bwd per diagnostic step; skipped under DDP)")
     p.add_argument("--save_steps", type=int, default=5000)
     p.add_argument("--output_dir", type=str, default="./koopman-440m-fast")
     p.add_argument("--wandb_project", type=str, default=None)
