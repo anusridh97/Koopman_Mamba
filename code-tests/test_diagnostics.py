@@ -30,7 +30,7 @@ from koopman_lm.config import KoopmanLMConfig
 from koopman_lm.modules.seq.ska import SKAModule
 from koopman_lm.modules.seq.ska_block import SKABlock
 from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.training.diagnostics import (
+from experimentation.training.diagnostics import (
     SKAHealthMonitor, GradFlowMonitor, profile_overhead,
 )
 

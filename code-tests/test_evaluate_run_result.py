@@ -1,5 +1,5 @@
-"""koopman_lm/evaluation/evaluate.py wiring to the result envelope (§4.2):
-koopman_lm.run.eval_result.write_result and the <run_dir>/eval/<checkpoint>/
+"""experimentation/evaluation/evaluate.py wiring to the result envelope (§4.2):
+experimentation.run.eval_result.write_result and the <run_dir>/eval/<checkpoint>/
 <task>.json layout. Before this, evaluate.py wrote raw JSON to a
 caller-supplied --output with no envelope, so the first real training run
 had to hand-wrap its own output.
@@ -13,8 +13,8 @@ import textwrap
 import pytest
 import yaml
 
-from koopman_lm.evaluation.evaluate import find_run_dir, write_checkpoint_result
-from koopman_lm.run.eval_result import read_result
+from experimentation.evaluation.evaluate import find_run_dir, write_checkpoint_result
+from experimentation.run.eval_result import read_result
 
 pytestmark = pytest.mark.correctness
 
@@ -101,7 +101,7 @@ def test_write_checkpoint_result_writes_the_envelope_at_the_default_path(tmp_pat
 
 def test_write_checkpoint_result_reads_run_id_from_spec_yaml_not_recomputed(tmp_path):
     """spec.yaml's run_id is authoritative -- write_checkpoint_result must
-    read it back rather than recomputing koopman_lm.run.spec.run_id(spec)
+    read it back rather than recomputing experimentation.run.spec.run_id(spec)
     from a RunSpec it never reconstructs. A deliberately "wrong" run_id
     (one that would never come out of the hash) proves it was read, not
     recomputed."""
@@ -118,7 +118,7 @@ def test_write_checkpoint_result_reads_run_id_from_spec_yaml_not_recomputed(tmp_
 
 def test_write_checkpoint_result_uses_the_current_eval_git_commit(tmp_path, monkeypatch):
     """The envelope's git_commit is eval-time code provenance (matching
-    koopman_lm.results' `eval_git_commit` column) -- it must NOT be silently
+    experimentation.results' `eval_git_commit` column) -- it must NOT be silently
     swapped for the training run's own provenance.git_commit that happens to
     sit right there in spec.yaml."""
     run_dir = tmp_path / "runs" / "50m-fineweb-3b.gA" / "seed42.deadbeef"
@@ -129,7 +129,7 @@ def test_write_checkpoint_result_uses_the_current_eval_git_commit(tmp_path, monk
     checkpoint.write_text("not a real checkpoint")
 
     monkeypatch.setattr(
-        "koopman_lm.evaluation.evaluate.git_commit", lambda: "evalcommit")
+        "experimentation.evaluation.evaluate.git_commit", lambda: "evalcommit")
 
     path = write_checkpoint_result(checkpoint, "ppl", {"ppl": 1.0})
     assert read_result(path)["git_commit"] == "evalcommit"

@@ -10,7 +10,7 @@ import pytest
 torch = pytest.importorskip("torch")
 import torch.nn as nn
 
-from koopman_lm.training.train import _load_init_weights
+from experimentation.training.train import _load_init_weights
 
 pytestmark = pytest.mark.correctness
 

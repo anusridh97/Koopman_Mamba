@@ -672,7 +672,7 @@ class SKAModule(nn.Module):
         Detached, fp32, no value readout. `max_batch` caps the batch used for
         the per-chunk eigendecompositions so cost is bounded regardless of the
         training batch size. Returns GPU tensors; caller does the CPU sync
-        (see koopman_lm.training.diagnostics.SKAHealthMonitor).
+        (see experimentation.training.diagnostics.SKAHealthMonitor).
 
         Returns dict:
           spectral_radius : (B, nc, H) max|eig(A_eff)| per instance.

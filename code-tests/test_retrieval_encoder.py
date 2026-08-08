@@ -8,7 +8,7 @@ import pytest
 torch = pytest.importorskip("torch")
 import torch.nn as nn
 
-from koopman_lm.retrieval.encoder import RetrievalEncoder, info_nce, pool_sequence
+from experimentation.retrieval.encoder import RetrievalEncoder, info_nce, pool_sequence
 
 pytestmark = pytest.mark.correctness
 

@@ -1,4 +1,4 @@
-"""Regression tests for the Table 2 reproduction contract (koopman_lm.experiments.table2).
+"""Regression tests for the Table 2 reproduction contract (experimentation.experiments.table2).
 
 table2.py builds models through the project's real stack
 (koopman_lm.models.baselines), which requires mamba_ssm (CUDA/Linux only).
@@ -10,7 +10,7 @@ curriculum generators) needs no GPU and always runs.
 import pytest
 import torch
 
-from koopman_lm.experiments import curricula, table2
+from experimentation.experiments import curricula, table2
 
 
 def test_1m_config_matches_paper_sec_4_1():

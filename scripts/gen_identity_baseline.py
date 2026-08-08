@@ -36,9 +36,9 @@ SWEEP_SPECS = [
 
 def build_baseline() -> dict:
     from koopman_lm.config import CONFIG_REGISTRY, build_config, config_hash
-    from koopman_lm.run.resolve import resolve_run_spec
-    from koopman_lm.run.spec import group_id, run_id
-    from koopman_lm.sweep.spec import expand_cells, load_sweep_spec, sweep_id
+    from experimentation.run.resolve import resolve_run_spec
+    from experimentation.run.spec import group_id, run_id
+    from experimentation.sweep.spec import expand_cells, load_sweep_spec, sweep_id
 
     out: dict = {"config_hash": {}, "run_spec": {}, "sweep": {}}
 

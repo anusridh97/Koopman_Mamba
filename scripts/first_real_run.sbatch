@@ -12,7 +12,7 @@
 #SBATCH --output=/scratch/m000151-pm06/jkli/logs/first-run/%x-%j.out
 #SBATCH --error=/scratch/m000151-pm06/jkli/logs/first-run/%x-%j.err
 #
-# The repo's first genuinely real training run through koopman_lm/run/ (the
+# The repo's first genuinely real training run through experimentation/run/ (the
 # new run system: RunSpec -> resolve -> materialize -> Launcher), on real
 # FineWeb-Edu data, seq_len 2048, with ska_backend left at its production
 # value 'cuda_prefix' -- the fused SKA prefix-scan CUDA extension that first
@@ -27,14 +27,14 @@
 #   2. render + commit configs/runs/50m-first-real.yaml with the ACTUAL
 #      token count pretokenize.py wrote (verify_shard requires an exact
 #      match against meta.json, so this can't be authored before tokenizing)
-#   3. launch via `python -m koopman_lm.run ... --launcher local`
+#   3. launch via `python -m experimentation.run ... --launcher local`
 #   4. verify the run-directory artifacts the design promises
 #   5. kill the run after its first checkpoint (SIGTERM, not SIGUSR1 -- see
 #      note below) and relaunch with --resume, confirming from the log that
 #      training continues from the saved step
 #   6. evaluate the final checkpoint (fineweb_ppl) and hand-wrap the result
 #      in the §4.2 envelope (evaluate.py itself isn't wired to
-#      koopman_lm.run.eval_result yet -- see FINDINGS at the end of the log)
+#      experimentation.run.eval_result yet -- see FINDINGS at the end of the log)
 #
 # Uses the ALREADY-BUILT CUDA venv (do not rebuild -- ~25 min):
 #   /scratch/m000151-pm06/jkli/venvs/koopman-cuda
@@ -123,7 +123,7 @@ echo "############################################################"
 echo "### STEP 1: tokenize train shard (real FineWeb-Edu, 100M tokens)"
 echo "############################################################"
 if [ ! -f "$TRAIN_DIR/meta.json" ]; then
-    python -m koopman_lm.training.data.pretokenize \
+    python -m experimentation.training.data.pretokenize \
         --output_dir "$TRAIN_DIR" --tokenizer "$TOKENIZER" \
         --fineweb HuggingFaceFW/fineweb-edu --fineweb_subset sample-10BT \
         --mix 1.0 0.0 0.0 --max_tokens 100000000 --shard_size 50000000 --seed 42 \
@@ -155,7 +155,7 @@ echo "############################################################"
 echo "### STEP 1b: tokenize disjoint val shard (4M tokens)"
 echo "############################################################"
 if [ ! -f "$VAL_DIR/meta.json" ]; then
-    python -m koopman_lm.training.data.pretokenize \
+    python -m experimentation.training.data.pretokenize \
         --output_dir "$VAL_DIR" --tokenizer "$TOKENIZER" \
         --fineweb HuggingFaceFW/fineweb-edu --fineweb_subset sample-10BT \
         --mix 1.0 0.0 0.0 --max_tokens 4000000 --shard_size 4000000 \
@@ -174,7 +174,7 @@ fi
 
 ##############################################################################
 # STEP 2: render configs/runs/50m-first-real.yaml with the ACTUAL n_tokens
-# pretokenize.py wrote (koopman_lm.run.data_verify.verify_shard requires an
+# pretokenize.py wrote (experimentation.run.data_verify.verify_shard requires an
 # exact match against the shard's meta.json, so this cannot be hand-authored
 # ahead of tokenizing -- pretokenize.py's per-document overshoot means the
 # real count is not knowable until the shard exists), then commit it (the
@@ -242,12 +242,12 @@ spec = {
 }
 
 header = (
-    "# The repo's first genuinely real training run through koopman_lm/run/,\n"
+    "# The repo's first genuinely real training run through experimentation/run/,\n"
     "# on a real 100M-token FineWeb-Edu shard, with ska_backend left at\n"
     "# configs/50m.yaml's own value (cuda_prefix -- the fused CUDA prefix-scan\n"
     "# kernel). model: is configs/50m.yaml inlined with max_seq_len overridden\n"
     "# to 2048 (there is no field-level override of a registry model name yet,\n"
-    "# see koopman_lm/run/resolve.py:_resolve_model). data.n_tokens is the\n"
+    "# see experimentation/run/resolve.py:_resolve_model). data.n_tokens is the\n"
     f"# ACTUAL count {train_dir}/meta.json recorded (pretokenize.py's\n"
     "# per-document overshoot makes the exact figure only knowable after\n"
     "# tokenizing -- see scripts/first_real_run.sbatch step 2). Generated and\n"
@@ -261,8 +261,8 @@ print(f"wrote {cfg_path} (n_tokens={n_tokens:,}, mix={mix})")
 
 # Fail fast, before committing, if this doesn't actually resolve.
 sys.path.insert(0, ".")
-from koopman_lm.run.resolve import resolve_run_spec
-from koopman_lm.run.spec import group_id, run_id
+from experimentation.run.resolve import resolve_run_spec
+from experimentation.run.spec import group_id, run_id
 
 resolved = resolve_run_spec(cfg_path)
 assert resolved.model.ska_backend == "cuda_prefix", resolved.model.ska_backend
@@ -303,8 +303,8 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 RUN_DIR=$(python -c "
-from koopman_lm.run.resolve import resolve_run_spec
-from koopman_lm.run.spec import run_dir_path
+from experimentation.run.resolve import resolve_run_spec
+from experimentation.run.spec import run_dir_path
 print(run_dir_path('$RUN_ROOT', resolve_run_spec('$CFG_PATH')))
 ")
 echo "RUN_DIR=$RUN_DIR"
@@ -315,9 +315,9 @@ echo "RUN_DIR=$RUN_DIR"
 # resume test.
 ##############################################################################
 echo "############################################################"
-echo "### STEP 3: python -m koopman_lm.run $CFG_PATH --launcher local"
+echo "### STEP 3: python -m experimentation.run $CFG_PATH --launcher local"
 echo "############################################################"
-setsid python -m koopman_lm.run "$CFG_PATH" --launcher local --run_root "$RUN_ROOT" \
+setsid python -m experimentation.run "$CFG_PATH" --launcher local --run_root "$RUN_ROOT" \
     > "$LOGDIR/run1-${SLURM_JOB_ID:-manual}.log" 2>&1 &
 RUN1_PID=$!
 echo "run1 pid (session/process-group leader)=$RUN1_PID"
@@ -370,9 +370,9 @@ tail -n 40 "$LOGDIR/run1-${SLURM_JOB_ID:-manual}.log"
 # confirm from the log it continues from the saved step.
 ##############################################################################
 echo "############################################################"
-echo "### STEP 5: python -m koopman_lm.run $CFG_PATH --launcher local --resume"
+echo "### STEP 5: python -m experimentation.run $CFG_PATH --launcher local --resume"
 echo "############################################################"
-python -m koopman_lm.run "$CFG_PATH" --launcher local --run_root "$RUN_ROOT" --resume \
+python -m experimentation.run "$CFG_PATH" --launcher local --run_root "$RUN_ROOT" --resume \
     2>&1 | tee "$LOGDIR/run2-resume-${SLURM_JOB_ID:-manual}.log"
 RUN2_STATUS=${PIPESTATUS[0]}
 echo "STATUS step5_run2_resume=$RUN2_STATUS"
@@ -422,7 +422,7 @@ grep "^step " "$LOGDIR/run2-resume-${SLURM_JOB_ID:-manual}.log" || echo "(no ste
 ##############################################################################
 # STEP 8: evaluate the final checkpoint, hand-wrap in the §4.2 envelope.
 #
-# evaluate.py is NOT wired to koopman_lm.run.eval_result yet (it takes
+# evaluate.py is NOT wired to experimentation.run.eval_result yet (it takes
 # --output as a bare path and writes raw metrics, not the run_id/task/
 # checkpoint/git_commit/created_at envelope, and does not know about
 # spec.yaml/run_dir at all) -- that integration is future work, not part of
@@ -437,7 +437,7 @@ FINAL_CKPT="$RUN_DIR/final/model.pt"
 RAW_EVAL_OUT="$RUN_DIR/eval/.raw_fineweb_ppl.json"
 mkdir -p "$RUN_DIR/eval"
 if [ -f "$FINAL_CKPT" ]; then
-    python -m koopman_lm.evaluation.evaluate \
+    python -m experimentation.evaluation.evaluate \
         --checkpoint "$FINAL_CKPT" \
         --model_size "$RUN_DIR/model_config.json" \
         --tokenizer "$TOKENIZER" \
@@ -456,7 +456,7 @@ if [ "$EVAL_STATUS" -eq 0 ] && [ -f "$RAW_EVAL_OUT" ]; then
     python -c "
 import json
 import yaml
-from koopman_lm.run.eval_result import write_result
+from experimentation.run.eval_result import write_result
 
 raw = json.load(open('$RAW_EVAL_OUT'))
 spec = yaml.safe_load(open('$RUN_DIR/spec.yaml'))
@@ -492,7 +492,7 @@ echo "step8_evaluate                  = $EVAL_STATUS"
 echo "step8_wrap_envelope             = $WRAP_STATUS"
 echo "RUN_DIR = $RUN_DIR"
 echo ""
-echo "FINDINGS (bugs hit and fixed in koopman_lm/run/launch.py, a file this"
+echo "FINDINGS (bugs hit and fixed in experimentation/run/launch.py, a file this"
 echo "agent owns per the task's file-ownership list -- see git log):"
 echo "  1. build_train_argv omitted --save_steps, leaving train.py's CLI"
 echo "     default (5000) in force; any RunSpec with max_steps < 5000 (e.g."
@@ -507,7 +507,7 @@ echo "     50m-e2e-gpu-smoke run, job 415208's run2-resume log, under"
 echo "     ska_backend=pytorch too -- not CUDA-kernel-specific). Fixed by"
 echo "     mirroring scripts/pretrain.sh's already-proven-safe"
 echo "     --no_compile --no_gradient_checkpointing for every launch."
-echo "  3. evaluate.py is not wired to koopman_lm.run.eval_result (§4.2's"
+echo "  3. evaluate.py is not wired to experimentation.run.eval_result (§4.2's"
 echo "     envelope + <run_dir>/eval/<checkpoint>/<task>.json layout) --"
 echo "     this job hand-wraps its raw --output JSON via write_result()"
 echo "     instead of modifying evaluate.py itself (out of this job's"

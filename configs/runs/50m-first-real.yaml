@@ -1,9 +1,9 @@
-# The repo's first genuinely real training run through koopman_lm/run/,
+# The repo's first genuinely real training run through experimentation/run/,
 # on a real 100M-token FineWeb-Edu shard, with ska_backend left at
 # configs/50m.yaml's own value (cuda_prefix -- the fused CUDA prefix-scan
 # kernel). model: is configs/50m.yaml inlined with max_seq_len overridden
 # to 2048 (there is no field-level override of a registry model name yet,
-# see koopman_lm/run/resolve.py:_resolve_model). data.n_tokens is the
+# see experimentation/run/resolve.py:_resolve_model). data.n_tokens is the
 # ACTUAL count /scratch/m000151-pm06/jkli/fineweb_small_train/meta.json recorded (pretokenize.py's
 # per-document overshoot makes the exact figure only knowable after
 # tokenizing -- see scripts/first_real_run.sbatch step 2). Generated and

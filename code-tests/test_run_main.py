@@ -1,4 +1,4 @@
-"""python -m koopman_lm.run <spec.yaml>: the full orchestration order (§3.4) --
+"""python -m experimentation.run <spec.yaml>: the full orchestration order (§3.4) --
 resolve -> verify data -> materialize spec.yaml + attempt record -> hand off
 to a Launcher. Always invoked with --dry_run so no real training subprocess
 or GPU is ever touched.
@@ -20,7 +20,7 @@ def _pretend_clean_tree(monkeypatch):
     tests exercise orchestration, not the state of the developer's actual
     working tree at test time, so default to "clean" here; the tests that
     specifically cover dirty-tree behavior override this explicitly."""
-    monkeypatch.setattr("koopman_lm.run.__main__.check_git_clean",
+    monkeypatch.setattr("experimentation.run.__main__.check_git_clean",
                          lambda allow_dirty: False)
 
 
@@ -54,14 +54,14 @@ def _write_shard_run_spec(tmp_path):
 
 
 def test_main_dry_run_materializes_and_appends_one_attempt(tmp_path):
-    from koopman_lm.run.__main__ import main
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.run.resolve import resolve_run_spec
+    from experimentation.run.__main__ import main
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.resolve import resolve_run_spec
 
     spec_path = _write_shard_run_spec(tmp_path)
     run_root = tmp_path / "runs"
     cmd = main([str(spec_path), "--run_root", str(run_root), "--dry_run"])
-    assert cmd[1:3] == ["-m", "koopman_lm.training.train"]
+    assert cmd[1:3] == ["-m", "experimentation.training.train"]
 
     spec = resolve_run_spec(spec_path)
     run_dir = run_dir_path(run_root, spec)
@@ -78,7 +78,7 @@ def test_main_resume_flag_reaches_train_py_argv(tmp_path):
     isolation (as the rest of this suite historically did) cannot catch a
     dropped flag between them; only composing the real entry point can.
     """
-    from koopman_lm.run.__main__ import main
+    from experimentation.run.__main__ import main
 
     spec_path = _write_shard_run_spec(tmp_path)
     run_root = tmp_path / "runs"
@@ -92,9 +92,9 @@ def test_main_resume_flag_reaches_train_py_argv(tmp_path):
 
 
 def test_main_dry_run_twice_appends_a_second_attempt_without_conflict(tmp_path):
-    from koopman_lm.run.__main__ import main
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.run.resolve import resolve_run_spec
+    from experimentation.run.__main__ import main
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.resolve import resolve_run_spec
 
     spec_path = _write_shard_run_spec(tmp_path)
     run_root = tmp_path / "runs"
@@ -108,10 +108,10 @@ def test_main_dry_run_twice_appends_a_second_attempt_without_conflict(tmp_path):
 
 
 def test_main_refuses_to_clobber_a_finished_run(tmp_path):
-    from koopman_lm.run.__main__ import main
-    from koopman_lm.run.artifacts import RunDirConflictError
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.run.resolve import resolve_run_spec
+    from experimentation.run.__main__ import main
+    from experimentation.run.artifacts import RunDirConflictError
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.resolve import resolve_run_spec
 
     spec_path = _write_shard_run_spec(tmp_path)
     run_root = tmp_path / "runs"
@@ -129,10 +129,10 @@ def test_main_refuses_to_clobber_a_finished_run(tmp_path):
 
 
 def test_main_verifies_data_before_creating_the_run_dir(tmp_path):
-    from koopman_lm.run.__main__ import main
-    from koopman_lm.run.data_verify import DataVerificationError
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.run.resolve import resolve_run_spec
+    from experimentation.run.__main__ import main
+    from experimentation.run.data_verify import DataVerificationError
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.resolve import resolve_run_spec
 
     spec_path = _write_shard_run_spec(tmp_path)
     # Corrupt the shard's meta.json after writing the spec so verification fails.
@@ -151,10 +151,10 @@ def test_main_verifies_data_before_creating_the_run_dir(tmp_path):
 
 
 def test_main_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path):
-    """Same regression as koopman_lm.sweep: a dry run must be inspectable
+    """Same regression as experimentation.sweep: a dry run must be inspectable
     before the data shard exists (typically from a login node). verify_shard
     raising DataVerificationError on a missing meta.json used to turn
-    `python -m koopman_lm.run --dry_run` into a nonzero exit. Exercised as a
+    `python -m experimentation.run --dry_run` into a nonzero exit. Exercised as a
     real subprocess so the actual CLI exit code is checked."""
     shard_dir = tmp_path / "shard_not_pretokenized_yet"
     spec_path = tmp_path / "spec.yaml"
@@ -179,7 +179,7 @@ def test_main_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path)
     run_root = tmp_path / "runs"
 
     proc = subprocess.run(
-        [sys.executable, "-m", "koopman_lm.run", str(spec_path),
+        [sys.executable, "-m", "experimentation.run", str(spec_path),
          "--run_root", str(run_root), "--dry_run", "--allow-dirty"],
         capture_output=True, text=True, timeout=60,
     )
@@ -194,16 +194,16 @@ def test_main_refuses_to_launch_from_a_dirty_tree(tmp_path, monkeypatch):
     """A dirty working tree must block launch before anything is
     materialized -- the default is refusal, so launching uncommitted is a
     deliberate act (--allow-dirty) rather than an accident."""
-    from koopman_lm.run.__main__ import main
-    from koopman_lm.run.resolve import DirtyTreeError
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.run.resolve import resolve_run_spec
+    from experimentation.run.__main__ import main
+    from experimentation.run.resolve import DirtyTreeError
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.resolve import resolve_run_spec
 
     spec_path = _write_shard_run_spec(tmp_path)
     run_root = tmp_path / "runs"
-    monkeypatch.setattr("koopman_lm.run.__main__.check_git_clean",
+    monkeypatch.setattr("experimentation.run.__main__.check_git_clean",
                          lambda allow_dirty: (_ for _ in ()).throw(
-                             DirtyTreeError("dirty: koopman_lm/run/resolve.py")))
+                             DirtyTreeError("dirty: experimentation/run/resolve.py")))
 
     with pytest.raises(DirtyTreeError):
         main([str(spec_path), "--run_root", str(run_root), "--dry_run"])
@@ -218,13 +218,13 @@ def test_main_allow_dirty_records_dirty_true_in_spec_yaml(tmp_path, monkeypatch)
     bypass the check -- the resulting spec.yaml records dirty: true."""
     import yaml
 
-    from koopman_lm.run.__main__ import main
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.run.resolve import resolve_run_spec
+    from experimentation.run.__main__ import main
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.resolve import resolve_run_spec
 
     spec_path = _write_shard_run_spec(tmp_path)
     run_root = tmp_path / "runs"
-    monkeypatch.setattr("koopman_lm.run.__main__.check_git_clean",
+    monkeypatch.setattr("experimentation.run.__main__.check_git_clean",
                          lambda allow_dirty: True)
 
     main([str(spec_path), "--run_root", str(run_root), "--dry_run", "--allow-dirty"])

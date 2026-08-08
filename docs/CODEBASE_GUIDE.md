@@ -86,14 +86,14 @@ scripts/train_50m.sh
        │     ...done once in the parent process, so DDP ranks don't each rebuild it
        │
        ├─ 3. tokenize FineWeb-Edu if the shard is absent
-       │     python -m koopman_lm.training.data.pretokenize
+       │     python -m experimentation.training.data.pretokenize
        │       --fineweb HuggingFaceFW/fineweb-edu --fineweb_subset sample-10BT
        │       --tokenizer NousResearch/Llama-2-7b-hf   (32k vocab, ungated mirror)
        │     -> $DATA_ROOT/fineweb_50m_quality_train/train.bin
        │     val shard skips past the train docs so there's no overlap
        │
        └─ 4. train
-             python -m koopman_lm.training.train \
+             python -m experimentation.training.train \
                --model_type koopman --model_size 50m_prefix_scan \
                --data_dir .../train --max_seq_len 2048 \
                --per_device_train_batch_size 16 --gradient_accumulation_steps 6 \
@@ -109,10 +109,10 @@ scripts/train_50m.sh
 ### Then evaluation (pretrain.sh prints these at the end)
 
 ```bash
-python -m koopman_lm.evaluation.evaluate --checkpoint $CKPT --model_size 50m \
+python -m experimentation.evaluation.evaluate --checkpoint $CKPT --model_size 50m \
     --mode fineweb_ppl --held_out_data_dir $VAL_DIR --output $RUN_DIR/fineweb_ppl.json
 
-python -m koopman_lm.evaluation.lm_harness_eval --model koopman \
+python -m experimentation.evaluation.lm_harness_eval --model koopman \
     --model_args checkpoint=$CKPT,model_size=50m,max_length=2048 \
     --tasks hellaswag,piqa,arc_easy,arc_challenge,winogrande,lambada_openai \
     --batch_size 8 --device cuda
@@ -310,6 +310,6 @@ dd48a0f  Unify the NIAH generator + scorers into evaluation/tasks/niah.py
 34fc331  Dedup lm_harness_eval.py's checkpoint-loading via evaluation/loader.py
 ```
 
-Those touch `koopman_lm/evaluation/`, which this reorg does not move, so they
+Those touch `experimentation/evaluation/`, which this reorg does not move, so they
 should replay with far less friction than the module commits would have. Close
 the PRs now; delete the branches only after those four are cherry-picked.

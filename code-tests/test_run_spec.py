@@ -11,7 +11,7 @@ pytestmark = pytest.mark.correctness
 
 
 def test_shard_data_spec_round_trips_fields():
-    from koopman_lm.run.spec import ShardDataSpec
+    from experimentation.run.spec import ShardDataSpec
 
     d = ShardDataSpec(
         shard_dir="/scratch/data/fineweb_50m_train",
@@ -27,7 +27,7 @@ def test_shard_data_spec_round_trips_fields():
 
 
 def test_shard_data_spec_rejects_missing_fields():
-    from koopman_lm.run.spec import ShardDataSpec
+    from experimentation.run.spec import ShardDataSpec
 
     with pytest.raises(ValueError):
         ShardDataSpec(shard_dir="", tokenizer="t", mix={"fineweb": 1.0}, n_tokens=10)
@@ -38,7 +38,7 @@ def test_shard_data_spec_rejects_missing_fields():
 
 
 def test_synthetic_data_spec_validates_generator_name():
-    from koopman_lm.run.spec import SyntheticDataSpec
+    from experimentation.run.spec import SyntheticDataSpec
 
     d = SyntheticDataSpec(generator="mqar", params={"num_kv_pairs": 8})
     assert d.kind == "synthetic"
@@ -47,7 +47,7 @@ def test_synthetic_data_spec_validates_generator_name():
 
 
 def test_data_spec_from_dict_dispatches_on_kind():
-    from koopman_lm.run.spec import (
+    from experimentation.run.spec import (
         ShardDataSpec, SyntheticDataSpec, data_spec_from_dict,
     )
 
@@ -67,7 +67,7 @@ def test_data_spec_from_dict_dispatches_on_kind():
 
 
 def test_optim_spec_validates_batch_divisibility():
-    from koopman_lm.run.spec import OptimSpec
+    from experimentation.run.spec import OptimSpec
 
     ok = OptimSpec(lr=4e-4, warmup_steps=300, max_steps=15000,
                     effective_batch=96, per_device_batch_size=16)
@@ -78,7 +78,7 @@ def test_optim_spec_validates_batch_divisibility():
 
 
 def test_optim_spec_rejects_non_numeric_lr():
-    from koopman_lm.run.spec import OptimSpec
+    from experimentation.run.spec import OptimSpec
 
     # The exact PyYAML footgun: yaml.safe_load("lr: 4e-4") parses to the
     # STRING "4e-4" (no decimal point in the mantissa), not a float.
@@ -87,7 +87,7 @@ def test_optim_spec_rejects_non_numeric_lr():
 
 
 def test_runtime_spec_batch_defaults_are_valid():
-    from koopman_lm.run.spec import RuntimeSpec
+    from experimentation.run.spec import RuntimeSpec
 
     rt = RuntimeSpec()
     assert rt.partition == "batch"
@@ -97,28 +97,28 @@ def test_runtime_spec_batch_defaults_are_valid():
 
 
 def test_runtime_spec_rejects_batch_with_default_account():
-    from koopman_lm.run.spec import RuntimeSpec
+    from experimentation.run.spec import RuntimeSpec
 
     with pytest.raises(ValueError):
         RuntimeSpec(partition="batch", account="marlowe-m000151")
 
 
 def test_runtime_spec_rejects_batch_with_wrong_qos():
-    from koopman_lm.run.spec import RuntimeSpec
+    from experimentation.run.spec import RuntimeSpec
 
     with pytest.raises(ValueError):
         RuntimeSpec(partition="batch", qos="normal")
 
 
 def test_runtime_spec_rejects_unknown_partition():
-    from koopman_lm.run.spec import RuntimeSpec
+    from experimentation.run.spec import RuntimeSpec
 
     with pytest.raises(ValueError):
         RuntimeSpec(partition="not_a_real_partition")
 
 
 def test_runtime_spec_hero_and_preempt_allowed():
-    from koopman_lm.run.spec import RuntimeSpec
+    from experimentation.run.spec import RuntimeSpec
 
     # hero/preempt have no stated account/qos constraint -- only 'batch' does.
     RuntimeSpec(partition="hero")
@@ -127,7 +127,7 @@ def test_runtime_spec_hero_and_preempt_allowed():
 
 def test_run_spec_type_checks_its_fields():
     from koopman_lm.config import build_config
-    from koopman_lm.run.spec import (
+    from experimentation.run.spec import (
         OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec,
     )
 
@@ -150,7 +150,7 @@ def test_run_spec_type_checks_its_fields():
 def _make_spec(seed=42, lr=4e-4, partition="batch", account="marlowe-m000151-pm06",
                 qos="medium", workers=4, ddp=False):
     from koopman_lm.config import build_config
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
     return RunSpec(
         name="50m-mqar-smoke",
@@ -163,7 +163,7 @@ def _make_spec(seed=42, lr=4e-4, partition="batch", account="marlowe-m000151-pm0
 
 
 def test_group_id_and_run_id_are_stable_hex8():
-    from koopman_lm.run.spec import group_id, run_id
+    from experimentation.run.spec import group_id, run_id
 
     spec = _make_spec()
     g1, g2 = group_id(spec), group_id(_make_spec())
@@ -173,7 +173,7 @@ def test_group_id_and_run_id_are_stable_hex8():
 
 
 def test_run_id_changes_with_seed_but_group_id_does_not():
-    from koopman_lm.run.spec import group_id, run_id
+    from experimentation.run.spec import group_id, run_id
 
     a, b = _make_spec(seed=42), _make_spec(seed=1337)
     assert group_id(a) == group_id(b)
@@ -181,14 +181,14 @@ def test_run_id_changes_with_seed_but_group_id_does_not():
 
 
 def test_group_id_changes_with_scientific_inputs():
-    from koopman_lm.run.spec import group_id
+    from experimentation.run.spec import group_id
 
     a, b = _make_spec(lr=4e-4), _make_spec(lr=3e-4)
     assert group_id(a) != group_id(b)
 
 
 def test_group_id_and_run_id_ignore_execution_details():
-    from koopman_lm.run.spec import group_id, run_id
+    from experimentation.run.spec import group_id, run_id
 
     a = _make_spec(partition="batch", account="marlowe-m000151-pm06", qos="medium", workers=4)
     b = _make_spec(partition="hero", account="marlowe-m000151-pm06", qos="medium", workers=16)
@@ -197,7 +197,7 @@ def test_group_id_and_run_id_ignore_execution_details():
 
 
 def test_run_dir_path_layout():
-    from koopman_lm.run.spec import attempt_dir_name, group_id, run_dir_name, run_dir_path, run_id
+    from experimentation.run.spec import attempt_dir_name, group_id, run_dir_name, run_dir_path, run_id
 
     spec = _make_spec()
     path = run_dir_path("/scratch/runs", spec)

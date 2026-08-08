@@ -25,10 +25,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from koopman_lm.training.data.dataset import MemmapPackedDataset
-from koopman_lm.training.data.pretokenize import write_synthetic_corpus
-from koopman_lm.training.repro import seed_everything
-from koopman_lm.training.resume import (
+from experimentation.training.data.dataset import MemmapPackedDataset
+from experimentation.training.data.pretokenize import write_synthetic_corpus
+from experimentation.training.repro import seed_everything
+from experimentation.training.resume import (
     apply_resume_state, epoch_permutation, load_resume_state,
     resume_indices, save_resume_state,
 )
@@ -145,7 +145,7 @@ def test_interrupted_and_resumed_run_matches_uninterrupted_run(tmp_path):
                        optimizer=opt_b, scheduler=sched_b)
 
     # simulate the kill: throw away every in-memory object and rebuild fresh,
-    # exactly as a new `python -m koopman_lm.training.train --resume` process would
+    # exactly as a new `python -m experimentation.training.train --resume` process would
     del model_b, opt_b, sched_b
 
     model_c = _StandInLM()  # fresh init -- immediately overwritten by the checkpoint

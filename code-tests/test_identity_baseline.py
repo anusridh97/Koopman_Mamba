@@ -41,8 +41,8 @@ def test_config_hash_unchanged_for_every_registry_config():
 @pytest.mark.parametrize("rel", sorted(BASELINE["run_spec"]))
 def test_run_spec_identity_unchanged(rel):
     from koopman_lm.config import config_hash
-    from koopman_lm.run.resolve import resolve_run_spec
-    from koopman_lm.run.spec import group_id, run_id
+    from experimentation.run.resolve import resolve_run_spec
+    from experimentation.run.spec import group_id, run_id
 
     spec = resolve_run_spec(REPO_ROOT / rel)
     assert {
@@ -57,8 +57,8 @@ def test_sweep_identity_and_cell_expansion_unchanged(rel):
     """Covers the sweep grid too: a cell's run_id encodes which axis values it
     got, so this catches a regression in expand_cells' override application as
     well as one in the hash itself."""
-    from koopman_lm.run.spec import group_id, run_id
-    from koopman_lm.sweep.spec import expand_cells, load_sweep_spec, sweep_id
+    from experimentation.run.spec import group_id, run_id
+    from experimentation.sweep.spec import expand_cells, load_sweep_spec, sweep_id
 
     expected = BASELINE["sweep"][rel]
     sweep = load_sweep_spec(REPO_ROOT / rel)

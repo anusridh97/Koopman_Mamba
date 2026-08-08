@@ -20,7 +20,7 @@ def _draw_everything():
 
 
 def test_rng_roundtrip_reproduces_subsequent_draws():
-    from koopman_lm.training.resume import capture_rng_state, restore_rng_state
+    from experimentation.training.resume import capture_rng_state, restore_rng_state
 
     random.seed(123)
     np.random.seed(123)
@@ -39,7 +39,7 @@ def test_rng_roundtrip_reproduces_subsequent_draws():
 
 
 def test_capture_rng_state_has_expected_keys():
-    from koopman_lm.training.resume import capture_rng_state
+    from experimentation.training.resume import capture_rng_state
 
     state = capture_rng_state()
     assert set(state) == {"python", "numpy", "torch", "torch_cuda"}
@@ -54,9 +54,9 @@ def test_epoch_permutation_matches_a_live_random_sampler(tmp_path):
     (seed, epoch) alone."""
     from torch.utils.data import RandomSampler
 
-    from koopman_lm.training.data.pretokenize import write_synthetic_corpus
-    from koopman_lm.training.data.dataset import MemmapPackedDataset
-    from koopman_lm.training.resume import epoch_permutation
+    from experimentation.training.data.pretokenize import write_synthetic_corpus
+    from experimentation.training.data.dataset import MemmapPackedDataset
+    from experimentation.training.resume import epoch_permutation
 
     data_dir = write_synthetic_corpus(str(tmp_path / "data"), n_tokens=20_000,
                                        vocab_size=64, seed=0)
@@ -76,7 +76,7 @@ def test_epoch_permutation_matches_a_live_random_sampler(tmp_path):
 
 
 def test_resume_indices_is_the_tail_of_the_epoch_permutation():
-    from koopman_lm.training.resume import epoch_permutation, resume_indices
+    from experimentation.training.resume import epoch_permutation, resume_indices
 
     full = epoch_permutation(100, seed=7, epoch=3)
     tail = resume_indices(100, seed=7, epoch=3, samples_consumed=40)
@@ -95,7 +95,7 @@ def _tiny_optimizer_and_scheduler():
 
 
 def test_resume_state_round_trips_optimizer_scheduler_and_position(tmp_path):
-    from koopman_lm.training.resume import save_resume_state, load_resume_state, apply_resume_state
+    from experimentation.training.resume import save_resume_state, load_resume_state, apply_resume_state
 
     model, opt, sched = _tiny_optimizer_and_scheduler()
     x = torch.randn(2, 4)
@@ -135,7 +135,7 @@ def test_resume_state_round_trips_optimizer_scheduler_and_position(tmp_path):
 
 
 def test_apply_resume_state_restores_rng_by_default(tmp_path):
-    from koopman_lm.training.resume import save_resume_state, load_resume_state, apply_resume_state
+    from experimentation.training.resume import save_resume_state, load_resume_state, apply_resume_state
 
     _, opt, sched = _tiny_optimizer_and_scheduler()
     random.seed(9); np.random.seed(9); torch.manual_seed(9)

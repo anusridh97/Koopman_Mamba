@@ -1,8 +1,8 @@
 # Example sweep: ska_rank x lr x seed over the 50m/3B base recipe.
 #
-# This is the ONLY place this grid is declared. `python -m koopman_lm.sweep`
+# This is the ONLY place this grid is declared. `python -m experimentation.sweep`
 # expands it into one materialized RunSpec/spec.yaml per cell (see
-# koopman_lm/sweep/spec.py), and koopman_lm/run/slurm.py's array job indexes
+# experimentation/sweep/spec.py), and experimentation/run/slurm.py's array job indexes
 # into that materialized list for --launcher slurm -- bash never sees
 # ska_rank, lr, or seed. This replaces the pattern in the deleted
 # scripts/slurm_array.sh, which hardcoded MODEL_TYPES/KV_PAIRS/GAPS in bash

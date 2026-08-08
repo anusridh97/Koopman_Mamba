@@ -10,7 +10,7 @@ pytestmark = pytest.mark.correctness
 
 
 def test_axes_only_is_valid():
-    from koopman_lm.sweep.spec import SweepSpec
+    from experimentation.sweep.spec import SweepSpec
 
     s = SweepSpec(name="x", base="configs/runs/50m-fineweb-3b.yaml",
                   axes={"optim.lr": [1e-4, 2e-4]})
@@ -19,7 +19,7 @@ def test_axes_only_is_valid():
 
 
 def test_cells_only_is_valid():
-    from koopman_lm.sweep.spec import SweepSpec
+    from experimentation.sweep.spec import SweepSpec
 
     s = SweepSpec(name="x", base="b.yaml",
                   cells=[{"optim.lr": 1e-4}, {"optim.lr": 2e-4}])
@@ -28,7 +28,7 @@ def test_cells_only_is_valid():
 
 
 def test_axes_and_cells_together_is_rejected():
-    from koopman_lm.sweep.spec import SweepSpec
+    from experimentation.sweep.spec import SweepSpec
 
     with pytest.raises(ValueError, match="not both"):
         SweepSpec(name="x", base="b.yaml", axes={"optim.lr": [1e-4]},
@@ -36,14 +36,14 @@ def test_axes_and_cells_together_is_rejected():
 
 
 def test_neither_axes_nor_cells_is_rejected():
-    from koopman_lm.sweep.spec import SweepSpec
+    from experimentation.sweep.spec import SweepSpec
 
     with pytest.raises(ValueError, match="axes"):
         SweepSpec(name="x", base="b.yaml")
 
 
 def test_missing_name_or_base_is_rejected():
-    from koopman_lm.sweep.spec import SweepSpec
+    from experimentation.sweep.spec import SweepSpec
 
     with pytest.raises(ValueError):
         SweepSpec(name="", base="b.yaml", axes={"optim.lr": [1e-4]})
@@ -52,7 +52,7 @@ def test_missing_name_or_base_is_rejected():
 
 
 def test_max_concurrent_must_be_positive():
-    from koopman_lm.sweep.spec import SweepSpec
+    from experimentation.sweep.spec import SweepSpec
 
     with pytest.raises(ValueError):
         SweepSpec(name="x", base="b.yaml", axes={"optim.lr": [1e-4]},
@@ -62,7 +62,7 @@ def test_max_concurrent_must_be_positive():
 
 
 def test_load_sweep_spec_reads_yaml(tmp_path):
-    from koopman_lm.sweep.spec import load_sweep_spec
+    from experimentation.sweep.spec import load_sweep_spec
 
     path = tmp_path / "s.yaml"
     path.write_text(
@@ -86,7 +86,7 @@ def test_load_sweep_spec_reads_yaml(tmp_path):
 
 
 def test_load_sweep_spec_defaults_exclude_to_empty_list(tmp_path):
-    from koopman_lm.sweep.spec import load_sweep_spec
+    from experimentation.sweep.spec import load_sweep_spec
 
     path = tmp_path / "s.yaml"
     path.write_text("name: x\nbase: b.yaml\naxes:\n  optim.lr: [1.0e-4]\n")
@@ -96,7 +96,7 @@ def test_load_sweep_spec_defaults_exclude_to_empty_list(tmp_path):
 
 
 def test_sweep_id_is_stable_and_content_sensitive():
-    from koopman_lm.sweep.spec import SweepSpec, sweep_id
+    from experimentation.sweep.spec import SweepSpec, sweep_id
 
     a = SweepSpec(name="x", base="b.yaml", axes={"optim.lr": [1e-4, 2e-4]})
     b = SweepSpec(name="x", base="b.yaml", axes={"optim.lr": [1e-4, 2e-4]})

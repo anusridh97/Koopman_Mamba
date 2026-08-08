@@ -1,4 +1,4 @@
-"""Pure-Python tests for contrastive extraction (koopman_lm/retrieval/data.py).
+"""Pure-Python tests for contrastive extraction (experimentation/retrieval/data.py).
 
 Torch-free: runs anywhere. Pins the (query, positive, hard-negative) extraction
 each retrieval source depends on, and the weighted source sampler.
@@ -7,7 +7,7 @@ import random
 
 import pytest
 
-from koopman_lm.retrieval.data import (
+from experimentation.retrieval.data import (
     hotpot_to_pair, musique_to_pair, wiki_to_pairs, extract_pairs, sample_source,
 )
 

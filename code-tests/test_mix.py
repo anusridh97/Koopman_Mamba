@@ -7,7 +7,7 @@ registry defaults, and malformed --sources entries raise.
 """
 import pytest
 
-from koopman_lm.training.data.mix import (
+from experimentation.training.data.mix import (
     SOURCE_SPECS, parse_sources, normalize_mix, resolve_specs, interleave_quota,
 )
 

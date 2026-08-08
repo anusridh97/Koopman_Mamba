@@ -17,8 +17,8 @@ def _write(path, text):
 
 
 def test_resolve_run_spec_follows_extends_chain(tmp_path):
-    from koopman_lm.run.resolve import resolve_run_spec
-    from koopman_lm.run.spec import SyntheticDataSpec
+    from experimentation.run.resolve import resolve_run_spec
+    from experimentation.run.spec import SyntheticDataSpec
 
     _write(tmp_path / "base.yaml", """
         optim:
@@ -54,7 +54,7 @@ def test_resolve_run_spec_follows_extends_chain(tmp_path):
 
 
 def test_resolve_run_spec_rejects_pyyaml_lr_footgun(tmp_path):
-    from koopman_lm.run.resolve import resolve_run_spec
+    from experimentation.run.resolve import resolve_run_spec
 
     _write(tmp_path / "bad.yaml", """
         name: bad-lr
@@ -69,8 +69,8 @@ def test_resolve_run_spec_rejects_pyyaml_lr_footgun(tmp_path):
 
 def test_to_flat_dict_inlines_the_model_and_has_no_extends_key():
     from koopman_lm.config import build_config
-    from koopman_lm.run.resolve import to_flat_dict
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+    from experimentation.run.resolve import to_flat_dict
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
     spec = RunSpec(
         name="x", model=build_config("50m"),
@@ -86,8 +86,8 @@ def test_to_flat_dict_inlines_the_model_and_has_no_extends_key():
 
 def test_materialize_writes_spec_yaml_with_provenance(tmp_path):
     from koopman_lm.config import build_config
-    from koopman_lm.run.resolve import load_materialized_spec, materialize
-    from koopman_lm.run.spec import (
+    from experimentation.run.resolve import load_materialized_spec, materialize
+    from experimentation.run.spec import (
         OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec, run_id,
     )
 
@@ -120,8 +120,8 @@ def test_materialize_writes_code_id_distinct_from_run_id(tmp_path):
     must be recoverable from spec.yaml so two runs that collide on run_id but
     ran different code can be told apart."""
     from koopman_lm.config import build_config
-    from koopman_lm.run.resolve import git_commit, materialize
-    from koopman_lm.run.spec import (
+    from experimentation.run.resolve import git_commit, materialize
+    from experimentation.run.spec import (
         OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec, run_id,
     )
 
@@ -140,12 +140,12 @@ def test_materialize_writes_code_id_distinct_from_run_id(tmp_path):
 
 
 def test_materialize_extra_kwarg_merges_additional_top_level_fields(tmp_path):
-    """koopman_lm.sweep stamps sweep_id/sweep_name onto each cell's
+    """experimentation.sweep stamps sweep_id/sweep_name onto each cell's
     spec.yaml through this kwarg, without duplicating materialize()'s own
     provenance/atomic-write logic."""
     from koopman_lm.config import build_config
-    from koopman_lm.run.resolve import materialize
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+    from experimentation.run.resolve import materialize
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
     spec = RunSpec(
         name="x", model=build_config("50m"),
@@ -162,8 +162,8 @@ def test_materialize_extra_kwarg_merges_additional_top_level_fields(tmp_path):
 
 def test_materialize_without_extra_omits_sweep_fields(tmp_path):
     from koopman_lm.config import build_config
-    from koopman_lm.run.resolve import materialize
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+    from experimentation.run.resolve import materialize
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
     spec = RunSpec(
         name="x", model=build_config("50m"),
@@ -179,9 +179,9 @@ def test_materialize_without_extra_omits_sweep_fields(tmp_path):
 
 def test_load_raw_spec_follows_extends_chain(tmp_path):
     """Public wrapper around the same _load_raw_chain resolve_run_spec uses
-    internally -- koopman_lm.sweep needs the raw (pre-RunSpec) dict to apply
+    internally -- experimentation.sweep needs the raw (pre-RunSpec) dict to apply
     per-cell overrides onto a base spec's sections."""
-    from koopman_lm.run.resolve import load_raw_spec
+    from experimentation.run.resolve import load_raw_spec
 
     _write(tmp_path / "base.yaml", """
         optim:
@@ -200,7 +200,7 @@ def test_load_raw_spec_follows_extends_chain(tmp_path):
 
 
 def test_resolve_model_config_accepts_registry_name_and_inline_dict():
-    from koopman_lm.run.resolve import resolve_model_config
+    from experimentation.run.resolve import resolve_model_config
 
     cfg = resolve_model_config("50m")
     assert cfg.d_model == 384
@@ -222,11 +222,11 @@ def _fake_run(stdout):
 
 
 def test_git_dirty_paths_parses_porcelain_output(monkeypatch):
-    from koopman_lm.run.resolve import git_dirty_paths
+    from experimentation.run.resolve import git_dirty_paths
 
     monkeypatch.setattr(
-        "koopman_lm.run.resolve.subprocess.run",
-        _fake_run(" M koopman_lm/run/resolve.py\n?? scratch/junk.txt\n"))
+        "experimentation.run.resolve.subprocess.run",
+        _fake_run(" M experimentation/run/resolve.py\n?? scratch/junk.txt\n"))
     paths = git_dirty_paths()
     assert len(paths) == 2
     assert any("resolve.py" in p for p in paths)
@@ -234,28 +234,28 @@ def test_git_dirty_paths_parses_porcelain_output(monkeypatch):
 
 
 def test_git_dirty_paths_empty_when_clean(monkeypatch):
-    from koopman_lm.run.resolve import git_dirty_paths
+    from experimentation.run.resolve import git_dirty_paths
 
-    monkeypatch.setattr("koopman_lm.run.resolve.subprocess.run", _fake_run(""))
+    monkeypatch.setattr("experimentation.run.resolve.subprocess.run", _fake_run(""))
     assert git_dirty_paths() == []
 
 
 def test_check_git_clean_raises_and_lists_paths_when_dirty(monkeypatch):
-    from koopman_lm.run.resolve import DirtyTreeError, check_git_clean
+    from experimentation.run.resolve import DirtyTreeError, check_git_clean
 
     monkeypatch.setattr(
-        "koopman_lm.run.resolve.subprocess.run",
-        _fake_run(" M koopman_lm/run/resolve.py\n"))
+        "experimentation.run.resolve.subprocess.run",
+        _fake_run(" M experimentation/run/resolve.py\n"))
     with pytest.raises(DirtyTreeError, match="resolve.py"):
         check_git_clean(allow_dirty=False)
 
 
 def test_check_git_clean_allow_dirty_warns_and_returns_true(monkeypatch, capsys):
-    from koopman_lm.run.resolve import check_git_clean
+    from experimentation.run.resolve import check_git_clean
 
     monkeypatch.setattr(
-        "koopman_lm.run.resolve.subprocess.run",
-        _fake_run(" M koopman_lm/run/resolve.py\n"))
+        "experimentation.run.resolve.subprocess.run",
+        _fake_run(" M experimentation/run/resolve.py\n"))
     dirty = check_git_clean(allow_dirty=True)
     assert dirty is True
     out = capsys.readouterr().out
@@ -264,9 +264,9 @@ def test_check_git_clean_allow_dirty_warns_and_returns_true(monkeypatch, capsys)
 
 
 def test_check_git_clean_returns_false_when_clean(monkeypatch):
-    from koopman_lm.run.resolve import check_git_clean
+    from experimentation.run.resolve import check_git_clean
 
-    monkeypatch.setattr("koopman_lm.run.resolve.subprocess.run", _fake_run(""))
+    monkeypatch.setattr("experimentation.run.resolve.subprocess.run", _fake_run(""))
     assert check_git_clean(allow_dirty=False) is False
 
 
@@ -278,8 +278,8 @@ def test_load_materialized_spec_rejects_missing_model_field(tmp_path):
     import dataclasses
 
     from koopman_lm.config import KoopmanLMConfig, build_config
-    from koopman_lm.run.resolve import load_materialized_spec, to_flat_dict
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+    from experimentation.run.resolve import load_materialized_spec, to_flat_dict
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
     spec = RunSpec(
         name="x", model=build_config("50m"),
@@ -305,8 +305,8 @@ def test_load_materialized_spec_rejects_unknown_model_field(tmp_path):
     (e.g. a field that was renamed or removed) must raise rather than being
     silently ignored or crashing with an opaque TypeError."""
     from koopman_lm.config import build_config
-    from koopman_lm.run.resolve import load_materialized_spec, to_flat_dict
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+    from experimentation.run.resolve import load_materialized_spec, to_flat_dict
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
     spec = RunSpec(
         name="x", model=build_config("50m"),
@@ -328,8 +328,8 @@ def test_load_materialized_spec_rejects_unknown_model_field(tmp_path):
 
 def test_load_materialized_spec_accepts_exact_key_set(tmp_path):
     from koopman_lm.config import build_config
-    from koopman_lm.run.resolve import load_materialized_spec, materialize
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
+    from experimentation.run.resolve import load_materialized_spec, materialize
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
     spec = RunSpec(
         name="x", model=build_config("50m"),

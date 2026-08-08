@@ -1,7 +1,7 @@
-"""python -m koopman_lm.sweep <sweep.yaml> (§4.2/§4.3): expand -> materialize
-each cell exactly like a lone `python -m koopman_lm.run` launch would ->
-hand off to a Launcher. This is a NEW entry point (koopman_lm/sweep/), not a
-modification of koopman_lm/run/__main__.py.
+"""python -m experimentation.sweep <sweep.yaml> (§4.2/§4.3): expand -> materialize
+each cell exactly like a lone `python -m experimentation.run` launch would ->
+hand off to a Launcher. This is a NEW entry point (experimentation/sweep/), not a
+modification of experimentation/run/__main__.py.
 
 --dry_run is the GPU-free testing surface: it always prints the expanded
 cell list (with run_id) and still materializes spec.yaml/attempts.jsonl (so
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.correctness
 
 @pytest.fixture(autouse=True)
 def _pretend_clean_tree(monkeypatch):
-    monkeypatch.setattr("koopman_lm.sweep.__main__.check_git_clean",
+    monkeypatch.setattr("experimentation.sweep.__main__.check_git_clean",
                          lambda allow_dirty: False)
 
 
@@ -64,7 +64,7 @@ def _write_sweep(tmp_path, *, axes_yaml, max_concurrent=None):
 
 
 def test_dry_run_prints_every_cell_with_a_distinct_run_id(tmp_path, capsys):
-    from koopman_lm.sweep.__main__ import main
+    from experimentation.sweep.__main__ import main
 
     sweep_path = _write_sweep(tmp_path, axes_yaml=(
         "  model.ska_rank: [16, 24]\n"
@@ -78,10 +78,10 @@ def test_dry_run_prints_every_cell_with_a_distinct_run_id(tmp_path, capsys):
 
 
 def test_dry_run_materializes_spec_yaml_with_sweep_id_and_name(tmp_path):
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.sweep.__main__ import main
-    from koopman_lm.sweep.spec import expand_cells, load_sweep_spec
-    from koopman_lm.sweep.spec import sweep_id as compute_sweep_id
+    from experimentation.run.spec import run_dir_path
+    from experimentation.sweep.__main__ import main
+    from experimentation.sweep.spec import expand_cells, load_sweep_spec
+    from experimentation.sweep.spec import sweep_id as compute_sweep_id
 
     sweep_path = _write_sweep(tmp_path, axes_yaml="  optim.lr: [1.0e-4, 2.0e-4]\n")
     run_root = tmp_path / "runs"
@@ -99,9 +99,9 @@ def test_dry_run_materializes_spec_yaml_with_sweep_id_and_name(tmp_path):
 
 
 def test_skip_done_skips_cells_with_a_final_dir(tmp_path):
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.sweep.__main__ import main
-    from koopman_lm.sweep.spec import expand_cells, load_sweep_spec
+    from experimentation.run.spec import run_dir_path
+    from experimentation.sweep.__main__ import main
+    from experimentation.sweep.spec import expand_cells, load_sweep_spec
 
     sweep_path = _write_sweep(tmp_path, axes_yaml="  optim.lr: [1.0e-4, 2.0e-4]\n")
     run_root = tmp_path / "runs"
@@ -121,9 +121,9 @@ def test_skip_done_skips_cells_with_a_final_dir(tmp_path):
 
 
 def test_all_cells_done_is_a_clean_no_op(tmp_path, capsys):
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.sweep.__main__ import main
-    from koopman_lm.sweep.spec import expand_cells, load_sweep_spec
+    from experimentation.run.spec import run_dir_path
+    from experimentation.sweep.__main__ import main
+    from experimentation.sweep.spec import expand_cells, load_sweep_spec
 
     sweep_path = _write_sweep(tmp_path, axes_yaml="  optim.lr: [1.0e-4]\n")
     run_root = tmp_path / "runs"
@@ -136,7 +136,7 @@ def test_all_cells_done_is_a_clean_no_op(tmp_path, capsys):
 
 
 def test_local_launcher_dry_run_returns_one_command_per_cell(tmp_path):
-    from koopman_lm.sweep.__main__ import main
+    from experimentation.sweep.__main__ import main
 
     sweep_path = _write_sweep(tmp_path, axes_yaml="  optim.lr: [1.0e-4, 2.0e-4]\n")
     run_root = tmp_path / "runs"
@@ -144,13 +144,13 @@ def test_local_launcher_dry_run_returns_one_command_per_cell(tmp_path):
                  "--launcher", "local"])
     assert len(cmds) == 2
     for cmd in cmds:
-        assert cmd[1:3] == ["-m", "koopman_lm.training.train"]
+        assert cmd[1:3] == ["-m", "experimentation.training.train"]
 
 
 def test_slurm_launcher_dry_run_writes_one_array_script_for_the_whole_sweep(tmp_path):
     import subprocess
 
-    from koopman_lm.sweep.__main__ import main
+    from experimentation.sweep.__main__ import main
 
     sweep_path = _write_sweep(
         tmp_path, axes_yaml="  optim.lr: [1.0e-4, 2.0e-4, 3.0e-4]\n",
@@ -210,7 +210,7 @@ def test_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path):
     run_root = tmp_path / "runs"
 
     proc = subprocess.run(
-        [sys.executable, "-m", "koopman_lm.sweep", str(sweep_path),
+        [sys.executable, "-m", "experimentation.sweep", str(sweep_path),
          "--run_root", str(run_root), "--dry_run", "--allow-dirty"],
         capture_output=True, text=True, timeout=60,
     )
@@ -224,13 +224,13 @@ def test_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path):
 
 
 def test_refuses_to_launch_from_a_dirty_tree(tmp_path, monkeypatch):
-    from koopman_lm.run.resolve import DirtyTreeError
-    from koopman_lm.sweep.__main__ import main
+    from experimentation.run.resolve import DirtyTreeError
+    from experimentation.sweep.__main__ import main
 
     sweep_path = _write_sweep(tmp_path, axes_yaml="  optim.lr: [1.0e-4]\n")
     run_root = tmp_path / "runs"
     monkeypatch.setattr(
-        "koopman_lm.sweep.__main__.check_git_clean",
+        "experimentation.sweep.__main__.check_git_clean",
         lambda allow_dirty: (_ for _ in ()).throw(DirtyTreeError("dirty")))
 
     with pytest.raises(DirtyTreeError):

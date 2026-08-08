@@ -1,9 +1,10 @@
 """Sequence pooling: per-token hidden states -> one embedding per sequence.
 
 Lives in the model core because ``KoopmanLM.encode`` needs it. It previously
-lived in ``koopman_lm/retrieval/encoder.py``, which made the model core import
-from a downstream research package -- the only edge in the repo pointing that
-way, and the one thing standing between koopman_lm and a clean package boundary
+lived in the since-moved ``koopman_lm/retrieval/encoder.py`` (now
+``experimentation/retrieval/encoder.py``), which made the model core import from
+a downstream research package -- the only edge in the repo pointing that way,
+and the one thing standing between koopman_lm and a clean package boundary
 (see docs/superpowers/specs/2026-08-08-package-restructure-design.md §3).
 
 Nothing about the function changed in the move; ``retrieval.encoder`` re-exports

@@ -18,8 +18,8 @@ import subprocess
 import pytest
 import torch
 
-from koopman_lm.training.data.pretokenize import write_synthetic_corpus
-from koopman_lm.training.data.dataset import MemmapPackedDataset
+from experimentation.training.data.pretokenize import write_synthetic_corpus
+from experimentation.training.data.dataset import MemmapPackedDataset
 
 pytestmark = pytest.mark.correctness
 
@@ -27,7 +27,7 @@ pytestmark = pytest.mark.correctness
 def test_synthetic_corpus_meta_records_a_resolvable_tokenizer_by_default(tmp_path):
     """meta.json's "tokenizer" must be an id AutoTokenizer.from_pretrained can
     resolve -- train.py calls AutoTokenizer.from_pretrained(args.tokenizer) on
-    the same string koopman_lm.run.data_verify compares against meta, and
+    the same string experimentation.run.data_verify compares against meta, and
     "synthetic" satisfies neither. Vocab stays 32000 (matches
     NousResearch/Llama-2-7b-hf); only the recorded tokenizer id changes --
     token generation itself stays synthetic and network-free."""
@@ -45,7 +45,7 @@ def test_synthetic_corpus_meta_tokenizer_is_overridable(tmp_path):
 
 
 def test_smoke_cli_writes_the_default_resolvable_tokenizer(tmp_path, monkeypatch):
-    from koopman_lm.training.data import pretokenize
+    from experimentation.training.data import pretokenize
 
     out_dir = tmp_path / "smoke"
     monkeypatch.setattr(
@@ -71,7 +71,7 @@ def test_smoke_cli_exits_0_and_does_not_crash_at_shutdown(tmp_path):
     """
     out_dir = tmp_path / "smoke_cli"
     proc = subprocess.run(
-        [sys.executable, "-m", "koopman_lm.training.data.pretokenize",
+        [sys.executable, "-m", "experimentation.training.data.pretokenize",
          "--smoke", "--output_dir", str(out_dir), "--smoke_tokens", "1000"],
         capture_output=True, text=True, timeout=60,
     )
@@ -109,8 +109,8 @@ def test_e2e_train_checkpoint_reload_decode(tmp_path):
     from koopman_lm.config import build_config as _bc; config_50m = lambda: _bc("50m")
     from koopman_lm.models.koopman_lm import KoopmanLM
     from koopman_lm.models.recurrent import RecurrentKoopmanLM
-    from koopman_lm.training.train import checkpoint_meta
-    from koopman_lm.training.repro import seed_everything
+    from experimentation.training.train import checkpoint_meta
+    from experimentation.training.repro import seed_everything
     from torch.utils.data import DataLoader
 
     seed_everything(0)

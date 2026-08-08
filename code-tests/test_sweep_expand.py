@@ -1,6 +1,6 @@
 """Sweep expansion (§4.2/§3.3): each cell becomes a full RunSpec through the
 exact same run_id/group_id/run_dir_path machinery a lone
-`python -m koopman_lm.run` launch uses -- sweep membership must not change
+`python -m experimentation.run` launch uses -- sweep membership must not change
 how identity is computed. Seed is the subtle axis: sweeping runtime.seed
 must produce distinct run_ids that share one group_id.
 """
@@ -37,7 +37,7 @@ def _write_base(tmp_path, name="50m-fineweb-3b"):
 
 
 def test_axes_expand_to_the_cartesian_product(tmp_path):
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="ska-rank-lr", base=str(base),
@@ -50,7 +50,7 @@ def test_axes_expand_to_the_cartesian_product(tmp_path):
 
 
 def test_exclude_drops_matching_cells(tmp_path):
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="x", base=str(base),
@@ -64,7 +64,7 @@ def test_exclude_drops_matching_cells(tmp_path):
 
 
 def test_exclude_matches_across_multiple_predicates_as_or(tmp_path):
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="x", base=str(base),
@@ -75,7 +75,7 @@ def test_exclude_matches_across_multiple_predicates_as_or(tmp_path):
 
 
 def test_explicit_cells_list_is_not_a_cartesian_product(tmp_path):
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="x", base=str(base), cells=[
@@ -91,8 +91,8 @@ def test_explicit_cells_list_is_not_a_cartesian_product(tmp_path):
 def test_seed_axis_gives_distinct_run_ids_sharing_one_group_id(tmp_path):
     """The subtle case (§3.3): a different seed is a different datapoint
     (distinct run_id) but three seeds are one experiment (shared group_id)."""
-    from koopman_lm.run.spec import group_id, run_id
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.run.spec import group_id, run_id
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="x", base=str(base), axes={"runtime.seed": [42, 43, 44]})
@@ -107,7 +107,7 @@ def test_seed_axis_gives_distinct_run_ids_sharing_one_group_id(tmp_path):
 def test_model_axis_overrides_registry_named_base_model(tmp_path):
     """The base spec's model: field can be a bare registry name (e.g. '50m'),
     not an inline dict -- model.<field> overrides must still apply."""
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)   # model: 50m (a registry name, not a dict)
     sweep = SweepSpec(name="x", base=str(base), axes={"model.ska_rank": [16]})
@@ -118,8 +118,8 @@ def test_model_axis_overrides_registry_named_base_model(tmp_path):
 
 
 def test_run_dir_path_groups_seeds_under_one_prefix_with_distinct_suffixes(tmp_path):
-    from koopman_lm.run.spec import run_dir_path
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.run.spec import run_dir_path
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="ska-rank-lr", base=str(base),
@@ -134,7 +134,7 @@ def test_zero_cells_after_exclude_is_allowed_by_expand_cells(tmp_path):
     """expand_cells itself doesn't police "did exclude eat the whole grid" --
     that belongs to the CLI (a clearer error where a human is looking at
     output), not the pure expansion function."""
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="x", base=str(base), axes={"model.ska_rank": [16]},
@@ -143,7 +143,7 @@ def test_zero_cells_after_exclude_is_allowed_by_expand_cells(tmp_path):
 
 
 def test_unknown_axis_section_is_rejected(tmp_path):
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="x", base=str(base), axes={"bogus.field": [1]})
@@ -152,7 +152,7 @@ def test_unknown_axis_section_is_rejected(tmp_path):
 
 
 def test_axis_key_without_a_dot_is_rejected(tmp_path):
-    from koopman_lm.sweep.spec import SweepSpec, expand_cells
+    from experimentation.sweep.spec import SweepSpec, expand_cells
 
     base = _write_base(tmp_path)
     sweep = SweepSpec(name="x", base=str(base), axes={"lr": [1e-4]})

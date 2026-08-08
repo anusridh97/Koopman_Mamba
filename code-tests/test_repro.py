@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import torch
 
-from koopman_lm.training.repro import seed_everything, seed_worker
+from experimentation.training.repro import seed_everything, seed_worker
 
 pytestmark = pytest.mark.correctness
 

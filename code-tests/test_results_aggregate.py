@@ -1,4 +1,4 @@
-"""python -m koopman_lm.results <root>: walk run directories, read each
+"""python -m experimentation.results <root>: walk run directories, read each
 spec.yaml + eval/**/*.json, and emit one row per (run, checkpoint, task)
 (§4.2). The filesystem is the store; this is a walk, not a database.
 """
@@ -9,7 +9,7 @@ pytestmark = pytest.mark.correctness
 
 def _make_run(run_root, name, group_id, run_id, seed, lr, d_model, results,
               sweep_id=None, sweep_name=None):
-    from koopman_lm.run.eval_result import write_result
+    from experimentation.run.eval_result import write_result
 
     run_dir = run_root / f"{name}.{group_id}" / f"seed{seed}.{run_id}"
     run_dir.mkdir(parents=True)
@@ -38,7 +38,7 @@ def _make_run(run_root, name, group_id, run_id, seed, lr, d_model, results,
 
 
 def test_aggregate_emits_one_row_per_run_checkpoint_task(tmp_path):
-    from koopman_lm.results import aggregate
+    from experimentation.results import aggregate
 
     _make_run(tmp_path, "50m-fineweb-3b", "gA", "rA", seed=42, lr=0.0004,
                d_model=384, results=[
@@ -63,8 +63,8 @@ def test_aggregate_emits_one_row_per_run_checkpoint_task(tmp_path):
 def test_aggregate_carries_sweep_id_and_name_for_grouping(tmp_path):
     """§4.2: the sweep grid is declared exactly once and materialized into
     every cell's spec.yaml -- aggregate() must surface it so
-    `python -m koopman_lm.results` can group a sweep's cells together."""
-    from koopman_lm.results import aggregate
+    `python -m experimentation.results` can group a sweep's cells together."""
+    from experimentation.results import aggregate
 
     _make_run(tmp_path, "ska-rank-lr", "gA", "rA", seed=42, lr=0.0002, d_model=384,
               results=[("final", "fineweb_ppl", {"ppl": 15.0})],
@@ -81,7 +81,7 @@ def test_aggregate_carries_sweep_id_and_name_for_grouping(tmp_path):
 
 
 def test_aggregate_skips_runs_with_no_eval_dir(tmp_path):
-    from koopman_lm.results import aggregate
+    from experimentation.results import aggregate
 
     run_dir = tmp_path / "50m.gA" / "seed42.rA"
     run_dir.mkdir(parents=True)
@@ -93,7 +93,7 @@ def test_aggregate_skips_runs_with_no_eval_dir(tmp_path):
 
 
 def test_main_prints_a_table(tmp_path, capsys):
-    from koopman_lm.results import main
+    from experimentation.results import main
 
     _make_run(tmp_path, "50m-fineweb-3b", "gA", "rA", seed=42, lr=0.0004,
                d_model=384, results=[("final", "fineweb_ppl", {"ppl": 15.0})])
@@ -106,7 +106,7 @@ def test_main_prints_a_table(tmp_path, capsys):
 
 
 def test_main_reports_no_results_found(tmp_path, capsys):
-    from koopman_lm.results import main
+    from experimentation.results import main
 
     rc = main([str(tmp_path)])
     assert rc == 0

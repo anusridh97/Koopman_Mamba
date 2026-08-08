@@ -12,13 +12,13 @@ import torch
 from koopman_lm.config import build_config, config_hash
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.ska_block import SKABlock
-from koopman_lm.evaluation.mqar.mqar import make_mqar
-from koopman_lm.evaluation.ruler import (
+from experimentation.evaluation.mqar.mqar import make_mqar
+from experimentation.evaluation.ruler import (
     build_multikey_niah,
     build_variable_tracking,
     build_common_word_extraction,
 )
-import koopman_lm.evaluation.harness as H
+import experimentation.evaluation.harness as H
 
 pytestmark = pytest.mark.correctness
 

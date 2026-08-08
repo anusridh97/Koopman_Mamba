@@ -69,7 +69,7 @@ fi
 # ---- 1. tokenize train shard (pure FineWeb-Edu), skip if present ----
 if [ ! -f "$TRAIN_DIR/train.bin" ]; then
   echo "--- tokenizing train shard ($TOKENS tokens) ---"
-  python -m koopman_lm.training.data.pretokenize \
+  python -m experimentation.training.data.pretokenize \
     --output_dir "$TRAIN_DIR" --tokenizer "$TOKENIZER" \
     --fineweb HuggingFaceFW/fineweb-edu --fineweb_subset sample-10BT \
     --mix 1.0 0.0 0.0 --max_tokens "$TOKENS" --shard_size 50000000 --seed "$SEED"
@@ -82,7 +82,7 @@ if [ ! -f "$VAL_DIR/train.bin" ]; then
   DOCS=$(python -c "import json;print(json.load(open('$TRAIN_DIR/meta.json'))['fineweb_docs_consumed'])")
   SKIP=$(( DOCS + 10000 ))
   echo "--- tokenizing val shard (skip_docs=$SKIP) ---"
-  python -m koopman_lm.training.data.pretokenize \
+  python -m experimentation.training.data.pretokenize \
     --output_dir "$VAL_DIR" --tokenizer "$TOKENIZER" \
     --fineweb HuggingFaceFW/fineweb-edu --fineweb_subset sample-10BT \
     --mix 1.0 0.0 0.0 --max_tokens "$VAL_TOKENS" --skip_docs "$SKIP" --seed 1337
@@ -94,11 +94,11 @@ fi
 # DDP multiplies effective batch by NPROC, so divide grad-accum to hold it fixed.
 if [ "$NPROC" -gt 1 ]; then
   GA_USE=$(( GA / NPROC )); [ "$GA_USE" -lt 1 ] && GA_USE=1
-  LAUNCH="torchrun --standalone --nproc_per_node=$NPROC -m koopman_lm.training.train"
+  LAUNCH="torchrun --standalone --nproc_per_node=$NPROC -m experimentation.training.train"
   DDP_ARGS="--ddp"
   echo "--- training (DDP, $NPROC GPUs; ga $GA -> $GA_USE, eff_batch held at $((PDBS*GA_USE*NPROC))) ---"
 else
-  GA_USE=$GA; LAUNCH="python -m koopman_lm.training.train"; DDP_ARGS=""
+  GA_USE=$GA; LAUNCH="python -m experimentation.training.train"; DDP_ARGS=""
   echo "--- training (single GPU) ---"
 fi
 $LAUNCH \
@@ -116,6 +116,6 @@ CKPT="$RUN_DIR/final/model.pt"
 echo ""
 echo "=== done: $CKPT ==="
 echo "Evaluate with:"
-echo "  python -m koopman_lm.evaluation.evaluate --checkpoint $CKPT --model_size $SIZE --mode fineweb_ppl --held_out_data_dir $VAL_DIR --output $RUN_DIR/fineweb_ppl.json"
-echo "  python -m koopman_lm.evaluation.evaluate --checkpoint $CKPT --model_size $SIZE --mode ppl --output $RUN_DIR/wikitext_ppl.json"
-echo "  python -m koopman_lm.evaluation.lm_harness_eval --model $MODEL_TYPE --model_args checkpoint=$CKPT,model_size=$SIZE,max_length=2048 --tasks hellaswag,piqa,arc_easy,arc_challenge,winogrande,lambada_openai --batch_size 8 --device cuda --output_path $RUN_DIR/zeroshot.json"
+echo "  python -m experimentation.evaluation.evaluate --checkpoint $CKPT --model_size $SIZE --mode fineweb_ppl --held_out_data_dir $VAL_DIR --output $RUN_DIR/fineweb_ppl.json"
+echo "  python -m experimentation.evaluation.evaluate --checkpoint $CKPT --model_size $SIZE --mode ppl --output $RUN_DIR/wikitext_ppl.json"
+echo "  python -m experimentation.evaluation.lm_harness_eval --model $MODEL_TYPE --model_args checkpoint=$CKPT,model_size=$SIZE,max_length=2048 --tasks hellaswag,piqa,arc_easy,arc_challenge,winogrande,lambada_openai --batch_size 8 --device cuda --output_path $RUN_DIR/zeroshot.json"

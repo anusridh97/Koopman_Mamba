@@ -10,7 +10,7 @@ pytestmark = pytest.mark.correctness
 
 def _shard_spec(**runtime_overrides):
     from koopman_lm.config import build_config
-    from koopman_lm.run.spec import OptimSpec, RuntimeSpec, RunSpec, ShardDataSpec
+    from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, ShardDataSpec
 
     return RunSpec(
         name="50m-fineweb-3b",
@@ -27,7 +27,7 @@ def _shard_spec(**runtime_overrides):
 
 
 def test_render_sbatch_contains_correct_account_qos_and_h100_arch(tmp_path):
-    from koopman_lm.run.slurm import SlurmLauncher
+    from experimentation.run.slurm import SlurmLauncher
 
     spec = _shard_spec()
     text = SlurmLauncher().render_sbatch(spec, tmp_path)
@@ -41,16 +41,16 @@ def test_render_sbatch_contains_correct_account_qos_and_h100_arch(tmp_path):
 
 
 def test_render_sbatch_single_node_uses_python_dash_m(tmp_path):
-    from koopman_lm.run.slurm import SlurmLauncher
+    from experimentation.run.slurm import SlurmLauncher
 
     spec = _shard_spec()
     text = SlurmLauncher().render_sbatch(spec, tmp_path)
-    assert "-m koopman_lm.training.train" in text
+    assert "-m experimentation.training.train" in text
     assert "torchrun" not in text
 
 
 def test_render_sbatch_multi_gpu_uses_torchrun(tmp_path):
-    from koopman_lm.run.slurm import SlurmLauncher
+    from experimentation.run.slurm import SlurmLauncher
 
     spec = _shard_spec(ddp=True, gpus=2, nodes=1)   # 96 = 16 * 2 * 3: divides evenly
     text = SlurmLauncher().render_sbatch(spec, tmp_path)
@@ -62,7 +62,7 @@ def test_render_sbatch_requests_preemption_signal_and_requeue(tmp_path):
     """§5.4: Slurm must warn the job 300s before killing it (SIGUSR1) so
     train.py's handler can write resume.pt and exit cleanly, and --requeue so
     a preempted/timed-out job is resubmitted rather than lost."""
-    from koopman_lm.run.slurm import SlurmLauncher
+    from experimentation.run.slurm import SlurmLauncher
 
     spec = _shard_spec()
     text = SlurmLauncher().render_sbatch(spec, tmp_path)
@@ -71,12 +71,12 @@ def test_render_sbatch_requests_preemption_signal_and_requeue(tmp_path):
 
 
 def test_submit_dry_run_writes_sbatch_without_calling_sbatch(tmp_path, monkeypatch):
-    from koopman_lm.run.slurm import SlurmLauncher
+    from experimentation.run.slurm import SlurmLauncher
 
     def _boom(*a, **k):
         raise AssertionError("subprocess.run must not be called under dry_run")
 
-    monkeypatch.setattr("koopman_lm.run.slurm.subprocess.run", _boom)
+    monkeypatch.setattr("experimentation.run.slurm.subprocess.run", _boom)
     spec = _shard_spec()
     path = SlurmLauncher().submit(spec, tmp_path, dry_run=True)
     assert path == tmp_path / "launch.sbatch"
@@ -87,12 +87,12 @@ def test_submit_dry_run_writes_sbatch_without_calling_sbatch(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 # Array support (§4.2/§4.3): "the sweep grid is declared exactly once ... the
 # array job indexes into that materialized list. Bash never knows the grid."
-# koopman_lm.sweep materializes the (RunSpec, run_dir) pairs; this module
+# experimentation.sweep materializes the (RunSpec, run_dir) pairs; this module
 # only renders/writes the array script and the per-cell launch lines.
 # ---------------------------------------------------------------------------
 
 def test_render_array_sbatch_uses_shared_runtime_and_array_range(tmp_path):
-    from koopman_lm.run.slurm import render_array_sbatch
+    from experimentation.run.slurm import render_array_sbatch
 
     cells = [(_shard_spec(), tmp_path / f"cell{i}") for i in range(3)]
     text = render_array_sbatch("ska-rank-lr", cells, tmp_path, concurrency=2)
@@ -103,7 +103,7 @@ def test_render_array_sbatch_uses_shared_runtime_and_array_range(tmp_path):
 
 
 def test_render_array_sbatch_without_concurrency_omits_percent_cap(tmp_path):
-    from koopman_lm.run.slurm import render_array_sbatch
+    from experimentation.run.slurm import render_array_sbatch
 
     cells = [(_shard_spec(), tmp_path / "cell0")]
     text = render_array_sbatch("x", cells, tmp_path)
@@ -112,7 +112,7 @@ def test_render_array_sbatch_without_concurrency_omits_percent_cap(tmp_path):
 
 
 def test_render_array_sbatch_rejects_heterogeneous_runtime_across_cells(tmp_path):
-    from koopman_lm.run.slurm import render_array_sbatch
+    from experimentation.run.slurm import render_array_sbatch
 
     cells = [(_shard_spec(), tmp_path / "cell0"),
              (_shard_spec(gpus=2), tmp_path / "cell1")]
@@ -121,19 +121,19 @@ def test_render_array_sbatch_rejects_heterogeneous_runtime_across_cells(tmp_path
 
 
 def test_render_array_sbatch_rejects_empty_cell_list(tmp_path):
-    from koopman_lm.run.slurm import render_array_sbatch
+    from experimentation.run.slurm import render_array_sbatch
 
     with pytest.raises(ValueError):
         render_array_sbatch("x", [], tmp_path)
 
 
 def test_submit_array_dry_run_writes_cells_txt_and_per_cell_launch_lines(tmp_path, monkeypatch):
-    from koopman_lm.run.slurm import SlurmLauncher
+    from experimentation.run.slurm import SlurmLauncher
 
     def _boom(*a, **k):
         raise AssertionError("subprocess.run must not be called under dry_run")
 
-    monkeypatch.setattr("koopman_lm.run.slurm.subprocess.run", _boom)
+    monkeypatch.setattr("experimentation.run.slurm.subprocess.run", _boom)
 
     cells = [(_shard_spec(), tmp_path / "cell0"), (_shard_spec(), tmp_path / "cell1")]
     sweep_dir = tmp_path / "sweep"
@@ -146,13 +146,13 @@ def test_submit_array_dry_run_writes_cells_txt_and_per_cell_launch_lines(tmp_pat
     for run_dir in (tmp_path / "cell0", tmp_path / "cell1"):
         assert (run_dir / "launch_line.sh").is_file()
         assert (run_dir / "model_config.json").is_file()
-        assert "-m koopman_lm.training.train" in (run_dir / "launch_line.sh").read_text()
+        assert "-m experimentation.training.train" in (run_dir / "launch_line.sh").read_text()
 
 
 def test_submit_array_dry_run_script_is_valid_bash(tmp_path):
     import subprocess
 
-    from koopman_lm.run.slurm import SlurmLauncher
+    from experimentation.run.slurm import SlurmLauncher
 
     cells = [(_shard_spec(), tmp_path / "cell0"), (_shard_spec(), tmp_path / "cell1")]
     array_path = SlurmLauncher().submit_array("x", cells, tmp_path / "sweep", dry_run=True)

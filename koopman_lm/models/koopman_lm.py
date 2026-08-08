@@ -206,7 +206,7 @@ class KoopmanLM(nn.Module):
         Runs embed -> seq/mlp layers -> norm_f (NO lm_head) and pools the
         per-token hidden states. Independent of forward(), so LM training/eval
         is byte-for-byte unchanged. The Phase-2 retrieval adapter
-        (koopman_lm/retrieval) wraps this with a projection head + L2 norm.
+        (experimentation/retrieval) wraps this with a projection head + L2 norm.
 
         The backbone is causal, so RIGHT-padding is safe: pad positions sit after
         the real tokens and cannot leak into their hidden states. Pass the

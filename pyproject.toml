@@ -9,7 +9,11 @@ description = "Koopman-Mamba language models with an exact fused CUDA SKA prefix
 requires-python = ">=3.10"
 # Core deps are CUDA-free so `pip install -e .` works on a CPU box (import succeeds;
 # building the Mamba2 backbone needs the optional [cuda] extra). Grounded in the
-# actual module-level imports of koopman_lm/*.py.
+# actual module-level imports of koopman_lm/*.py -- which, since the
+# experimentation/ split, are exactly two: torch and yaml. numpy, transformers,
+# datasets, wandb and safetensors moved to the [lab] extra; nothing under
+# koopman_lm/ imports any of them (the single "wandb" string left in the core is
+# a docstring in modules/seq/ska.py, not an import).
 dependencies = [
     # torch is intentionally NOT upper-pinned: it must match your CUDA + mamba_ssm
     # build, and no version range here can express that.
@@ -32,15 +36,27 @@ dependencies = [
     # is verified present. It also asserts CUDA is still available afterward
     # and fails loudly if it isn't.
     "torch>=2.1",
-    "numpy>=1.24",
-    "transformers>=4.40,<5.0",   # AutoTokenizer (Llama-2 / Mistral)
-    "datasets>=2.18",            # HF datasets for pretokenize + BABILong eval
-    "safetensors",
-    "wandb",
     "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
+# Everything experimentation/ needs and koopman_lm/ does not. Not installed by
+# `pip install koopman-lm`: an outsider who wants the model should not inherit
+# a wandb account, the HF datasets stack, or a tokenizer download.
+#
+# experimentation/ itself is not packaged (see packages.find below) -- this
+# extra only supplies its third-party dependencies, for running it from a repo
+# checkout. Import counts under experimentation/ at the time of the split:
+# wandb 35, datasets 17, numpy 13, transformers 12.
+lab = [
+    "numpy>=1.24",
+    "transformers>=4.40,<5.0",   # AutoTokenizer (Llama-2 / Mistral)
+    "datasets>=2.18",            # HF datasets for pretokenize + BABILong eval
+    # Nothing imports safetensors anywhere in the repo; kept here rather than
+    # dropped outright because transformers' save/load paths can reach for it.
+    "safetensors",
+    "wandb",
+]
 # CUDA-only, version-sensitive: pip cannot resolve the CUDA match reliably, so these
 # are an explicit extra. Required to instantiate the Mamba2 backbone (model.py) and
 # the Mamba-2 backbone. Build against YOUR already-installed torch+CUDA.
@@ -61,8 +77,16 @@ dev = [
     "pytest>=7.0",
 ]
 
-[project.scripts]
-koopman-train = "koopman_lm.training.train:main"
+# No [project.scripts]. `koopman-train` used to point at
+# koopman_lm.training.train:main, but the trainer now lives in
+# experimentation/, which is deliberately not installed -- a console script
+# into it would resolve at install time and fail at run time. Run the trainer
+# as a module from the repo root instead:
+#
+#     python -m experimentation.training.train --help
+#
+# which is also exactly what every generated launch.sbatch does (it cd's to
+# the repo root first).
 
 [tool.setuptools.packages.find]
 include = ["koopman_lm", "koopman_lm.*"]
@@ -88,6 +112,12 @@ causal-conv1d = ["torch", "setuptools", "wheel", "ninja", "packaging"]
 
 [tool.pytest.ini_options]
 testpaths = ["code-tests"]
+# experimentation/ is deliberately NOT installed (packages.find is scoped to
+# koopman_lm*), so it is not importable from site-packages the way koopman_lm
+# is. Putting the repo root on sys.path is exactly how it resolves in
+# production too: every generated launch.sbatch does `cd <repo_root>` before
+# `python -m experimentation.training.train`, which puts cwd on sys.path.
+pythonpath = ["."]
 markers = [
     "correctness: numerical correctness gate (runs in CI before any training commit)",
     "gpu: requires a CUDA device (mamba_ssm backbone / bf16 kernels); auto-skipped on CPU",

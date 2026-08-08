@@ -20,8 +20,8 @@ current `modules/seq/` + `kernels/` layout after the module reorg; see
 | File | Status | Purpose |
 |---|---|---|
 | `koopman_lm/modules/seq/ska.py` | edited | `SKAModule.collect_diagnostics()` + `_spectral_radius()` helper |
-| `koopman_lm/training/diagnostics.py` | **new** | `SKAHealthMonitor`, `GradFlowMonitor`, `profile_overhead()` |
-| `koopman_lm/training/train.py` | edited | wires the monitors into the training loop + CLI flags (opt-in) |
+| `experimentation/training/diagnostics.py` | **new** | `SKAHealthMonitor`, `GradFlowMonitor`, `profile_overhead()` |
+| `experimentation/training/train.py` | edited | wires the monitors into the training loop + CLI flags (opt-in) |
 | `code-tests/test_diagnostics.py` | **new** | CPU-only test suite (no GPU / mamba_ssm / wandb needed) |
 
 ---
@@ -126,13 +126,13 @@ health view.
 
 ---
 
-## 2. `SKAHealthMonitor`  (`koopman_lm/training/diagnostics.py`)
+## 2. `SKAHealthMonitor`  (`experimentation/training/diagnostics.py`)
 
 Wraps `collect_diagnostics` for use during training via forward hooks. Cheap
 when inactive (one boolean check per block).
 
 ```python
-from koopman_lm.training.diagnostics import SKAHealthMonitor
+from experimentation.training.diagnostics import SKAHealthMonitor
 
 monitor = SKAHealthMonitor(raw_model)        # attach hooks to model.seq_layers
 ...
@@ -267,7 +267,7 @@ stats = profile_overhead(model, batch_fn, monitor, n_iter=10, device="cuda")
 
 ---
 
-## 3. Training-loop wiring  (`koopman_lm/training/train.py`)
+## 3. Training-loop wiring  (`experimentation/training/train.py`)
 
 The monitors are attached to the raw model (main rank only) whenever
 `--model_type` is one of the three that build SKA layers —
@@ -372,7 +372,7 @@ layout.
 
 | phase1 (old layout) | this port |
 |---|---|
-| `koopman_lm/ska.py`, `koopman_lm/diagnostics.py`, `koopman_lm/train_fast.py`, `koopman_lm/model.py` | `koopman_lm/modules/seq/ska.py`, `koopman_lm/training/diagnostics.py`, `koopman_lm/training/train.py`, `koopman_lm/models/koopman_lm.py` |
+| `koopman_lm/ska.py`, `koopman_lm/diagnostics.py`, `koopman_lm/train_fast.py`, `koopman_lm/model.py` | `koopman_lm/modules/seq/ska.py`, `experimentation/training/diagnostics.py`, `experimentation/training/train.py`, `koopman_lm/models/koopman_lm.py` |
 | `_whiten_M`, `_spec_w` from `koopman_lm.ska_core_torch` | `whiten_M`, `spec_w` from `koopman_lm.kernels.lin_alg` |
 | `A_eff = α·W` (γ fixed at 1.0) | `A_eff = γ·α·W` with γ resolved via `_resolve_gamma()` (fixed / clamped-learnable / squash) |
 | `gate_mag` fallback reads `self.eta` directly | fallback via `_resolve_eta()` (the squash regime has `eta_raw`, no `.eta`) |

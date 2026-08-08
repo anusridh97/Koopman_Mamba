@@ -17,7 +17,7 @@ pytestmark = pytest.mark.correctness
 
 
 def test_sigusr1_sets_the_preemption_flag():
-    from koopman_lm.training.train import PreemptionFlag, install_sigusr1_handler
+    from experimentation.training.train import PreemptionFlag, install_sigusr1_handler
 
     flag = PreemptionFlag()
     assert not flag.is_set()
@@ -106,7 +106,7 @@ def _write_tiny_all_ska_model_config(path):
 
 
 def test_sigusr1_sent_to_a_real_training_process_exits_cleanly_with_resume(tmp_path):
-    from koopman_lm.training.data.pretokenize import write_synthetic_corpus
+    from experimentation.training.data.pretokenize import write_synthetic_corpus
 
     tok_dir = _write_offline_tokenizer(str(tmp_path / "tokenizer"))
     model_config_path = _write_tiny_all_ska_model_config(tmp_path / "model_config.json")
@@ -116,7 +116,7 @@ def test_sigusr1_sent_to_a_real_training_process_exits_cleanly_with_resume(tmp_p
     output_dir.mkdir()
 
     cmd = [
-        sys.executable, "-m", "koopman_lm.training.train",
+        sys.executable, "-m", "experimentation.training.train",
         "--model_size", model_config_path,
         "--data_dir", data_dir,
         "--tokenizer", tok_dir,
@@ -191,7 +191,7 @@ def test_sigusr1_sent_to_a_real_training_process_exits_cleanly_with_resume(tmp_p
 
 
 def test_parse_args_accepts_resume_flag(monkeypatch):
-    from koopman_lm.training.train import parse_args
+    from experimentation.training.train import parse_args
 
     monkeypatch.setattr("sys.argv", ["train.py", "--data_dir", "/tmp/x"])
     args = parse_args()
