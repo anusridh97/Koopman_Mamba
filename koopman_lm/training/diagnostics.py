@@ -26,6 +26,12 @@ Metrics emitted (see SKAModule.collect_diagnostics for the math):
 Design notes:
   * Hooks live on the BLOCK (SKABlock / Mamba2Block), not the (possibly
     torch.compile'd) inner ska submodule, so they never trigger recompiles.
+  * MambaSKAParallelBlock (cfg.ska_mode='parallel' -- both production configs,
+    50m.yaml and 180m.yaml) is neither SKABlock nor Mamba2Block at the top
+    level; it genuinely runs both (`x + Mamba(norm_m(x)) + SKA(norm_s(x))`).
+    `_split_layer()` recurses into it and hooks its `.ska` / `.mamba`
+    children separately, so it reports in BOTH buckets instead of vanishing
+    into (or silently miscounted as) the Mamba baseline.
   * Exactly one GPU->CPU sync per diagnostic step (all scalars stacked first),
     honoring the train loop's "no .item() except at logging boundaries" rule.
   * Per-head distributions are returned as histograms; aggregates as scalars.
@@ -48,36 +54,68 @@ from contextlib import contextmanager
 import torch
 
 
-def _resolve_block_classes(ska_cls=None, mamba_cls=None):
+def _resolve_block_classes(ska_cls=None, mamba_cls=None, parallel_cls=None):
     """Lazily import the block classes (avoids a circular import at module load)."""
-    if ska_cls is None or mamba_cls is None:
-        from koopman_lm.models.koopman_lm import SKABlock, Mamba2Block
+    if ska_cls is None or mamba_cls is None or parallel_cls is None:
+        from koopman_lm.models.koopman_lm import (
+            SKABlock, Mamba2Block, MambaSKAParallelBlock,
+        )
         ska_cls = ska_cls or SKABlock
         mamba_cls = mamba_cls or Mamba2Block
-    return ska_cls, mamba_cls
+        parallel_cls = parallel_cls or MambaSKAParallelBlock
+    return ska_cls, mamba_cls, parallel_cls
+
+
+def _split_layer(layer, ska_cls, mamba_cls, parallel_cls):
+    """Return the (submodule, is_ska) children to instrument for one
+    `seq_layers` entry.
+
+    `MambaSKAParallelBlock` (cfg.ska_mode='parallel', used by both production
+    configs -- 50m.yaml and 180m.yaml) genuinely runs two mixers side by side
+    in the residual stream: `x + Mamba(norm_m(x)) + SKA(norm_s(x))`. At the
+    top level it is neither `ska_cls` nor `mamba_cls`, so a plain isinstance
+    check buckets the whole block as "other/Mamba baseline" and never looks
+    inside -- the SKA child is silently skipped. Recurse instead: report its
+    nested SKABlock (`.ska`) as an SKA layer and its nested Mamba2Block
+    (`.mamba`) as a Mamba baseline layer, so both numbers stay real. Every
+    other layer (plain SKABlock, plain Mamba2Block, or anything unrecognized)
+    is unchanged: a single child classified by isinstance as before.
+    """
+    if isinstance(layer, parallel_cls):
+        return [(layer.ska, True), (layer.mamba, False)]
+    return [(layer, isinstance(layer, ska_cls))]
 
 
 class SKAHealthMonitor:
     """Forward-hook based SKA health probe. Cheap when inactive.
 
     Args:
-        model:      the RAW model (before DDP wrap) exposing `.seq_layers`.
-        ska_cls:    class identifying SKA blocks (default:
-                    koopman_lm.models.koopman_lm.SKABlock).
-        mamba_cls:  class identifying Mamba blocks (default: Mamba2Block). Any
-                    seq block that is neither ska_cls nor mamba_cls is bucketed
-                    as "other" for the residual ratio.
+        model:        the RAW model (before DDP wrap) exposing `.seq_layers`.
+        ska_cls:      class identifying SKA blocks (default:
+                      koopman_lm.models.koopman_lm.SKABlock).
+        mamba_cls:    class identifying Mamba blocks (default: Mamba2Block).
+        parallel_cls: class identifying "both at once" blocks (default:
+                      koopman_lm.models.koopman_lm.MambaSKAParallelBlock, the
+                      block cfg.ska_mode='parallel' builds -- used by both
+                      production configs, 50m.yaml and 180m.yaml). Each
+                      instance contributes to BOTH buckets: its nested
+                      SKABlock (`.ska`) is instrumented as an SKA layer and
+                      its nested Mamba2Block (`.mamba`) as a Mamba baseline
+                      layer (see `_split_layer`). Any remaining seq block that
+                      matches none of the three classes is bucketed as
+                      "other" for the residual ratio, same as before.
         prefix:     wandb key prefix (default 'ska').
     """
 
-    def __init__(self, model, ska_cls=None, mamba_cls=None, prefix="ska",
-                 exclude_first_chunk=True, healthy_band=(0.3, 0.95)):
-        self.ska_cls, self.mamba_cls = _resolve_block_classes(ska_cls, mamba_cls)
+    def __init__(self, model, ska_cls=None, mamba_cls=None, parallel_cls=None,
+                 prefix="ska", exclude_first_chunk=True, healthy_band=(0.3, 0.95)):
+        self.ska_cls, self.mamba_cls, self.parallel_cls = _resolve_block_classes(
+            ska_cls, mamba_cls, parallel_cls)
         self.prefix = prefix
         self.exclude_first_chunk = exclude_first_chunk
         self.healthy_lo, self.healthy_hi = healthy_band
         self.active = False
-        self._buf = {}            # layer_idx -> record dict (filled during forward)
+        self._buf = {}            # (layer_idx, slot) -> record dict (filled during forward)
         self._handles = []
         self._register(model)
 
@@ -87,14 +125,18 @@ class SKAHealthMonitor:
         layers = getattr(model, "seq_layers", None)
         if layers is None:
             raise ValueError("model has no .seq_layers; cannot attach SKAHealthMonitor")
+        n_ska = 0
         for idx, layer in enumerate(layers):
-            is_ska = isinstance(layer, self.ska_cls)
-            self._handles.append(
-                layer.register_forward_hook(self._make_hook(idx, is_ska))
-            )
-        self.n_ska = sum(isinstance(l, self.ska_cls) for l in layers)
+            children = _split_layer(layer, self.ska_cls, self.mamba_cls, self.parallel_cls)
+            for slot, (sub, is_ska) in enumerate(children):
+                key = (idx, slot)
+                self._handles.append(
+                    sub.register_forward_hook(self._make_hook(key, idx, is_ska))
+                )
+                n_ska += int(is_ska)
+        self.n_ska = n_ska
 
-    def _make_hook(self, idx, is_ska):
+    def _make_hook(self, key, idx, is_ska):
         def hook(module, inputs, output):
             if not self.active:
                 return
@@ -103,12 +145,12 @@ class SKAHealthMonitor:
             with torch.no_grad():
                 # residual contribution: mean over tokens of ||block_out - block_in||
                 delta = (out - x).float()
-                rec = {"is_ska": is_ska,
+                rec = {"is_ska": is_ska, "layer_idx": idx,
                        "delta_norm": delta.norm(dim=-1).mean().detach()}
                 if is_ska:
                     h = module.norm(x)
                     rec.update(module.ska.collect_diagnostics(h))
-            self._buf[idx] = rec
+            self._buf[key] = rec
         return hook
 
     def remove(self):
@@ -158,8 +200,9 @@ class SKAHealthMonitor:
         hist_items = {}            # key -> 1-d tensor
         ska_deltas, mamba_deltas = [], []
 
-        for idx in sorted(self._buf):
-            rec = self._buf[idx]
+        for key in sorted(self._buf):
+            rec = self._buf[key]
+            idx = rec["layer_idx"]
             if not rec["is_ska"]:
                 # every non-SKA sequence block (Mamba, or any other) is the
                 # baseline the SKA residual contribution is compared against
@@ -275,15 +318,22 @@ class GradFlowMonitor:
       ska/LN/grad_norm           -- mean gradient norm for layer N
       ska/LN/jacobian_rank       -- # SVs of key_proj gradient above threshold
       ska/LN/jacobian_rank_frac  -- jacobian_rank / total singular values
+
+    MambaSKAParallelBlock (cfg.ska_mode='parallel', both production configs)
+    contains a real SKABlock and a real Mamba2Block side by side, so position
+    N there reports as TWO records instead of one: `ska/LN/*` for the nested
+    SKABlock (jacobian_rank included) and `ska/LNm/*` for the nested
+    Mamba2Block (grad_norm only, feeds the Mamba baseline). See `_split_layer`.
     """
 
-    def __init__(self, model, ska_cls=None, mamba_cls=None, prefix="ska",
-                 rank_sv_threshold=0.01):
-        self.ska_cls, self.mamba_cls = _resolve_block_classes(ska_cls, mamba_cls)
+    def __init__(self, model, ska_cls=None, mamba_cls=None, parallel_cls=None,
+                 prefix="ska", rank_sv_threshold=0.01):
+        self.ska_cls, self.mamba_cls, self.parallel_cls = _resolve_block_classes(
+            ska_cls, mamba_cls, parallel_cls)
         self.prefix = prefix
         self.rank_sv_threshold = rank_sv_threshold
         self.active = False
-        # layer_idx -> {"is_ska": bool, "norms": [], "key_grad": tensor|None}
+        # (layer_idx, slot) -> {"is_ska": bool, "norms": [], "key_grad": tensor|None}
         self._buf = {}
         self._hooks = []
         self._register(model)
@@ -292,31 +342,45 @@ class GradFlowMonitor:
         layers = getattr(model, "seq_layers", None)
         if layers is None:
             raise ValueError("model has no .seq_layers; cannot attach GradFlowMonitor")
+        # A MambaSKAParallelBlock (cfg.ska_mode='parallel') is neither ska_cls
+        # nor mamba_cls at the top level and genuinely contains both mixers,
+        # so it expands into two children here too (see
+        # SKAHealthMonitor / _split_layer for the full rationale): the nested
+        # SKABlock's projection weights feed the SKA/jacobian-rank bucket,
+        # and the nested Mamba2Block's Linear weights feed the Mamba
+        # baseline bucket -- each under its own buffer slot so neither
+        # overwrites the other, and each labeled distinctly in collect()
+        # ("L{idx}" for the SKA child, "L{idx}m" for the parallel block's
+        # Mamba child) so the split is visible instead of silently merged.
         for idx, layer in enumerate(layers):
-            is_ska = isinstance(layer, self.ska_cls)
-            self._buf[idx] = {"is_ska": is_ska, "norms": [], "key_grad": None}
-            if is_ska:
-                ska = layer.ska
-                for attr in ("key_proj", "query_proj", "value_proj", "out_proj"):
-                    proj = getattr(ska, attr, None)
-                    if proj is not None and proj.weight.requires_grad:
-                        self._hooks.append(
-                            proj.weight.register_hook(
-                                self._make_hook(idx, capture_for_rank=(attr == "key_proj"))))
-            else:
-                for _, mod in layer.named_modules():
-                    if isinstance(mod, torch.nn.Linear) and mod.weight.requires_grad:
-                        self._hooks.append(
-                            mod.weight.register_hook(self._make_hook(idx, False)))
+            children = _split_layer(layer, self.ska_cls, self.mamba_cls, self.parallel_cls)
+            for slot, (sub, is_ska) in enumerate(children):
+                key = (idx, slot)
+                label = str(idx) if slot == 0 else f"{idx}m"
+                self._buf[key] = {"is_ska": is_ska, "label": label,
+                                   "norms": [], "key_grad": None}
+                if is_ska:
+                    ska = sub.ska
+                    for attr in ("key_proj", "query_proj", "value_proj", "out_proj"):
+                        proj = getattr(ska, attr, None)
+                        if proj is not None and proj.weight.requires_grad:
+                            self._hooks.append(
+                                proj.weight.register_hook(
+                                    self._make_hook(key, capture_for_rank=(attr == "key_proj"))))
+                else:
+                    for _, mod in sub.named_modules():
+                        if isinstance(mod, torch.nn.Linear) and mod.weight.requires_grad:
+                            self._hooks.append(
+                                mod.weight.register_hook(self._make_hook(key, False)))
 
-    def _make_hook(self, idx, capture_for_rank):
+    def _make_hook(self, key, capture_for_rank):
         def hook(grad):
             if not self.active:
                 return
             g = grad.detach().float()
-            self._buf[idx]["norms"].append(g.norm())
-            if capture_for_rank and self._buf[idx]["key_grad"] is None:
-                self._buf[idx]["key_grad"] = g.clone()
+            self._buf[key]["norms"].append(g.norm())
+            if capture_for_rank and self._buf[key]["key_grad"] is None:
+                self._buf[key]["key_grad"] = g.clone()
         return hook
 
     def remove(self):
@@ -341,7 +405,9 @@ class GradFlowMonitor:
 
         Returns {} if no backward was run since the last capture() call.
         The SKA/Mamba split mirrors SKAHealthMonitor: layers that are neither
-        ska_cls nor mamba_cls are bucketed with non-SKA for the ratio.
+        ska_cls, mamba_cls, nor parallel_cls are bucketed with non-SKA for the
+        ratio. parallel_cls layers contribute one SKA record and one Mamba
+        record each (see `_split_layer`).
         """
         if not any(v["norms"] for v in self._buf.values()):
             return {}
@@ -350,12 +416,13 @@ class GradFlowMonitor:
         out = {}
         ska_means, mamba_means = [], []
 
-        for idx in sorted(self._buf):
-            rec = self._buf[idx]
+        for key in sorted(self._buf):
+            rec = self._buf[key]
             if not rec["norms"]:
                 continue
             mean_norm = torch.stack(rec["norms"]).mean()
-            out[f"{p}/L{idx}/grad_norm"] = float(mean_norm)
+            label = rec["label"]
+            out[f"{p}/L{label}/grad_norm"] = float(mean_norm)
 
             if rec["is_ska"]:
                 ska_means.append(mean_norm)
@@ -363,8 +430,8 @@ class GradFlowMonitor:
                     sv = torch.linalg.svdvals(rec["key_grad"])
                     threshold = float(sv.max()) * self.rank_sv_threshold
                     rank = int((sv > threshold).sum().item())
-                    out[f"{p}/L{idx}/jacobian_rank"] = rank
-                    out[f"{p}/L{idx}/jacobian_rank_frac"] = (
+                    out[f"{p}/L{label}/jacobian_rank"] = rank
+                    out[f"{p}/L{label}/jacobian_rank_frac"] = (
                         rank / sv.shape[0] if sv.shape[0] > 0 else 0.0)
             else:
                 mamba_means.append(mean_norm)

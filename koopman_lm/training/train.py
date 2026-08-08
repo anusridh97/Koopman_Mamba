@@ -260,11 +260,16 @@ def train(args):
         if is_main: print(f"    Compiled {n_compiled} modules")
 
     # SKA health instrumentation (Phase 1). Hooks live on the raw model's
-    # sequence blocks; cheap when inactive. Only meaningful for the koopman
-    # model (the only one with SKA layers). Opt-in via --diag_enable.
+    # sequence blocks; cheap when inactive. Only meaningful for model types
+    # that actually build SKA layers -- koopman plus the two SKA baselines
+    # (mamba_ska_swiglu, mamba_ska_koopman) share the same SKABlock /
+    # MambaSKAParallelBlock seq layout, just a different MLP. mamba_only and
+    # mamba_attn have no SKA layers, so there is nothing for the monitor to
+    # report there. Opt-in via --diag_enable.
     monitor = None
     grad_monitor = None
-    if args.diag_enable and is_main and args.model_type == "koopman":
+    if (args.diag_enable and is_main
+            and args.model_type in {"koopman", "mamba_ska_swiglu", "mamba_ska_koopman"}):
         from koopman_lm.training.diagnostics import SKAHealthMonitor, GradFlowMonitor
         try:
             monitor = SKAHealthMonitor(raw_model)

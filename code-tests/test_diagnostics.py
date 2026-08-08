@@ -299,6 +299,143 @@ def test_monitor_on_all_ska_koopman_lm():
 
 
 # ---------------------------------------------------------------------------
+# 3b. ska_mode='parallel' -- MambaSKAParallelBlock must not be diagnostics-blind
+# ---------------------------------------------------------------------------
+#
+# configs/50m.yaml and configs/180m.yaml (the two production sizes) both set
+# ska_mode='parallel', which builds koopman_lm.modules.seq.ska_block's
+# MambaSKAParallelBlock at each SKA index instead of a bare SKABlock. That
+# class did not exist when SKAHealthMonitor/GradFlowMonitor were written: it
+# is neither ska_cls nor mamba_cls at the top level, so both monitors used to
+# fall through to the "else" (Mamba baseline) branch and never look inside it
+# -- production models got zero SKA diagnostics. The fix makes both monitors
+# recurse into MambaSKAParallelBlock's `.ska` (an SKABlock) and `.mamba` (a
+# Mamba2Block) children and report each in its own bucket.
+#
+# Mamba2Block needs mamba_ssm (GPU-only), so we can't build a real
+# MambaSKAParallelBlock here. Instead we mirror the real class's shape --
+# `.mamba` / `.ska` attributes, forward() == mamba(x) + ska(x) - x -- with a
+# fake Mamba child, and pass it in via the monitors' `parallel_cls=` override
+# (the same mechanism the existing tests already use for `ska_cls=`/
+# `mamba_cls=` to avoid the mamba_ssm dependency).
+
+
+class _FakeParallel(nn.Module):
+    """Stand-in for MambaSKAParallelBlock: real SKABlock + fake-Mamba child,
+    combined exactly as koopman_lm/modules/seq/ska_block.py does:
+    `mamba(x) + ska(x) - x`."""
+    def __init__(self, cfg):
+        super().__init__()
+        self.mamba = _FakeMamba(cfg.d_model)
+        self.ska = SKABlock(cfg)
+        self._ablate = False
+
+    def forward(self, x):
+        if self._ablate:
+            return x
+        return self.mamba(x) + self.ska(x) - x
+
+
+class _ParallelStandInModel(nn.Module):
+    """alternating fake-Mamba / _FakeParallel stack -- the ska_mode='parallel'
+    analogue of _StandInModel (which models ska_mode='replace')."""
+    def __init__(self, cfg):
+        super().__init__()
+        self.seq_layers = nn.ModuleList([
+            _FakeMamba(cfg.d_model),
+            _FakeParallel(cfg),
+            _FakeMamba(cfg.d_model),
+            _FakeParallel(cfg),
+        ])
+
+    def forward(self, x):
+        for layer in self.seq_layers:
+            x = layer(x)
+        return {"loss": x.pow(2).mean(), "logits": x}
+
+
+def test_health_monitor_parallel_mode_finds_ska_layers():
+    """ska_mode='parallel': the monitor must find a NON-ZERO number of SKA
+    layers by recursing into MambaSKAParallelBlock's nested SKABlock, and
+    still emit that layer's full per-layer metric schema."""
+    torch.manual_seed(0)
+    cfg = _tiny_cfg()
+    model = _ParallelStandInModel(cfg).eval()
+    monitor = SKAHealthMonitor(
+        model, ska_cls=SKABlock, mamba_cls=_FakeMamba, parallel_cls=_FakeParallel)
+
+    assert monitor.n_ska == 2, \
+        "parallel blocks at positions 1 and 3 each contain one SKABlock"
+
+    B, T = 2, 40
+    with monitor.capture():
+        model(torch.randn(B, T, D))
+    metrics = monitor.collect(wrap_histograms=False)
+
+    for idx in (1, 3):
+        for suffix in ("spectral_radius_mean", "gap_mean", "gate_mag",
+                       "frac_healthy", "residual_delta"):
+            k = f"ska/L{idx}/{suffix}"
+            assert k in metrics, f"missing scalar {k} for parallel-block SKA child"
+
+    # the parallel blocks' Mamba children (and the two plain fake-Mamba
+    # layers) all feed the baseline bucket -> residual_ratio is still defined
+    rr = metrics["ska/residual_ratio"]
+    assert math.isfinite(rr) and rr > 0, f"residual_ratio invalid: {rr}"
+
+
+def test_health_monitor_replace_mode_unchanged():
+    """ska_mode='replace' (plain SKABlock/Mamba2Block siblings, no parallel
+    wrapper): classification is untouched by the parallel-recursion fix --
+    same n_ska count and same schema as before."""
+    torch.manual_seed(0)
+    cfg = _tiny_cfg()
+    model = _StandInModel(cfg).eval()
+    monitor = SKAHealthMonitor(model, ska_cls=SKABlock)
+    assert monitor.n_ska == 2
+
+    with monitor.capture():
+        model(torch.randn(2, 40, D))
+    metrics = monitor.collect(wrap_histograms=False)
+    for idx in (1, 3):
+        assert f"ska/L{idx}/spectral_radius_mean" in metrics
+    assert "ska/L0/spectral_radius_mean" not in metrics
+    assert "ska/L2/spectral_radius_mean" not in metrics
+
+
+def test_grad_flow_parallel_mode_splits_buckets():
+    """GradFlowMonitor must also recurse into MambaSKAParallelBlock: the
+    nested SKABlock's key/query/value/out_proj gradients go to the SKA
+    bucket (with a jacobian_rank), the nested Mamba child's Linear gradients
+    go to the Mamba baseline bucket -- not both blended into one
+    misclassified 'non-SKA' record the way the pre-fix code would."""
+    torch.manual_seed(0)
+    cfg = _tiny_cfg()
+    model = _ParallelStandInModel(cfg)
+    monitor = GradFlowMonitor(
+        model, ska_cls=SKABlock, mamba_cls=_FakeMamba, parallel_cls=_FakeParallel)
+
+    with monitor.capture():
+        out = model(torch.randn(2, 40, D))
+        out["loss"].backward()
+    metrics = monitor.collect()
+
+    assert "ska/grad_norm_ratio" in metrics
+    assert math.isfinite(metrics["ska/grad_norm_ratio"])
+    assert metrics["ska/grad_norm_ska_mean"] > 0
+    assert metrics["ska/grad_norm_mamba_mean"] > 0
+
+    # every parallel block's SKA child must report a jacobian_rank somewhere
+    # in the metrics (exact key naming for split children is an
+    # implementation detail; existence + validity is what matters here)
+    rank_keys = [k for k in metrics if k.endswith("/jacobian_rank")]
+    assert len(rank_keys) >= 2, \
+        f"expected >=2 jacobian_rank entries (one per parallel-block SKA child), got {rank_keys}"
+    for k in rank_keys:
+        assert isinstance(metrics[k], int) and metrics[k] >= 1
+
+
+# ---------------------------------------------------------------------------
 # 4. overhead profiler
 # ---------------------------------------------------------------------------
 

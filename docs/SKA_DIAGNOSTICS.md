@@ -144,14 +144,35 @@ wandb.log(metrics, step=step)
 
 **Constructor**
 ```python
-SKAHealthMonitor(model, ska_cls=None, mamba_cls=None,
+SKAHealthMonitor(model, ska_cls=None, mamba_cls=None, parallel_cls=None,
                  prefix="ska", exclude_first_chunk=True, healthy_band=(0.3, 0.95))
 ```
 - `model` — the **raw** model (before DDP wrap) exposing `.seq_layers`.
-- `ska_cls` / `mamba_cls` — block classes used to classify layers (default:
-  `koopman_lm.models.koopman_lm.SKABlock` / `Mamba2Block`, imported lazily so
-  baseline models can pass their own classes). Any non-SKA seq block is
-  bucketed as the Mamba baseline for the residual ratio.
+- `ska_cls` / `mamba_cls` / `parallel_cls` — block classes used to classify
+  layers (default: `koopman_lm.models.koopman_lm.SKABlock` / `Mamba2Block` /
+  `MambaSKAParallelBlock`, imported lazily so baseline models can pass their
+  own classes). Any seq block matching none of the three is bucketed as the
+  Mamba baseline for the residual ratio.
+
+  **`MambaSKAParallelBlock`** (`cfg.ska_mode='parallel'` — both production
+  configs, `configs/50m.yaml` and `configs/180m.yaml`) is handled specially:
+  it is neither `ska_cls` nor `mamba_cls` at the top level, and it genuinely
+  runs *both* mixers in the residual stream
+  (`x + Mamba(norm_m(x)) + SKA(norm_s(x))`), so a plain isinstance check would
+  either misfile it as pure Mamba baseline or skip it. `SKAHealthMonitor`
+  recurses into it instead (`_split_layer()` in `diagnostics.py`) and hooks
+  its two children separately: the nested `SKABlock` (`.ska`) is instrumented
+  as an SKA layer under the block's own `L{idx}`, and the nested `Mamba2Block`
+  (`.mamba`) is instrumented as a Mamba baseline layer feeding
+  `residual_ratio`. Both numbers are then real measurements of what that
+  position actually computes, and the SKA-vs-Mamba comparison stays
+  meaningful for the two model sizes that matter.
+
+  Before this, `50m` and `180m` — the only sizes using `ska_mode='parallel'`
+  — got **zero SKA diagnostics**: every `MambaSKAParallelBlock` fell through
+  to the Mamba bucket and its nested `SKABlock` was never inspected. `1m`,
+  `180m_dense`, and `440m` use `ska_mode='replace'` (plain `SKABlock` /
+  `Mamba2Block` siblings, no wrapper) and were unaffected either way.
 - `exclude_first_chunk` — drop the history-less chunk 0 from summaries (default on).
 - `healthy_band` — `(lo, hi)` for the `frac_healthy` fraction.
 
@@ -206,7 +227,16 @@ Backward-hook probe for gradient flow into SKA vs non-SKA branches. Registers
 `param.register_hook` on the SKA projection weights
 (`key_proj`/`query_proj`/`value_proj`/`out_proj`) and on every `nn.Linear`
 weight of non-SKA seq blocks. Same `capture()` / `collect()` pattern, but the
-capture must span a **forward+backward**.
+capture must span a **forward+backward**. Takes the same `ska_cls` /
+`mamba_cls` / `parallel_cls` constructor arguments as `SKAHealthMonitor`, and
+recurses into `MambaSKAParallelBlock` the same way (`_split_layer()`, shared
+by both monitors): the nested `SKABlock`'s projection weights feed the SKA /
+jacobian-rank bucket, the nested `Mamba2Block`'s `nn.Linear` weights feed the
+Mamba baseline bucket. Before this fix, a `MambaSKAParallelBlock` was
+misclassified as pure Mamba baseline and its `.named_modules()` sweep for
+`nn.Linear` weights swept up the nested `SKABlock`'s projections too — so the
+50m/180m "Mamba" gradient-norm bucket was silently contaminated with SKA
+gradients, and no `jacobian_rank` was ever computed for those layers.
 
 Metrics emitted:
 ```
@@ -217,6 +247,11 @@ ska/L{idx}/grad_norm
 ska/L{idx}/jacobian_rank        # SVs of the key_proj gradient above 1% of sigma_max
 ska/L{idx}/jacobian_rank_frac   # rank / total SVs; falling toward 0 = rank collapse
 ```
+For a `MambaSKAParallelBlock` at position `idx`, the split shows up as two
+distinctly-named records instead of one blended one: `ska/L{idx}/*` for its
+SKA child (including `jacobian_rank`) and `ska/L{idx}m/grad_norm` for its
+Mamba child (baseline only — no `jacobian_rank`, matching the treatment of
+any other non-SKA block).
 
 ### `profile_overhead(model, batch_fn, monitor, ...)`
 
@@ -234,8 +269,13 @@ stats = profile_overhead(model, batch_fn, monitor, n_iter=10, device="cuda")
 
 ## 3. Training-loop wiring  (`koopman_lm/training/train.py`)
 
-The monitors are attached to the raw model (koopman model type, main rank
-only) and run on a cadence. **Opt-in and off by default.** New CLI flags:
+The monitors are attached to the raw model (main rank only) whenever
+`--model_type` is one of the three that build SKA layers —
+`koopman`, `mamba_ska_swiglu`, `mamba_ska_koopman` (they share the same
+`SKABlock` / `MambaSKAParallelBlock` seq layout; only the MLP differs) — and
+run on a cadence. `mamba_only` and `mamba_attn` have no SKA layers, so they
+are left out; attaching the monitor there would just always report `n_ska ==
+0`. **Opt-in and off by default.** New CLI flags:
 
 ```
 --diag_enable                 # emit SKA health metrics (default OFF)
@@ -280,7 +320,7 @@ load-bearing.
 
 ## 5. Test suite — `code-tests/test_diagnostics.py`
 
-CPU-only, no GPU / `mamba_ssm` / wandb required. 22 tests, selected by the
+CPU-only, no GPU / `mamba_ssm` / wandb required. 25 tests, selected by the
 correctness gate:
 
 ```bash
@@ -306,6 +346,14 @@ Coverage:
 8. **real-model attach** — the monitor attaches to an all-SKA `KoopmanLM`
    (constructible on CPU) with default class resolution; no `residual_ratio`
    without a non-SKA baseline bucket.
+8b. **`MambaSKAParallelBlock` recursion** — with a `parallel_cls` stand-in
+   (real `SKABlock` + fake-Mamba child, since `Mamba2Block` needs
+   `mamba_ssm`), both `SKAHealthMonitor` and `GradFlowMonitor` find a
+   non-zero number of SKA layers inside the parallel wrapper and emit that
+   layer's full metric schema (including a valid `jacobian_rank` for the
+   gradient-flow case); a companion test confirms `ska_mode='replace'`
+   classification (plain `SKABlock`/`Mamba2Block` siblings) is byte-for-byte
+   unchanged by the fix.
 9. **profiler** — `profile_overhead` runs and returns finite numbers.
 10. **four-mode zeroing via `_ablate`** — isolation (zeroing SKA leaves Mamba
     computing and vice versa), flag restoration, four finite/distinct losses,
