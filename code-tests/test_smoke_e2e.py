@@ -12,6 +12,8 @@ proving the train/checkpoint/reload/decode path end to end.
 """
 import dataclasses
 import json
+import sys
+import subprocess
 
 import pytest
 import torch
@@ -53,6 +55,36 @@ def test_smoke_cli_writes_the_default_resolvable_tokenizer(tmp_path, monkeypatch
     pretokenize.main()
     meta = json.loads((out_dir / "meta.json").read_text())
     assert meta["tokenizer"] == "NousResearch/Llama-2-7b-hf"
+
+
+def test_smoke_cli_exits_0_and_does_not_crash_at_shutdown(tmp_path):
+    """Regression test for job 415339: a real tokenize run wrote correct
+    output (train.bin/weights.bin/meta.json all present and consistent) but
+    the *process* then SIGABRTed during interpreter finalization (a GIL race
+    among torch/HF-`datasets` streaming threads), so the sbatch script saw
+    exit 134 and treated a successful tokenize as a failure.
+
+    This must run the module as an actual subprocess (not call
+    pretokenize.main() in-process) -- the fix is an os._exit(0) in the
+    ``if __name__ == "__main__":`` guard, which only fires for a real
+    top-level process. --smoke needs no network, so this runs on CPU in CI.
+    """
+    out_dir = tmp_path / "smoke_cli"
+    proc = subprocess.run(
+        [sys.executable, "-m", "koopman_lm.training.data.pretokenize",
+         "--smoke", "--output_dir", str(out_dir), "--smoke_tokens", "1000"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"expected clean exit 0, got {proc.returncode}\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    )
+    # the final log line must have made it out despite the hard exit --
+    # proves the flush-before-os._exit ordering is correct, not just the
+    # exit code.
+    assert "Wrote synthetic smoke corpus" in proc.stdout
+    meta = json.loads((out_dir / "meta.json").read_text())
+    assert meta["n_tokens"] == 1000
 
 
 def test_synthetic_corpus_roundtrips(tmp_path):

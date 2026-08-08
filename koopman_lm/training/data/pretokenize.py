@@ -38,6 +38,7 @@ Usage:
 import argparse
 import json
 import os
+import sys
 import numpy as np
 
 from koopman_lm.training.data.mix import (
@@ -371,3 +372,27 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # main() returned normally, which only happens after meta.json has been
+    # durably written (both the --smoke and real-corpus paths write it as
+    # their last act before returning; any exception raised earlier -- e.g.
+    # mid-stream during tokenization -- propagates out of main() and skips
+    # this block entirely, so a real failure still surfaces as a real,
+    # loud failure).
+    #
+    # Do NOT let the interpreter proceed to normal finalization from here.
+    # Observed in production (job 415339): once torch + HF `datasets`
+    # (aiohttp streaming threads under the hood) have both been loaded, CPython
+    # can hit a GIL race at shutdown ("PyGILState_Release: thread state ...
+    # must be current when releasing") and SIGABRT (exit 134) *after* the
+    # output was already complete and correct. A caller (sbatch script)
+    # watching the exit code sees a crash and treats a successful tokenize as
+    # a failure -- a false negative at the source, not a real bug in the data.
+    #
+    # os._exit(0) exits the process immediately via the raw syscall, skipping
+    # atexit handlers, `__del__`s, and non-daemon thread joins -- i.e.
+    # skipping exactly the finalization sequence where the race happens.
+    # Flush first or the last log lines (the "Done: N tokens -> ..." summary)
+    # never make it to the log file.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

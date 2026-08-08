@@ -122,7 +122,7 @@ fi
 echo "############################################################"
 echo "### STEP 1: tokenize train shard (real FineWeb-Edu, 100M tokens)"
 echo "############################################################"
-if [ ! -f "$TRAIN_DIR/train.bin" ]; then
+if [ ! -f "$TRAIN_DIR/meta.json" ]; then
     python -m koopman_lm.training.data.pretokenize \
         --output_dir "$TRAIN_DIR" --tokenizer "$TOKENIZER" \
         --fineweb HuggingFaceFW/fineweb-edu --fineweb_subset sample-10BT \
@@ -130,7 +130,15 @@ if [ ! -f "$TRAIN_DIR/train.bin" ]; then
         2>&1 | tee "$LOGDIR/tokenize-train-${SLURM_JOB_ID:-manual}.log"
     TOKENIZE_TRAIN_STATUS=${PIPESTATUS[0]}
 else
-    echo "train shard already exists at $TRAIN_DIR, skipping (idempotent re-run)"
+    # meta.json is the LAST thing pretokenize.py writes on a successful run
+    # (train.bin/weights.bin are written incrementally while streaming, so
+    # their mere presence doesn't prove tokenization finished -- meta.json's
+    # presence does). Job 415339 tokenized this exact shard successfully
+    # (meta.json written, contents verified against train.bin/weights.bin
+    # byte sizes) and then the *interpreter* SIGABRTed during shutdown --
+    # a false negative fixed at the source in pretokenize.py's __main__
+    # guard (os._exit(0) after the success path). Do not re-tokenize.
+    echo "train shard already exists at $TRAIN_DIR (meta.json present), skipping (idempotent re-run)"
     TOKENIZE_TRAIN_STATUS=0
 fi
 echo "STATUS step1_tokenize_train=$TOKENIZE_TRAIN_STATUS"
@@ -146,7 +154,7 @@ echo "train shard consumed $DOCS_CONSUMED fineweb docs; val shard will skip_docs
 echo "############################################################"
 echo "### STEP 1b: tokenize disjoint val shard (4M tokens)"
 echo "############################################################"
-if [ ! -f "$VAL_DIR/train.bin" ]; then
+if [ ! -f "$VAL_DIR/meta.json" ]; then
     python -m koopman_lm.training.data.pretokenize \
         --output_dir "$VAL_DIR" --tokenizer "$TOKENIZER" \
         --fineweb HuggingFaceFW/fineweb-edu --fineweb_subset sample-10BT \
@@ -155,7 +163,7 @@ if [ ! -f "$VAL_DIR/train.bin" ]; then
         2>&1 | tee "$LOGDIR/tokenize-val-${SLURM_JOB_ID:-manual}.log"
     TOKENIZE_VAL_STATUS=${PIPESTATUS[0]}
 else
-    echo "val shard already exists at $VAL_DIR, skipping (idempotent re-run)"
+    echo "val shard already exists at $VAL_DIR (meta.json present), skipping (idempotent re-run)"
     TOKENIZE_VAL_STATUS=0
 fi
 echo "STATUS step1b_tokenize_val=$TOKENIZE_VAL_STATUS"
