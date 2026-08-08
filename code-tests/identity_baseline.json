@@ -1,0 +1,130 @@
+{
+  "config_hash": {
+    "180m": "079d2b71aacbe44352685ee27519c5015eb58914d52ab308f948ebd6ea91cb90",
+    "180m_dense": "89ac30ac475661c75ebd7d5047b21742909339a39e0f7fed87331ddcedb0e569",
+    "180m_gated": "80cf112a288914dea055939f41ebacfc9c1655b7c745f98fc195e83dc1f96ae5",
+    "180m_v2": "0d6bb6db761f3fe4a9cbb403a33ec89982ece083e91aca919caf10db53438ff4",
+    "1m": "93ea1b686e65159aad261c1e171113a706a8b18f5193c96ca006d1da33276648",
+    "1p5b": "c0ebd7df5ec78749488d9ed30b28693bccb02610d3cd460c98d7448f3d338121",
+    "370m": "1b452adaa64c2f14295053102ea23594695531208bb75b7ed798e0958358705f",
+    "3b": "ee70676f505192643377bc304e8d16e02df035d6952f1d2abf9b5146e868200d",
+    "440m": "1ced2721490de037ec6d811582eacda64940e7abe7967319734927234859a5fe",
+    "50m": "c639c3ea6c1233cbb7db44e1ca6a88f8726a344f5a85047d2dd41801f36a0f81",
+    "880m": "e8df1f543af61f671a854dcc92b0b5222d92a5280b2c49353d461b6d1d37a0a5"
+  },
+  "run_spec": {
+    "configs/runs/50m-fineweb-3b.yaml": {
+      "config_hash": "c639c3ea6c1233cbb7db44e1ca6a88f8726a344f5a85047d2dd41801f36a0f81",
+      "group_id": "6ed9335d",
+      "run_id": "3fff7e40"
+    },
+    "configs/runs/50m-first-real.yaml": {
+      "config_hash": "8807a902e9b765a28a08039ebe7372d073909dbf4000e13ae34c659f9b276302",
+      "group_id": "81033b58",
+      "run_id": "5467934f"
+    },
+    "configs/runs/50m-mqar-smoke.yaml": {
+      "config_hash": "c639c3ea6c1233cbb7db44e1ca6a88f8726a344f5a85047d2dd41801f36a0f81",
+      "group_id": "3f0c3941",
+      "run_id": "cecbcff0"
+    }
+  },
+  "sweep": {
+    "configs/sweeps/ska-rank-lr.yaml": {
+      "cells": [
+        {
+          "group_id": "26707318",
+          "overrides": {
+            "model.ska_rank": "16",
+            "optim.lr": "0.0002",
+            "runtime.seed": "42"
+          },
+          "run_id": "11f12406"
+        },
+        {
+          "group_id": "26707318",
+          "overrides": {
+            "model.ska_rank": "16",
+            "optim.lr": "0.0002",
+            "runtime.seed": "43"
+          },
+          "run_id": "7440f48f"
+        },
+        {
+          "group_id": "7fb8c4d2",
+          "overrides": {
+            "model.ska_rank": "24",
+            "optim.lr": "0.0002",
+            "runtime.seed": "42"
+          },
+          "run_id": "e5df2a2b"
+        },
+        {
+          "group_id": "7fb8c4d2",
+          "overrides": {
+            "model.ska_rank": "24",
+            "optim.lr": "0.0002",
+            "runtime.seed": "43"
+          },
+          "run_id": "465786ef"
+        },
+        {
+          "group_id": "6ed9335d",
+          "overrides": {
+            "model.ska_rank": "24",
+            "optim.lr": "0.0004",
+            "runtime.seed": "42"
+          },
+          "run_id": "3fff7e40"
+        },
+        {
+          "group_id": "6ed9335d",
+          "overrides": {
+            "model.ska_rank": "24",
+            "optim.lr": "0.0004",
+            "runtime.seed": "43"
+          },
+          "run_id": "6340174d"
+        },
+        {
+          "group_id": "4f19ca8f",
+          "overrides": {
+            "model.ska_rank": "32",
+            "optim.lr": "0.0002",
+            "runtime.seed": "42"
+          },
+          "run_id": "f7aa33ea"
+        },
+        {
+          "group_id": "4f19ca8f",
+          "overrides": {
+            "model.ska_rank": "32",
+            "optim.lr": "0.0002",
+            "runtime.seed": "43"
+          },
+          "run_id": "a82df1e3"
+        },
+        {
+          "group_id": "439b31a2",
+          "overrides": {
+            "model.ska_rank": "32",
+            "optim.lr": "0.0004",
+            "runtime.seed": "42"
+          },
+          "run_id": "6ab01bd7"
+        },
+        {
+          "group_id": "439b31a2",
+          "overrides": {
+            "model.ska_rank": "32",
+            "optim.lr": "0.0004",
+            "runtime.seed": "43"
+          },
+          "run_id": "00c65923"
+        }
+      ],
+      "n_cells": 10,
+      "sweep_id": "eb729e29"
+    }
+  }
+}
