@@ -215,7 +215,7 @@ class KoopmanLM(nn.Module):
         pool: 'mean' -> mask-weighted mean over real tokens (robust default).
               'last' -> hidden at the last real token (the causal summary slot).
         """
-        from koopman_lm.retrieval.encoder import pool_sequence
+        from koopman_lm.pooling import pool_sequence
         h = self.embed(input_ids)
         for seq_layer, mlp_layer in zip(self.seq_layers, self.mlp_layers):
             h = seq_layer(h)
