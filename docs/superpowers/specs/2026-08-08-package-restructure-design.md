@@ -296,15 +296,21 @@ Survival audit of those 22 files against `jack/diagnostics` (blob-hash checked):
 | `echo-ska/prepare_data.py` | probably | `training/data/pretokenize.py` has a strictly larger function surface. Surface checked, behavior not. |
 | `echo-ska/train_echo.py` | **no** | JAX/TPU harness; z-loss term and TPU mesh have no counterpart |
 | `MQAR/mqar_ska_mamba_benchmark.py` | reorganized | `evaluation/mqar/mqar.py` + `models/baselines.py` |
-| `MQAR/MQAR_SKA_Mamba_Benchmark-2.ipynb` | **no** | rescued only on `jack/overnight-cleanup` |
-| `MQAR/prefix_bench/` (13 files, 1,793 lines) | **no** | no counterpart; `curricula.py:196-201` documents the gap its absence causes |
+| `MQAR/MQAR_SKA_Mamba_Benchmark-2.ipynb` | **yes, after commit 1** | `archive/MQAR/MQAR_SKA_Mamba_Benchmark-2.ipynb` |
+| `MQAR/prefix_bench/` (13 files, 1,793 lines) | **yes, after commit 1** | `archive/MQAR/prefix_bench/` — no counterpart before it; `curricula.py:196-201` documents the gap its absence causes |
 | `lowrank_residual_cuda/` (3 files) | **no** | deliberately: unbuildable, unimported, untested, wrong gauge for SKA |
-| `sys+toolcall/SKAv9.py` | **no** | rescued only on `jack/overnight-cleanup` |
+| `sys+toolcall/SKAv9.py` | **yes, after commit 1** | `archive/toolcall/SKAv9.py` |
 
-Commit 1 of this PR closes the `prefix_bench` / `SKAv9` gap. The remaining
-three (`train_echo.py`, the notebook, `lowrank_residual_cuda/`) are being
-dropped from the working tree on purpose, recoverable from `c349805`
-indefinitely **provided `main` advances by merge and is never force-pushed**.
+Commit 1 of this PR rescues more than first assessed: `prefix_bench`, `SKAv9.py`
+**and** the MQAR notebook (874 lines), all under `archive/` with provenance in
+`archive/README.md` and inertness enforced by `code-tests/test_archive_is_inert.py`.
+
+That leaves exactly **two** files dropped from the working tree on purpose:
+`echo-ska/train_echo.py` (JAX/TPU harness; its z-loss term and TPU multi-host
+mesh have no counterpart) and `lowrank_residual_cuda/` (3 files). Both remain
+recoverable from `c349805` indefinitely **provided `main` advances by merge and
+is never force-pushed**. `echo-ska/prepare_data.py` and
+`MQAR/mqar_ska_mamba_benchmark.py` are superseded rather than dropped.
 
 Anu's PR #11 restored these on the grounds that "nothing on main replaces"
 them — still true for those three — so the deletion is their call, not a
@@ -313,7 +319,8 @@ merge-time slip.
 **For the call with Anu:**
 
 1. The four folders — delete via a cleanup commit on `main` after the merge?
-2. `train_echo.py`, the MQAR notebook, `lowrank_residual_cuda/` — confirm drop.
+2. `echo-ska/train_echo.py` and `lowrank_residual_cuda/` — the only two files
+   dropped from the working tree with no counterpart. Confirm.
 3. `csrc/small_rank_ext.cu` + `small_rank_backend.py` (~1,750 lines, zero callers).
 4. `koopman_lm/modules/wip/`.
 
