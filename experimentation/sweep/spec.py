@@ -47,8 +47,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from koopman_lm.config import KoopmanLMConfig
-from experimentation.run.resolve import load_raw_spec, resolve_model_config
-from experimentation.run.spec import OptimSpec, RunSpec, RuntimeSpec, data_spec_from_dict
+from experimentation.run.resolve import load_raw_spec
+from experimentation.run.spec import (
+    OptimSpec, RunSpec, RuntimeSpec, data_spec_from_dict, resolve_model_config)
 
 _AXIS_SECTIONS = ("model", "data", "optim", "runtime")
 

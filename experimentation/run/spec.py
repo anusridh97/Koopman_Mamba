@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Union
 
-from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.config import KoopmanLMConfig, build_config
 
 _SYNTHETIC_GENERATORS = {"mqar", "toolcall", "sysprompt", "niah"}
 
@@ -69,6 +69,23 @@ def data_spec_from_dict(d: Dict[str, Any]) -> DataSpec:
     if kind == "synthetic":
         return SyntheticDataSpec(**d)
     raise ValueError(f"data.kind must be 'shard' or 'synthetic', got {kind!r}")
+
+
+def resolve_model_config(value) -> KoopmanLMConfig:
+    """Build a spec's `model:` section, however it was spelled.
+
+    Accepts an inline dict (the materialized form every spec.yaml carries), a
+    CONFIG_REGISTRY name like "50m", or a path to a YAML/JSON config.
+
+    Lives here, beside data_spec_from_dict, because both answer the same
+    question -- how does one RunSpec section become its dataclass -- and
+    splitting the two across spec.py and resolve.py made the module boundary
+    look arbitrary. spec.py owns "what a spec is and how to build one from a
+    dict"; resolve.py owns inheritance, provenance, and writing it back out.
+    """
+    if isinstance(value, dict):
+        return KoopmanLMConfig(**value)
+    return build_config(value)   # registry name ("50m") or a path to a YAML/JSON
 
 
 @dataclass(frozen=True)

@@ -200,7 +200,9 @@ def test_load_raw_spec_follows_extends_chain(tmp_path):
 
 
 def test_resolve_model_config_accepts_registry_name_and_inline_dict():
-    from experimentation.run.resolve import resolve_model_config
+    # Lives in run.spec beside data_spec_from_dict: both build one RunSpec
+    # section from a dict. resolve.py keeps inheritance/provenance/materialize.
+    from experimentation.run.spec import resolve_model_config
 
     cfg = resolve_model_config("50m")
     assert cfg.d_model == 384

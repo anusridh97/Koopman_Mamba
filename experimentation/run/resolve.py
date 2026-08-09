@@ -16,10 +16,11 @@ from typing import Any, Dict, List, Optional
 import torch
 import yaml
 
-from koopman_lm.config import KoopmanLMConfig, build_config
+from koopman_lm.config import KoopmanLMConfig
 from experimentation.run.artifacts import atomic_write_text
 from experimentation.run.spec import (
-    OptimSpec, RuntimeSpec, RunSpec, data_spec_from_dict, group_id, run_id,
+    OptimSpec, RuntimeSpec, RunSpec, data_spec_from_dict, group_id,
+    resolve_model_config, run_id,
 )
 
 
@@ -48,18 +49,12 @@ def _load_raw_chain(path: Path) -> Dict[str, Any]:
     return _deep_merge(base, raw)
 
 
-def _resolve_model(value) -> KoopmanLMConfig:
-    if isinstance(value, dict):
-        return KoopmanLMConfig(**value)
-    return build_config(value)   # registry name ("50m") or a path to a YAML/JSON
-
-
 def resolve_run_spec(path) -> RunSpec:
     """Flatten a configs/runs/<name>.yaml (possibly with extends:) into a
     RunSpec. Callers should immediately materialize() the result -- nothing
     downstream should re-read the authoring YAML."""
     raw = _load_raw_chain(Path(path))
-    model = _resolve_model(raw["model"])
+    model = resolve_model_config(raw["model"])
     data = data_spec_from_dict(raw["data"])
     optim = OptimSpec(**raw["optim"])
     runtime = RuntimeSpec(**raw.get("runtime", {}))
@@ -198,7 +193,7 @@ def _check_model_key_set(model_dict: Dict[str, Any]) -> None:
 
     Scoped to *materialized* specs only -- authoring specs with `extends:`
     legitimately carry partial key sets (a leaf overrides only what it
-    changes), so this must not run in resolve_run_spec's _resolve_model path.
+    changes), so this must not run in resolve_run_spec's resolve_model_config path.
     """
     expected = {f.name for f in dataclasses.fields(KoopmanLMConfig)}
     actual = set(model_dict)
@@ -231,13 +226,3 @@ def load_raw_spec(path) -> Dict[str, Any]:
     building each cell's RunSpec. resolve_run_spec itself only ever returns
     the fully-built RunSpec, which is too late for that."""
     return _load_raw_chain(Path(path))
-
-
-def resolve_model_config(value) -> KoopmanLMConfig:
-    """Public wrapper around the same model-value resolution
-    resolve_run_spec uses internally (a registry name, a path to a YAML/
-    JSON config, or an inline dict) -- exposed so callers building RunSpecs
-    outside the single-file `extends:` flow (experimentation.sweep) can resolve a
-    base spec's `model:` field the same way, regardless of how that base
-    spelled it."""
-    return _resolve_model(value)
