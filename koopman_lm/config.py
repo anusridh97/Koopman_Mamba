@@ -1,4 +1,4 @@
-from dataclasses import dataclass, replace, asdict
+from dataclasses import dataclass, field, fields, replace, asdict
 from typing import Optional, Tuple
 import hashlib
 import json
@@ -52,10 +52,10 @@ class KoopmanLMConfig:
     # at the boundary, clamp kills it. None preserves prior (clamp/fixed)
     # behavior; set both to reproduce the original paper-faithful regime
     # (eta in [1.4, 1.7] init 1.5, gamma in [0.5, 1.5] init 0.7).
-    ska_eta_bounds: Optional[tuple] = None
+    ska_eta_bounds: Optional[tuple] = field(default=None, metadata={"coerce": tuple})
     ska_gamma_learnable: bool = True
-    ska_gamma_clamp: Optional[tuple] = (1.0, 1.5)
-    ska_gamma_bounds: Optional[tuple] = None
+    ska_gamma_clamp: Optional[tuple] = field(default=(1.0, 1.5), metadata={"coerce": tuple})
+    ska_gamma_bounds: Optional[tuple] = field(default=None, metadata={"coerce": tuple})
     ska_gamma_value: float = 1.0
 
     # Residual injection
@@ -161,7 +161,8 @@ class KoopmanLMConfig:
     rescale_prenorm_residual: bool = True
 
     # Layer layout
-    ska_layer_indices: Optional[Tuple[int, ...]] = None
+    ska_layer_indices: Optional[Tuple[int, ...]] = field(
+        default=None, metadata={"coerce": tuple})
 
     # Training
     max_seq_len: int = 8192
@@ -170,14 +171,23 @@ class KoopmanLMConfig:
     def __post_init__(self):
         if self.ska_layer_indices is None:
             object.__setattr__(self, "ska_layer_indices", (4, 8, 12, 16, 20, 23))
-        else:
-            object.__setattr__(self, "ska_layer_indices", tuple(self.ska_layer_indices))
-        if self.ska_gamma_clamp is not None:
-            object.__setattr__(self, "ska_gamma_clamp", tuple(self.ska_gamma_clamp))
-        if self.ska_eta_bounds is not None:
-            object.__setattr__(self, "ska_eta_bounds", tuple(self.ska_eta_bounds))
-        if self.ska_gamma_bounds is not None:
-            object.__setattr__(self, "ska_gamma_bounds", tuple(self.ska_gamma_bounds))
+
+        # Normalize every field declaring metadata={"coerce": ...}. YAML and JSON
+        # have no tuple type, so a deserialized config always arrives with lists
+        # here -- including the spec.yaml the run system writes and reads back on
+        # each launch (run/spec.py:181 -> run/resolve.py:219). Coercing is what
+        # makes frozen=True a real guarantee (a list field is still mutable in
+        # place), keeps __eq__/__hash__ working, and lets
+        # asdict -> yaml -> KoopmanLMConfig(**raw) round-trip to an EQUAL config.
+        # Declared per field rather than listed here so a new collection field
+        # opts in at its own declaration and cannot be silently forgotten.
+        for f in fields(self):
+            conv = f.metadata.get("coerce")
+            if conv is None:
+                continue
+            value = getattr(self, f.name)
+            if value is not None:
+                object.__setattr__(self, f.name, conv(value))
 
         valid_mlp = {'auto', 'koopman', 'koopman_gated', 'swiglu'}
         if self.mlp_type not in valid_mlp:

@@ -6,6 +6,7 @@ Pure-Python / CPU — no torch model instantiation, so this runs anywhere
 import dataclasses
 
 import pytest
+import yaml
 
 from koopman_lm.config import (
     KoopmanLMConfig,
@@ -93,6 +94,50 @@ def test_gated_variant_differs_only_in_mlp_gated():
     assert base.mlp_gated is False
     assert gated.mlp_gated is True
     assert config_hash(dataclasses.replace(base, mlp_gated=True)) == config_hash(gated)
+
+
+@pytest.mark.parametrize("name", sorted(CONFIG_REGISTRY))
+def test_config_survives_spec_yaml_round_trip(name):
+    """asdict -> spec.yaml -> KoopmanLMConfig(**raw) must yield an EQUAL config.
+
+    This is the invariant experimentation/run does on every launch: resolve.py
+    materializes a spec.yaml via dataclasses.asdict (run/spec.py:181) and
+    rebuilds the model config from it (run/resolve.py:219). YAML has no tuple
+    type, so every collection field comes back as a list; without __post_init__'s
+    coercion the rebuilt config compares UNEQUAL and is unhashable, and the
+    frozen guarantee is a fiction because a list field can be mutated in place.
+
+    Asserts the property, not a field list, so a newly added collection field
+    that forgets metadata={"coerce": ...} fails here instead of silently.
+    """
+    cfg = build_config(name)
+    rebuilt = KoopmanLMConfig(**yaml.safe_load(yaml.safe_dump(dataclasses.asdict(cfg))))
+    assert rebuilt == cfg
+    assert hash(rebuilt) == hash(cfg)
+    assert config_hash(rebuilt) == config_hash(cfg)
+
+
+def test_every_collection_field_declares_coercion():
+    """Any tuple/list-typed field must opt into coercion at its declaration."""
+    missing = [
+        f.name for f in dataclasses.fields(KoopmanLMConfig)
+        if ("uple" in str(f.type) or "ist" in str(f.type))
+        and "coerce" not in f.metadata
+    ]
+    assert not missing, f"collection fields without metadata={{'coerce': ...}}: {missing}"
+
+
+def test_lists_are_coerced_to_tuples():
+    cfg = KoopmanLMConfig(
+        n_layers=24,
+        ska_layer_indices=[4, 8, 12],
+        ska_gamma_clamp=[1.0, 1.5],
+        ska_eta_bounds=[1.4, 1.7],
+        ska_gamma_bounds=[0.5, 1.5],
+    )
+    for name in ("ska_layer_indices", "ska_gamma_clamp",
+                 "ska_eta_bounds", "ska_gamma_bounds"):
+        assert isinstance(getattr(cfg, name), tuple), name
 
 
 @pytest.mark.parametrize("size,band", PARAM_BANDS.items())
