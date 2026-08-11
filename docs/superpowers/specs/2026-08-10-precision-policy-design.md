@@ -109,6 +109,22 @@ Three reasons:
    already reads it — so putting precision on the config delivers it to every
    inference path with no new plumbing (§4.3).
 
+### What this design really is
+
+Worth stating, because it is the more general point: precision is currently
+**behavior with no config representation**. `ska.py:535` forces fp32 and nothing
+records that it did; a future edit to that line would change numerics while
+leaving `config_hash` byte-identical.
+
+That is the hardest provenance case to recover from — see
+`2026-08-10-run-provenance-design.md` §1, case C. Converting hidden behavior into
+a declared, materialized config value is what §4.3 of that document names as the
+one measure that *shrinks* the problem rather than instrumenting it.
+
+So the deliverable here is not primarily the fp16 capability. It is that three
+more facts about how a model computed become recorded in every run's `spec.yaml`
+and every checkpoint's `meta.pt`, instead of being implicit in the source.
+
 ---
 
 ## 3. Validation
