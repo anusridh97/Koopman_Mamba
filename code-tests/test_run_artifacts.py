@@ -10,7 +10,7 @@ pytestmark = pytest.mark.correctness
 
 
 def test_atomic_write_text_creates_parents_and_no_tmp_leftover(tmp_path):
-    from experimentation.run.artifacts import atomic_write_text
+    from experimentation.atomic_io import atomic_write_text
 
     target = tmp_path / "nested" / "spec.yaml"
     atomic_write_text(target, "hello: world\n")
@@ -20,7 +20,7 @@ def test_atomic_write_text_creates_parents_and_no_tmp_leftover(tmp_path):
 
 
 def test_atomic_write_json_round_trips(tmp_path):
-    from experimentation.run.artifacts import atomic_write_json
+    from experimentation.atomic_io import atomic_write_json
 
     target = tmp_path / "result.json"
     atomic_write_json(target, {"a": 1, "b": [1, 2, 3]})
@@ -28,7 +28,7 @@ def test_atomic_write_json_round_trips(tmp_path):
 
 
 def test_create_run_dir_happy_path(tmp_path):
-    from experimentation.run.artifacts import create_run_dir
+    from experimentation.run.write_policy import create_run_dir
 
     run_dir = tmp_path / "50m-fineweb-3b.abcd1234" / "seed42.deadbeef"
     result = create_run_dir(run_dir)
@@ -37,7 +37,7 @@ def test_create_run_dir_happy_path(tmp_path):
 
 
 def test_create_run_dir_refuses_to_clobber_a_finished_run(tmp_path):
-    from experimentation.run.artifacts import RunDirConflictError, create_run_dir
+    from experimentation.run.write_policy import RunDirConflictError, create_run_dir
 
     run_dir = tmp_path / "run"
     (run_dir / "final").mkdir(parents=True)
@@ -46,7 +46,7 @@ def test_create_run_dir_refuses_to_clobber_a_finished_run(tmp_path):
 
 
 def test_create_run_dir_allows_resume_or_force(tmp_path):
-    from experimentation.run.artifacts import create_run_dir
+    from experimentation.run.write_policy import create_run_dir
 
     run_dir = tmp_path / "run"
     (run_dir / "final").mkdir(parents=True)
@@ -55,7 +55,7 @@ def test_create_run_dir_allows_resume_or_force(tmp_path):
 
 
 def test_append_attempt_is_append_only(tmp_path):
-    from experimentation.run.artifacts import append_attempt
+    from experimentation.run.write_policy import append_attempt
 
     run_dir = tmp_path / "run"
     append_attempt(run_dir, {"host": "node01", "job_id": "1"})
@@ -67,7 +67,7 @@ def test_append_attempt_is_append_only(tmp_path):
 
 
 def test_make_attempt_record_shape():
-    from experimentation.run.artifacts import make_attempt_record
+    from experimentation.run.write_policy import make_attempt_record
 
     record = make_attempt_record(host="node01", job_id="12345",
                                    git_commit="deadbeef", forced=False)
@@ -82,7 +82,7 @@ def test_make_attempt_record_includes_code_id():
     """Every attempts.jsonl entry must carry code_id (the commit that actually
     executed), independently of run_id -- so an attempt against a stale
     code_id is identifiable directly from the audit trail."""
-    from experimentation.run.artifacts import make_attempt_record
+    from experimentation.run.write_policy import make_attempt_record
 
     record = make_attempt_record(host="node01", job_id="12345",
                                    git_commit="deadbeef", forced=False)
@@ -97,7 +97,7 @@ def test_create_run_dir_reports_code_id_mismatch_explicitly(tmp_path):
     same experiment."""
     import yaml
 
-    from experimentation.run.artifacts import RunDirConflictError, create_run_dir
+    from experimentation.run.write_policy import RunDirConflictError, create_run_dir
 
     run_dir = tmp_path / "run"
     (run_dir / "final").mkdir(parents=True)
@@ -113,7 +113,7 @@ def test_create_run_dir_same_code_id_gives_generic_conflict(tmp_path):
     mismatches."""
     import yaml
 
-    from experimentation.run.artifacts import RunDirConflictError, create_run_dir
+    from experimentation.run.write_policy import RunDirConflictError, create_run_dir
 
     run_dir = tmp_path / "run"
     (run_dir / "final").mkdir(parents=True)
@@ -126,7 +126,7 @@ def test_create_run_dir_same_code_id_gives_generic_conflict(tmp_path):
 
 def test_atomic_torch_save_round_trips_and_leaves_no_tmp(tmp_path):
     import torch
-    from experimentation.run.artifacts import atomic_torch_save
+    from experimentation.atomic_io import atomic_torch_save
 
     target = tmp_path / "resume.pt"
     atomic_torch_save(target, {"step": 7, "tensor": torch.arange(4)})
@@ -139,7 +139,7 @@ def test_atomic_torch_save_round_trips_and_leaves_no_tmp(tmp_path):
 
 def test_atomic_torch_save_failure_does_not_corrupt_existing_file(tmp_path, monkeypatch):
     import torch
-    from experimentation.run.artifacts import atomic_torch_save
+    from experimentation.atomic_io import atomic_torch_save
 
     target = tmp_path / "resume.pt"
     atomic_torch_save(target, {"step": 1})

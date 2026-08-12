@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from experimentation.run.artifacts import atomic_write_json
+from experimentation.atomic_io import atomic_write_json
 
 
 @dataclass(frozen=True)

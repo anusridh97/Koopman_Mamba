@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from experimentation.run.artifacts import atomic_write_text
+from experimentation.atomic_io import atomic_write_text
 from experimentation.run.launch import Launcher, build_train_argv, write_model_config
 from experimentation.run.spec import RunSpec, RuntimeSpec
 

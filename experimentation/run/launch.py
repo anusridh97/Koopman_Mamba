@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List
 
-from experimentation.run.artifacts import atomic_write_json
+from experimentation.atomic_io import atomic_write_json
 from experimentation.run.spec import RunSpec, ShardDataSpec
 
 

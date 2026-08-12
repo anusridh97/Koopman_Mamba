@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 import yaml
 
 from koopman_lm.config import KoopmanLMConfig
-from experimentation.run.artifacts import atomic_write_text
+from experimentation.atomic_io import atomic_write_text
 from experimentation.run.provenance import provenance
 from experimentation.run.spec import (
     OptimSpec, RuntimeSpec, RunSpec, data_spec_from_dict, group_id,
