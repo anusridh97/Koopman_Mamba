@@ -9,7 +9,6 @@ train_fast.py -- Optimized training for Koopman LM and baselines.
     ones (no weights.bin) -- identical to the original mean CE.
   * Tokenizer default -> meta-llama/Llama-2-7b-hf (use NousResearch mirror if gated).
   * For model_type==koopman the SKA fast-patch is OPTIONAL now (the custom
-    autograd core already avoids autograd-through-cholesky); --ska_fast to enable.
 
 Everything else (bf16 autocast, targeted torch.compile, gradient checkpointing,
 fused AdamW, DDP, checkpointing) is unchanged.
@@ -100,7 +99,7 @@ def _load_init_weights(model, path):
     """Weights-only warm start for continued pretraining.
 
     Loads a base checkpoint's ``state_dict`` into a freshly built model (before
-    any ska_fast fusion / compile). This is a WARM START, not a resume: the
+    any gradient checkpointing / compile). This is a WARM START, not a resume: the
     optimizer, LR schedule, and step counter are all fresh, so training runs a
     new cosine schedule over the continued-pretraining token budget. Loaded with
     strict=False so a mismatched head (e.g. a different tokenizer vocab) surfaces
@@ -159,20 +158,11 @@ def build_model(args, tokenizer):
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
 
-    # Warm start BEFORE ska_fast fusion / gradient checkpointing / compile, so
+    # Warm start BEFORE gradient checkpointing / compile, so
     # weights load into the plain module the checkpoint was saved from.
     if getattr(args, "init_from", None):
         _load_init_weights(model, args.init_from)
 
-    if args.model_type in {"koopman", "mamba_ska_swiglu", "mamba_ska_koopman"}:
-        if args.ska_fast:
-            from koopman_lm.modules.seq.fast import patch_ska_module
-            for layer in model.modules():
-                if isinstance(layer, SKABlock):
-                    patch_ska_module(layer.ska)
-            print("  Applied SKA fast patches (fused proj / bf16 einsums)")
-        else:
-            print("  SKA uses the custom autograd core (no fast-patch needed)")
 
     if args.gradient_checkpointing:
         enable_gradient_checkpointing(model)
@@ -552,8 +542,6 @@ def parse_args():
     p.add_argument("--no_compile", action="store_false", dest="compile")
     p.add_argument("--gradient_checkpointing", action="store_true", default=True)
     p.add_argument("--no_gradient_checkpointing", action="store_false", dest="gradient_checkpointing")
-    p.add_argument("--ska_fast", action="store_true", default=False,
-                   help="apply ska_fast fused-proj patch (optional; core is custom autograd)")
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--ddp", action="store_true", default=False)
     p.add_argument("--logging_steps", type=int, default=10)

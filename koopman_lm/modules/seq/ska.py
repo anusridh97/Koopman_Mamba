@@ -23,6 +23,7 @@ _post_cholesky_pytorch / _post_cholesky_triton / _get_chunk_stats.
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from contextlib import nullcontext
 
 # Verified parity components (match echo_jax.py math):
@@ -250,9 +251,28 @@ class SKAModule(nn.Module):
         r = self.rank
         H, P = self.H, self.P
 
-        z = self.key_proj(hidden_states).reshape(B, T, H, r)
-        zq = self.query_proj(hidden_states).reshape(B, T, H, r)
-        v = self.value_proj(hidden_states).reshape(B, T, H, P)
+        # Fused k/q/v projection (absorbed from the retired ska_fast patch):
+        # one GEMM against the row-stacked [W_k; W_q; W_v] equals the three
+        # separate GEMMs by block matmul, but issues a single kernel. The
+        # weights stay three separate nn.Linear parameters so checkpoints, the
+        # recurrent decode path (models/recurrent.py calls ska.key_proj(h)
+        # directly), and koopman_lm.py's custom inits are all untouched;
+        # autograd splits the gradient back through the cat. beta_proj stays
+        # separate -- it has a bias, and is (B,T,H) not (B,T,H,r).
+        #
+        # This lives in forward() rather than behind a flag on purpose. The old
+        # fast.py monkey-patched a SECOND forward over the module, which drifted
+        # twice before anyone noticed: it read self.eta directly (AttributeError
+        # under the eta_bounds squash regime) and silently skipped the
+        # prefix_scan / inverse_cholesky / exact_intrachunk branches, so
+        # --ska_fast on either production config quietly swapped the exact
+        # operator for the chunked approximation. One forward cannot drift.
+        fused_w = torch.cat([self.key_proj.weight, self.query_proj.weight,
+                             self.value_proj.weight], dim=0)
+        combined = F.linear(hidden_states, fused_w)
+        z = combined[..., :H * r].reshape(B, T, H, r)
+        zq = combined[..., H * r:2 * H * r].reshape(B, T, H, r)
+        v = combined[..., 2 * H * r:].reshape(B, T, H, P)
         beta = torch.sigmoid(self.beta_proj(hidden_states))            # (B,T,H)
 
         ctx = torch.amp.autocast('cuda', enabled=False) if hidden_states.is_cuda \
