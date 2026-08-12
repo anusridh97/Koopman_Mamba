@@ -16,11 +16,11 @@ import socket
 from pathlib import Path
 
 from experimentation.run.write_policy import append_attempt, create_run_dir, make_attempt_record
-from experimentation.run.data_verify import verify_shard
+from experimentation.run.data_verify import verify_data
 from experimentation.run.launchers import LocalLauncher, SlurmLauncher
 from experimentation.run.provenance import check_git_clean, git_commit
 from experimentation.run.resolve import materialize, resolve_run_spec
-from experimentation.run.spec import ShardDataSpec, run_dir_path, run_id as compute_run_id
+from experimentation.run.spec import run_dir_path, run_id as compute_run_id
 
 LAUNCHERS = {"local": LocalLauncher, "slurm": SlurmLauncher}
 
@@ -45,8 +45,10 @@ def main(argv=None):
     dirty = check_git_clean(allow_dirty=args.allow_dirty)
     spec = resolve_run_spec(args.spec)
 
-    if isinstance(spec.data, ShardDataSpec):
-        verify_shard(spec.data, dry_run=args.dry_run)
+    # Single gate for every data kind, BEFORE create_run_dir: an unlaunchable
+    # spec must not leave a run directory, a materialized spec.yaml, or an
+    # attempts.jsonl entry behind. See data_verify.verify_data.
+    verify_data(spec.data, dry_run=args.dry_run)
 
     run_dir = run_dir_path(args.run_root, spec)
     create_run_dir(run_dir, resume=args.resume, force=args.force, code_id=git_commit())
