@@ -27,7 +27,7 @@ def _shard_spec(**runtime_overrides):
 
 
 def test_ddp_grad_accum_holds_effective_batch_constant():
-    from experimentation.run.launch import ddp_grad_accum
+    from experimentation.run.train_argv import ddp_grad_accum
 
     assert ddp_grad_accum(96, 16, world_size=1) == 6
     assert ddp_grad_accum(96, 16, world_size=2) == 3
@@ -35,21 +35,21 @@ def test_ddp_grad_accum_holds_effective_batch_constant():
 
 
 def test_ddp_grad_accum_rejects_non_divisible_batch():
-    from experimentation.run.launch import ddp_grad_accum
+    from experimentation.run.train_argv import ddp_grad_accum
 
     with pytest.raises(ValueError):
         ddp_grad_accum(96, 16, world_size=4)   # 16*4=64 does not divide 96
 
 
 def test_ddp_grad_accum_rejects_bad_world_size():
-    from experimentation.run.launch import ddp_grad_accum
+    from experimentation.run.train_argv import ddp_grad_accum
 
     with pytest.raises(ValueError):
         ddp_grad_accum(96, 16, world_size=0)
 
 
 def test_build_train_argv_maps_shard_spec_onto_train_py_cli(tmp_path):
-    from experimentation.run.launch import build_train_argv
+    from experimentation.run.train_argv import build_train_argv
 
     spec = _shard_spec()
     argv = build_train_argv(spec, tmp_path, world_size=1)
@@ -65,7 +65,7 @@ def test_build_train_argv_maps_shard_spec_onto_train_py_cli(tmp_path):
 
 
 def test_build_train_argv_adds_ddp_flag_under_multi_gpu():
-    from experimentation.run.launch import build_train_argv
+    from experimentation.run.train_argv import build_train_argv
 
     spec = _shard_spec(ddp=True, gpus=2)
     argv = build_train_argv(spec, "/tmp/run", world_size=2)
@@ -75,7 +75,7 @@ def test_build_train_argv_adds_ddp_flag_under_multi_gpu():
 
 
 def test_build_train_argv_rejects_synthetic_data():
-    from experimentation.run.launch import build_train_argv
+    from experimentation.run.train_argv import build_train_argv
     from koopman_lm.config import build_config
     from experimentation.run.spec import OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec
 
@@ -90,7 +90,7 @@ def test_build_train_argv_rejects_synthetic_data():
 
 
 def test_local_launcher_build_command_single_gpu(tmp_path):
-    from experimentation.run.launch import LocalLauncher
+    from experimentation.run.launchers import LocalLauncher
 
     spec = _shard_spec()
     cmd = LocalLauncher().build_command(spec, tmp_path)
@@ -100,7 +100,7 @@ def test_local_launcher_build_command_single_gpu(tmp_path):
 
 
 def test_local_launcher_build_command_multi_gpu_uses_torchrun(tmp_path):
-    from experimentation.run.launch import LocalLauncher
+    from experimentation.run.launchers import LocalLauncher
 
     spec = _shard_spec(ddp=True, gpus=2)   # 96 = 16 * 2 * 3: divides evenly
     cmd = LocalLauncher().build_command(spec, tmp_path)
@@ -110,12 +110,12 @@ def test_local_launcher_build_command_multi_gpu_uses_torchrun(tmp_path):
 
 
 def test_local_launcher_submit_dry_run_does_not_call_subprocess(tmp_path, monkeypatch):
-    from experimentation.run.launch import LocalLauncher
+    from experimentation.run.launchers import LocalLauncher
 
     def _boom(*a, **k):
         raise AssertionError("subprocess.run must not be called under dry_run")
 
-    monkeypatch.setattr("experimentation.run.launch.subprocess.run", _boom)
+    monkeypatch.setattr("experimentation.run.launchers.subprocess.run", _boom)
     spec = _shard_spec()
     cmd = LocalLauncher().submit(spec, tmp_path, dry_run=True)
     assert cmd[1:3] == ["-m", "experimentation.training.train"]

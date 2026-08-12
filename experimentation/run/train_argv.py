@@ -1,18 +1,22 @@
-"""Launcher ABC (§3.4): the spec says *what* to run, the launcher says
-*where*. build_train_argv maps a RunSpec onto experimentation.training.train's
-existing CLI -- train.py itself is frozen and not modified by this design.
+"""Map a RunSpec onto experimentation.training.train's CLI.
+
+Split out of launch.py, whose name said "where to run it" while most of its lines
+were "what command to run". This half is pure -- no subprocess, no sbatch, no
+filesystem except write_model_config -- and it is where the load-bearing
+knowledge lives: the grad-accum exactness check, the --no_compile /
+--no_gradient_checkpointing cudagraph interaction, and save_steps scaling.
+train.py itself is frozen and is not modified by this design (§3.4).
 """
 from __future__ import annotations
 
-import abc
 import dataclasses
-import subprocess
-import sys
 from pathlib import Path
 from typing import List
 
 from experimentation.atomic_io import atomic_write_json
 from experimentation.run.spec import RunSpec, ShardDataSpec
+
+__all__ = ["ddp_grad_accum", "write_model_config", "build_train_argv"]
 
 
 def ddp_grad_accum(effective_batch: int, per_device_batch_size: int,
@@ -105,35 +109,3 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
     if resume:
         argv.append("--resume")
     return argv
-
-
-class Launcher(abc.ABC):
-    """The spec says *what* to run; the launcher says *where* (§3.4)."""
-
-    @abc.abstractmethod
-    def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
-        ...
-
-    @abc.abstractmethod
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
-        ...
-
-
-class LocalLauncher(Launcher):
-    """Runs training in-process via subprocess: `python -m ...` for a single
-    GPU, `torchrun --standalone` when runtime.ddp and runtime.gpus > 1."""
-
-    def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
-        world_size = spec.runtime.gpus if (spec.runtime.ddp and spec.runtime.gpus > 1) else 1
-        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume)
-        if world_size > 1:
-            return ["torchrun", "--standalone", f"--nproc_per_node={world_size}",
-                     "-m", "experimentation.training.train", *train_args]
-        return [sys.executable, "-m", "experimentation.training.train", *train_args]
-
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
-        write_model_config(spec, run_dir)
-        cmd = self.build_command(spec, run_dir, resume=resume)
-        if dry_run:
-            return cmd
-        return subprocess.run(cmd, check=True)

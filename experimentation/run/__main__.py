@@ -17,10 +17,9 @@ from pathlib import Path
 
 from experimentation.run.write_policy import append_attempt, create_run_dir, make_attempt_record
 from experimentation.run.data_verify import verify_shard
-from experimentation.run.launch import LocalLauncher
+from experimentation.run.launchers import LocalLauncher, SlurmLauncher
 from experimentation.run.provenance import check_git_clean, git_commit
 from experimentation.run.resolve import materialize, resolve_run_spec
-from experimentation.run.slurm import SlurmLauncher
 from experimentation.run.spec import ShardDataSpec, run_dir_path, run_id as compute_run_id
 
 LAUNCHERS = {"local": LocalLauncher, "slurm": SlurmLauncher}

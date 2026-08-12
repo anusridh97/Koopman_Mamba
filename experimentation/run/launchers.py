@@ -1,19 +1,29 @@
-"""SlurmLauncher (§3.4): generates launch.sbatch (an artifact, not a
-hand-edited script) and submits it via `sbatch`. Marlowe H100 nodes are
-compute capability 9.0 (sm_90) -- NOT B200/sm_100; RuntimeSpec.gpu_arch
-defaults to "9.0" for exactly this reason (see the scripts/train_50m.sh bug
-this design corrects: TORCH_CUDA_ARCH_LIST=10.0, SKA_REQUIRE_B200=1).
+"""Launchers (§3.4): the spec says *what* to run, the launcher says *where*.
+
+launch.py's Launcher ABC + LocalLauncher merged with all of slurm.py. They were
+split across two files, which forced slurm.py to import three names from a module
+it was otherwise unrelated to; the actual seam was never local-vs-slurm but
+"build the command" (now run/train_argv.py) versus "run it somewhere" (here).
+
+Marlowe H100 nodes are compute capability 9.0 (sm_90) -- NOT B200/sm_100;
+RuntimeSpec.gpu_arch defaults to "9.0" for exactly this reason (see the
+scripts/train_50m.sh bug this design corrects: TORCH_CUDA_ARCH_LIST=10.0,
+SKA_REQUIRE_B200=1).
 """
 from __future__ import annotations
 
+import abc
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from experimentation.atomic_io import atomic_write_text
-from experimentation.run.launch import Launcher, build_train_argv, write_model_config
 from experimentation.run.spec import RunSpec, RuntimeSpec
+from experimentation.run.train_argv import build_train_argv, write_model_config
+
+__all__ = ["Launcher", "LocalLauncher", "SlurmLauncher", "render_array_sbatch"]
+
 
 _SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -75,6 +85,38 @@ exec bash "$RUN_DIR/launch_line.sh"
 # as one array job (see _require_uniform_array_runtime).
 _ARRAY_RUNTIME_FIELDS = ("partition", "account", "qos", "gpus", "nodes",
                           "time_limit", "gpu_arch")
+
+
+class Launcher(abc.ABC):
+    """The spec says *what* to run; the launcher says *where* (§3.4)."""
+
+    @abc.abstractmethod
+    def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
+        ...
+
+    @abc.abstractmethod
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
+        ...
+
+
+class LocalLauncher(Launcher):
+    """Runs training in-process via subprocess: `python -m ...` for a single
+    GPU, `torchrun --standalone` when runtime.ddp and runtime.gpus > 1."""
+
+    def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
+        world_size = spec.runtime.gpus if (spec.runtime.ddp and spec.runtime.gpus > 1) else 1
+        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume)
+        if world_size > 1:
+            return ["torchrun", "--standalone", f"--nproc_per_node={world_size}",
+                     "-m", "experimentation.training.train", *train_args]
+        return [sys.executable, "-m", "experimentation.training.train", *train_args]
+
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
+        write_model_config(spec, run_dir)
+        cmd = self.build_command(spec, run_dir, resume=resume)
+        if dry_run:
+            return cmd
+        return subprocess.run(cmd, check=True)
 
 
 def _require_uniform_array_runtime(cells: List[Tuple[RunSpec, "Path"]]) -> RuntimeSpec:
