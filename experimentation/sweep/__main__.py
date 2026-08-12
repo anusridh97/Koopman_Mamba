@@ -36,7 +36,8 @@ from typing import List, Tuple
 from experimentation.run.artifacts import append_attempt, create_run_dir, make_attempt_record
 from experimentation.run.data_verify import verify_shard
 from experimentation.run.launch import LocalLauncher
-from experimentation.run.resolve import check_git_clean, git_commit, materialize
+from experimentation.run.provenance import check_git_clean, git_commit
+from experimentation.run.resolve import materialize
 from experimentation.run.slurm import SlurmLauncher
 from experimentation.run.spec import (
     RunSpec, ShardDataSpec, group_id as compute_group_id, run_dir_path,

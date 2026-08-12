@@ -224,7 +224,7 @@ def test_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path):
 
 
 def test_refuses_to_launch_from_a_dirty_tree(tmp_path, monkeypatch):
-    from experimentation.run.resolve import DirtyTreeError
+    from experimentation.run.provenance import DirtyTreeError
     from experimentation.sweep.__main__ import main
 
     sweep_path = _write_sweep(tmp_path, axes_yaml="  optim.lr: [1.0e-4]\n")

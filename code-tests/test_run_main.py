@@ -195,7 +195,7 @@ def test_main_refuses_to_launch_from_a_dirty_tree(tmp_path, monkeypatch):
     materialized -- the default is refusal, so launching uncommitted is a
     deliberate act (--allow-dirty) rather than an accident."""
     from experimentation.run.__main__ import main
-    from experimentation.run.resolve import DirtyTreeError
+    from experimentation.run.provenance import DirtyTreeError
     from experimentation.run.spec import run_dir_path
     from experimentation.run.resolve import resolve_run_spec
 

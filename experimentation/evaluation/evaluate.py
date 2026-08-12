@@ -52,7 +52,7 @@ from koopman_lm.models.baselines import (
     build_mamba_ska_koopman,
 )
 from experimentation.run.eval_result import write_result
-from experimentation.run.resolve import git_commit
+from experimentation.run.provenance import git_commit
 
 
 # ============================================================================
