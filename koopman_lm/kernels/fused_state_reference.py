@@ -1,7 +1,8 @@
 """Dense correctness oracle for a future sequence-fused asymmetric SKA kernel.
 
-The optimized ``lowrank_residual_cuda`` package supplied alongside this
-repository maintains a special *symmetric* residual because both sufficient
+The optimized ``lowrank_residual_cuda`` package (kept for provenance under
+``archive/lowrank_residual_cuda/``; not built, not importable) maintains a
+special *symmetric* residual because both sufficient
 statistics receive the same ``z z^T`` update.  SKA instead has the lagged,
 generally non-symmetric transition update ``x_t x_{t-1}^T`` and a rectangular
 value map.  The correct compact SKA state is

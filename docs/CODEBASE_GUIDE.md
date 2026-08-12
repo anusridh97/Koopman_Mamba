@@ -298,6 +298,26 @@ confusing without this.
 3. **This branch** applies `pr/module-reorg`'s layout without merging it — a
    trial merge produced 72 conflicted files, because both branches independently
    reorganized the same ancestor tree.
+4. **PR #20 (`1fc1dd0`)** merged the whole package-restructure line into `main`,
+   picking up `ebcf17d` on the way. Because step 2 restored those trees at the
+   root while this branch had independently rescued three of them under
+   `archive/`, the merge kept both copies — git saw disjoint paths and had
+   nothing to flag. A follow-up dedup removed the 16 root-level duplicates
+   (15 byte-identical, plus `echo-ska/echo_jax.py`, whose archived copy is the
+   same file plus a provenance header). `archive/` is now the single copy.
+
+   Six files from step 2 had **no** archive counterpart, so they were not
+   duplicates and could not be deduplicated: `echo-ska/{prepare_data,train_echo}.py`,
+   `MQAR/mqar_ska_mamba_benchmark.py`, and `lowrank_residual_cuda/` (3 files).
+   They were **relocated** into `archive/` rather than deleted — §10 of
+   `docs/superpowers/specs/2026-08-08-package-restructure-design.md` framed the
+   question as "delete these?", which is a judgment call needing sign-off;
+   moving them is lossless, so it needs none. Deleting them is still open.
+
+   Net effect on the root: `MQAR/`, `echo-ska/`, `sys+toolcall/` and
+   `lowrank_residual_cuda/` no longer exist there. Everything kept for
+   provenance is under `archive/`, one copy each, documented in
+   `archive/README.md` and held inert by `code-tests/test_archive_is_inert.py`.
 
 **`pr/module-reorg` and `pr/eval-consolidation` are superseded but must not be
 deleted yet.** `pr/eval-consolidation` = `pr/module-reorg` + 4 eval-dedup commits
