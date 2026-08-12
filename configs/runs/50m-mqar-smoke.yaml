@@ -1,0 +1,14 @@
+# Demonstrates extends: + the polymorphic data.kind=synthetic path. Builds
+# on the CPU (no GPU/mamba_ssm needed to *resolve* the spec); actually
+# training a synthetic run needs TrainTask/SyntheticTask (§6.2), not yet
+# implemented.
+extends: _base/synthetic-defaults.yaml
+name: 50m-mqar-smoke
+model: 50m
+data:
+  kind: synthetic
+  generator: mqar
+  params:
+    num_kv_pairs: 8
+    seq_len: 128
+    vocab_size: 128

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # CPU gate: numerical correctness + plumbing. No CUDA, no mamba_ssm.
+  # Must pass before any training commit (scaling plan Phase 0).
+  #
+  # The GPU job that used to live here was dropped: it targeted a
+  # `[self-hosted, gpu]` runner that does not exist for this repo. GPU-marked
+  # tests are run on the cluster instead -- see scripts/slurm_tests.sh.
+  cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (CPU torch + dev extras; mamba_ssm NOT installed)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[lab,dev]"
+      - name: Static import check (AST-only; catches moved symbols in scripts/)
+        run: python scripts/check_imports.py
+      - name: Import sanity (package must import CPU-only)
+        run: python -c "import koopman_lm; import experimentation.experiments.table2; import experimentation.experiments.mqar_finetune; print(list(koopman_lm.CONFIG_FACTORIES))"
+      - name: Correctness suite (CPU subset, < 2 min)
+        run: pytest code-tests/ -m "correctness and not gpu" -q

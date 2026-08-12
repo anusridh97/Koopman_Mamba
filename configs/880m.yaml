@@ -1,0 +1,19 @@
+ska_eta_learnable: false
+ska_eta_value: 1.0
+ska_gamma_learnable: false
+ska_gamma_value: 1.0
+ska_gamma_clamp: null
+ska_layerscale: true
+ska_layerscale_init: 0.0001
+ska_out_proj_std: 0.02
+ska_short_conv: true
+ska_short_conv_kernel: 4
+d_model: 1408
+n_layers: 37
+vocab_size: 32000
+d_state: 128
+ska_n_heads: 22
+ska_rank: 96
+ska_chunk_size: 128
+ska_layer_indices: [3, 7, 11, 15, 20, 24, 28, 32, 36]
+mlp_gated: false

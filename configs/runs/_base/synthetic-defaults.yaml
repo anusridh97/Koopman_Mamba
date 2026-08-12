@@ -1,0 +1,23 @@
+# Shared defaults for CPU-testable synthetic-data example runs (§6 preview).
+# Not a production recipe -- see pretrain.sh for the real 50m/180m schedules
+# until §7's migration lands those as configs/runs/*.yaml.
+optim:
+  lr: 0.0004
+  warmup_steps: 100
+  max_steps: 1000
+  schedule: cosine
+  effective_batch: 64
+  per_device_batch_size: 8
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  seed: 42
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: "2-00:00:00"

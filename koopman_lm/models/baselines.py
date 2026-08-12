@@ -24,26 +24,26 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from koopman_lm.globals.config import KoopmanLMConfig
-from koopman_lm.globals.modules.koopman_mlp import SpectralKoopmanMLP, SpectralKoopmanMLPGated
-from koopman_lm.globals.modules.mlp import SwiGLUMLP
-from koopman_lm.globals.modules.norm import make_norm
-from koopman_lm.globals.modules.mamba import Mamba2Block      # noqa: F401 (re-exported)
-from koopman_lm.models.koopman_lm import SKABlock, MambaSKAParallelBlock
-from koopman_lm.globals.modules.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
+from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.modules.mlp.koopman import SpectralKoopmanMLP, SpectralKoopmanMLPGated
+from koopman_lm.modules.mlp.swiglu import SwiGLUMLP
+from koopman_lm.modules.norm import make_norm
+from koopman_lm.modules.seq.mamba import Mamba2Block      # noqa: F401 (re-exported)
+from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
+from koopman_lm.modules.seq.attention import CausalAttentionBlock  # noqa: F401 (re-exported)
 
 
 # ============================================================================
 # Sequence layer blocks
 # ============================================================================
 
-# CausalAttentionBlock is defined in globals/modules/attention.py and imported above.
+# CausalAttentionBlock is defined in modules/seq/attention.py and imported above.
 
 
-# SKABlock is imported from models/koopman_lm.py so full and baseline
+# SKABlock is imported from modules/seq/ska_block.py so full and baseline
 # models use identical statistics, residual initialization, and local-path policy.
 
-# Mamba2Block is defined in globals/modules/mamba.py and imported above.
+# Mamba2Block is defined in modules/seq/mamba.py and imported above.
 
 
 # ============================================================================
@@ -68,8 +68,48 @@ def _build_model(cfg, seq_layer_fn, mlp_fn):
             self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
             if cfg.tie_embeddings:
                 self.lm_head.weight = self.embed.weight
-            if cfg.init_policy == 'mamba_safe':
+            if cfg.init_policy == 'legacy':
+                self._legacy_initialize()
+            else:
                 self._mamba_safe_initialize()
+
+        def _init_weights(self, module):
+            # Legacy blanket initialization retained for exact reproduction only.
+            #
+            # Mirrors models/koopman_lm.py::KoopmanLM._init_weights so the baselines
+            # start from the same generic Normal(0, cfg.initializer_range) distribution
+            # as the full model under the 'legacy' policy, instead of PyTorch's
+            # default Kaiming-uniform (Linear) / N(0, 1) (Embedding) init.
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, mean=0.0, std=cfg.initializer_range)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, mean=0.0, std=cfg.initializer_range)
+
+        def _legacy_initialize(self):
+            # Reproduce the repository's original blanket initialization policy.
+            #
+            # See KoopmanLM._legacy_initialize -- this intentionally descends into
+            # every module (including SKA/Mamba) and then restores the
+            # branch-specific projection policies the generic pass overwrote.
+            self.apply(self._init_weights)
+            for block in (m for m in self.modules() if isinstance(m, SKABlock)):
+                ska = block.ska
+                nn.init.orthogonal_(ska.key_proj.weight)
+                nn.init.orthogonal_(ska.query_proj.weight)
+                nn.init.xavier_uniform_(ska.value_proj.weight)
+                nn.init.zeros_(ska.beta_proj.weight)
+                if ska.beta_proj.bias is not None:
+                    nn.init.zeros_(ska.beta_proj.bias)
+                if cfg.ska_layerscale:
+                    nn.init.normal_(ska.out_proj.weight, mean=0.0,
+                                    std=cfg.ska_out_proj_std)
+                else:
+                    nn.init.zeros_(ska.out_proj.weight)
+            for layer in self.mlp_layers:
+                if hasattr(layer, 'reset_projection_params'):
+                    layer.reset_projection_params()
 
         @staticmethod
         def _scaled_residual_init_(module, denominator):

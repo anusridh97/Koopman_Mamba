@@ -1,0 +1,33 @@
+# The real 50m/3B-token production recipe -- mirrors scripts/pretrain.sh's
+# `50m` case arm (TOKENS=3e9 STEPS=15000 PDBS=16 GA=6 -> effective_batch=96,
+# LR=4e-4, WARMUP=300). This is the first entry in the configs/runs/
+# migration named in the design doc (§3.6), and doubles as the base spec for
+# configs/sweeps/ska-rank-lr.yaml.
+name: 50m-fineweb-3b
+model: 50m
+data:
+  kind: shard
+  shard_dir: /scratch/m000151/jkli/data/fineweb_50m_quality_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix: {fineweb: 1.0}
+  n_tokens: 3000000000
+optim:
+  lr: 4.0e-4
+  warmup_steps: 300
+  max_steps: 15000
+  schedule: cosine
+  effective_batch: 96
+  per_device_batch_size: 16
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  seed: 42
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: "2-00:00:00"

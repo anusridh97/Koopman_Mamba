@@ -1,99 +1,78 @@
-# Koopman-Mamba with fused exact SKA prefix scan
+# Koopman-Mamba
 
-This is the runnable repository for the recommended 50M and 180M models. It keeps Mamba-2 at every depth and adds exact causal SKA as parallel residual memory.
+A language model that keeps a **Mamba-2 recurrent backbone at every layer** and
+adds **SKA** (Spectral Koopman Attention) as parallel residual memory at a few
+intermediate depths. The research question is whether that memory buys anything
+over the Mamba backbone alone, so the code is built to swap one component and
+hold everything else fixed.
 
-## Recommended models
-
-| Config | Width | Depth | Parallel SKA layers | SKA rank | Parameters |
+| Config | Width | Depth | SKA layers | SKA rank | Parameters |
 |---|---:|---:|---:|---:|---:|
-| `configs/50m.yaml` | 384 | 17 | 4 | 24 | 50,765,216 |
-| `configs/180m.yaml` | 640 | 25 | 6 | 24 | 180,049,352 |
+| `configs/50m.yaml` | 384 | 17 | 4 | 24 | 50,034,044 |
+| `configs/180m.yaml` | 640 | 25 | 6 | 24 | 176,342,680 |
 
-Both use SwiGLU, RMSNorm, fixed \(\eta=\gamma=1\), causal norm clipping, LayerScale, and the strict `cuda_prefix` backend.
+Both use SwiGLU, RMSNorm, fixed η=γ=1, causal norm clipping, LayerScale, and
+the strict `cuda_prefix` backend.
 
-## What the CUDA kernel does
+## How it fits together
 
-The production path is `koopman_lm/globals/modules/ska/csrc/prefix_scan_ext.cu`. It is specialized for the geometry used by both configs:
+Five things, in dependency order:
 
-- rank `r=24`;
-- value/head width `p=64`;
-- operator power `K=1`;
-- exact scheduling blocks of 32 tokens;
-- backward checkpoints every 8 tokens;
-- FP32 Cholesky/operator state, with BF16 model inputs converted inside the SKA module;
-- native `[batch,time,head,width]` tensor access, so the fused path does not make head-major full-sequence copies.
+```
+configs/*.yaml  ->  KoopmanLMConfig      koopman_lm/config.py
+                          |
+                          v
+                    KoopmanLM            koopman_lm/models/
+                          |
+              +-----------+-----------+
+              v                       v
+        seq_layers               mlp_layers      koopman_lm/modules/
+        (mix across              (mix across
+         positions)               features)
+              |                       |
+              +-----------+-----------+
+                          v
+                       kernels          koopman_lm/kernels/
+                (solves, scans, CUDA)
+```
 
-The forward is an exact blocked prefix scan, not stale chunking:
+Every layer is one seq mixer plus one mlp mixer. The 50M puts a
+`MambaSKAParallelBlock` at layers 3, 7, 11, 15 and a plain `Mamba2Block`
+everywhere else — SKA is added *beside* Mamba, not instead of it:
 
-1. Build each 32-token block's raw \(\Delta G,\Delta M,\Delta C\) summary.
-2. Exclusive-scan those summaries across blocks.
-3. Reconstruct each block's incoming whitened state in parallel.
-4. Process all 32 tokens exactly with read-before-write \(O(r^2+pr)\) rank-one updates.
-5. Save compact \((P,A,R)\) checkpoints for the analytic backward.
+```
+x + Mamba(norm_m(x)) + SKA(norm_s(x))
+```
 
-Each CTA packs 1, 2, 4, or 8 independent warp-owned scans according to the
-available opt-in shared memory and the number of active states. The rank-24
-matrices use a padded row stride of 25 to avoid 32-bank row conflicts.
+## Layout
 
-The backward performs a reverse prefix scan over raw-statistic adjoints, recomputing eight-token intervals from checkpoints. It does not invoke autograd through per-token Cholesky factors and does not materialize a full prefix matrix trajectory.
+```
+koopman_lm/
+  config.py       KoopmanLMConfig, the YAML loader, CONFIG_REGISTRY
+  models/         KoopmanLM, RecurrentKoopmanLM (decode), ablation baselines
+  modules/        layer components -- seq/ and mlp/ mixers, shared norm
+  kernels/        numerics: solves, Cholesky, prefix scans, CUDA   [README]
+  training/       the training loop and data pipeline
+  evaluation/     perplexity, lm-eval-harness, NIAH, RULER, BABILong, MQAR
+  experiments/    Table 2, MQAR fine-tuning, curricula
+  retrieval/      contrastive retrieval adaptation
+configs/          the 4 shipped model configs
+scripts/          launchers and CUDA build/benchmark
+code-tests/       test suite
+docs/             codebase guide, plans
+```
 
-The strict backend never silently falls back to the Python implementation. A shape, dtype, or build mismatch raises immediately.
+`koopman_lm/modules/__init__.py` explains the seq/mlp split.
+`koopman_lm/kernels/README.md` covers the CUDA kernel, its build, and benchmarks.
 
-## B200 prerequisites
+## Install
 
-Install a CUDA-enabled PyTorch build first, followed by this repository. For a native B200/SM100 cubin, use a CUDA toolkit and PyTorch build that support compute capability 10.0; CUDA 12.8 or newer is required for native SM100 compilation.
+Install a CUDA-matched PyTorch **first**, then:
 
 ```bash
-# Install the CUDA/PyTorch versions appropriate for the machine first.
 pip install --no-build-isolation -e '.[cuda,dev]'
+bash scripts/build_b200_prefix_scan.sh    # B200/SM100; see kernels/README.md
 ```
-
-Do not use a CUDA 12.4 PyTorch environment for the B200 build.
-
-## Compile and validate the fused kernel
-
-Run this once on a B200 compute node before launching distributed training:
-
-```bash
-bash scripts/build_b200_prefix_scan.sh
-```
-
-The build script:
-
-- compiles a native `sm_100` extension;
-- runs deterministic forward and backward checks against the dense exact oracle;
-- reports maximum numerical errors;
-- prints the selected states-per-CTA and dynamic shared-memory sizes.
-
-For compiler register/spill reporting:
-
-```bash
-SKA_PREFIX_SCAN_PTXAS_VERBOSE=1 bash scripts/build_b200_prefix_scan.sh
-```
-
-Run the full CUDA correctness suite after compilation:
-
-```bash
-PYTHONPATH=. pytest -q code-tests/test_fused_prefix_scan_cuda.py
-```
-
-## Benchmark exact scan against chunk 64
-
-The benchmark times the complete SKA branch, including projections and backward:
-
-```bash
-python scripts/benchmark_prefix_scan.py \
-  --batch 2 --length 2048 --d-model 384 --heads 6
-```
-
-For the 180M geometry:
-
-```bash
-python scripts/benchmark_prefix_scan.py \
-  --batch 1 --length 2048 --d-model 640 --heads 10
-```
-
-The script prints median step time, peak allocated memory, tokens per second, and the exact/chunk-64 time ratio. This is the authoritative performance measurement on the target GPU.
 
 ## Train
 
@@ -102,20 +81,33 @@ bash scripts/train_50m.sh
 bash scripts/train_180m.sh
 ```
 
-Useful overrides:
+Overrides go through the environment:
 
 ```bash
 STEPS=100 PDBS=2 GA=1 RUN_NAME=smoke-50m bash scripts/train_50m.sh
 NPROC=8 RUN_NAME=main-180m bash scripts/train_180m.sh
 ```
 
-The launcher tokenizes FineWeb-Edu when needed, trains, saves checkpoints, and prints evaluation commands. The production launch disables whole-block gradient checkpointing because the fused SKA backward already stores compact eight-token state checkpoints; wrapping the whole Mamba+SKA block would recompute the fused forward and reduce throughput. Data and runs default to `${SCRATCH}/data` and `${SCRATCH}/runs`; set `DATA_ROOT` and `RUN_ROOT` explicitly where appropriate.
+The launcher tokenizes FineWeb-Edu if the shard is missing, trains, saves
+checkpoints, and prints the evaluation commands. Data and runs default to
+`${SCRATCH}/data` and `${SCRATCH}/runs`; set `DATA_ROOT` and `RUN_ROOT` to
+override.
 
-## CPU/reference verification
+Production runs disable whole-block gradient checkpointing on purpose: the
+fused SKA backward already stores compact eight-token checkpoints, so wrapping
+the whole Mamba+SKA block would recompute the fused forward for no benefit.
+
+## Test
 
 ```bash
-PYTHONPATH=. pytest -q code-tests \
-  --ignore=code-tests/test_fused_prefix_scan_cuda.py
+PYTHONPATH=. pytest code-tests -q
 ```
 
-The CPU tests cover the inverse-Cholesky formula, asymmetric operator/readout transport, raw-prefix adjoints, block-size invariance, strict causality, recurrent parity, and production parameter counts.
+GPU-marked tests auto-skip without a CUDA device, so this runs on a CPU box —
+it will report skips, not failures. The full suite needs a GPU.
+
+## More
+
+- `docs/CODEBASE_GUIDE.md` — orientation, the pipeline end to end, what to review
+- `koopman_lm/kernels/README.md` — the fused CUDA prefix scan
+- `koopman_lm/modules/__init__.py` — the seq/mlp mixer split

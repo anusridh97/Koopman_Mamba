@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+
+# Training / eval artifacts
+*.log
+runs/
+checkpoints/
+wandb/
+
+# Worktrees
+.worktrees/
+.claude/
+
+# ...but configs/runs/ holds authored RunSpec YAMLs, not run output -- track it.
+!configs/runs/
+!configs/runs/**

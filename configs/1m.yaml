@@ -1,0 +1,19 @@
+# Echo paper Section 4.1 -- sub-million synthetic transfer experiment.
+# Shared by all three Table 2 variants (SSM / SSM+Attn / SSM+SKA).
+# d=128, 4 layers, 4 heads, d_state=16, V=128, SwiGLU MLPs.
+# SKA at layers 2 and 3 (last two); mamba_only ignores ska_layer_indices.
+d_model: 128
+n_layers: 4
+vocab_size: 128
+d_state: 16
+d_conv: 4
+mamba_expand: 2
+ska_n_heads: 4
+ska_rank: 24
+ska_chunk_size: 16
+ska_power_K: 2
+ska_ridge: 0.001
+ska_layer_indices: [2, 3]
+mlp_gated: false
+max_seq_len: 4096
+tie_embeddings: true

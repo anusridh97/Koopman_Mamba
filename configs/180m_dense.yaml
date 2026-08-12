@@ -1,0 +1,26 @@
+# 768x24 Koopman-Mamba backbone -- the config that configs/180m_gated.yaml and
+# configs/180m_v2.yaml are variants of.
+#
+# History: this WAS "180m.yaml" (created 2026-07-03, SKA layout tuned to
+# ska_layer_indices=[8, 16] on 2026-07-06, ska_power_K pinned explicit on
+# 2026-07-17). On 2026-08-06 ("folder collapsing") 180m.yaml was overwritten
+# with an unrelated, unmatched 640x25 prefix-scan production design (see that
+# file's docstring) -- a naming collision, not an intentional replacement of
+# this backbone. Recovered from
+# `git show origin/cody-phase2a-1m-prep:configs/180m.yaml`, the last commit
+# where "180m.yaml" still meant this architecture.
+#
+# Named "_dense" because, unlike the current 180m.yaml, it uses the default
+# SKA mode ('replace') and the default exact/non-prefix-scan path
+# (ska_prefix_scan=False, ska_backend='auto') -- there is no linear-time
+# prefix-scan kernel involved, so every SKA computation here is the plain
+# ("dense") chunked/exact form.
+d_model: 768
+n_layers: 24
+vocab_size: 32000
+d_state: 128
+ska_n_heads: 12
+ska_rank: 48
+ska_power_K: 2               # paper K=2; pinned (was implicit dataclass default)
+ska_layer_indices: [8, 16]
+mlp_gated: false

@@ -1,0 +1,36 @@
+# 180M Koopman-Mamba, Aurora-inspired MLP utilization variant (v2).
+#
+# Identical backbone to 180m.yaml (d_model/n_layers/SKA layout untouched); the
+# ONLY differences are the four Koopman-MLP changes that enforce uniform neuron
+# utilization by construction and fix the frozen-decay pathology. Meant as the
+# v2 arm of a v1(180m.yaml)-vs-v2 comparison -- see
+# scripts/koopman_utilization_report.py.
+d_model: 768
+n_layers: 24
+vocab_size: 32000
+d_state: 128
+ska_n_heads: 12
+ska_rank: 48
+ska_power_K: 2
+ska_layer_indices: [8, 16]
+mlp_gated: false
+
+# (1) Row-normalized lift with explicit per-row gains (WeightNorm over rows):
+#     utilization collapses to one interpretable scalar g_i per neuron; dead
+#     neurons surface as g_i -> 0. (Direction params skip weight decay in
+#     training -- see KoopmanLM.no_weight_decay_param_names.)
+mlp_row_norm_lift: true
+
+# (2) (log rho, theta) rotation: decay rate and angle become separate params
+#     with comparable gradient scales; |lambda| <= 1 is built in smoothly.
+mlp_rotation_param: logrho_theta
+#     Depth-grade the decay init (aggressive decay early, gentle late) so the
+#     model starts near the profile it would otherwise spend ~15k steps learning.
+mlp_decay_depth_grade: true
+
+# (3) Learnable orthogonal pair mixer between lift and rotation, so the network
+#     chooses which subspaces get paired instead of the fixed reshape order.
+#     Block-diagonal (block 64) keeps the added params ~3M (a dense d_k x d_k mix
+#     would add ~100M). Use 'ortho' for a fixed, zero-parameter mixer instead.
+mlp_pair_mixer: learned
+mlp_mixer_block: 64

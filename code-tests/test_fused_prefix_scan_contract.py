@@ -3,12 +3,12 @@ import math
 import pytest
 import torch
 
-from koopman_lm.globals.modules.ska.prefix_scan import (
+from koopman_lm.kernels.prefix_scan import (
     _prefix_adjoint_from_state,
     _transport_operator,
     _transport_readout,
 )
-from koopman_lm.globals.modules.ska.cuda_prefix_scan import is_supported
+from koopman_lm.kernels.cuda_prefix_scan import is_supported
 
 
 def _inverse_update_formula(P: torch.Tensor, x: torch.Tensor, w: torch.Tensor):
