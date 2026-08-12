@@ -20,17 +20,27 @@ production configs (configs/50m.yaml:26, configs/180m.yaml:25) set
 ska_prefix_scan: true. The parametrization below covers all four so that a future
 change to the projection is checked against every path that consumes it.
 
-Tolerance: none. MEASURED bit-identical on CPU fp32 -- the fused forward and the
-pre-fusion three-GEMM forward (`main`'s ska.py, loaded side by side with equal
-weights asserted first) agree to max|diff| == 0.0 exactly, via torch.equal, on
-all four backends. So this asserts exact equality rather than a tolerance: any
-drift at all is a real change, and a loose bound would hide a wrong slice offset.
+Tolerance: derived, not exact -- and the reason is worth recording, because the
+first version of this test asserted torch.equal and CI disproved it.
 
-That is a claim about THIS environment, not a general guarantee. On GPU with bf16
-autocast and production shapes, splitting one (2*H*r + H*P, d_model) GEMM into
-three narrower ones can dispatch different BLAS kernels and reorder a
-length-d_model accumulation, bounded by ~d_model * eps. If this test ever fails
-on a GPU runner, the fix is a documented tolerance there -- not here.
+Splitting one (2*H*r + H*P, d_model) GEMM into three narrower ones changes which
+BLAS kernel and blocking each shape dispatches to, which can reorder a
+length-d_model accumulation. The bound is ~d_model * eps(fp32) = 32 * 1.19e-7
+~= 3.8e-6 relative.
+
+Two measurements:
+  * On the Marlowe login node (CPU fp32, d_model=32) the fused forward and the
+    pre-fusion three-GEMM forward are BIT-identical -- torch.equal True,
+    max|diff| 0.0, on all four backends, with weights asserted equal first.
+  * On GitHub's ubuntu-latest runner they are NOT: value_proj differs by
+    max|diff| 4.768e-07 (2^-21), i.e. ~2.4e-7 relative on values of magnitude
+    ~2. Same dtype, same device type, different BLAS.
+
+So bit-identity is a property of a particular CPU + BLAS build, not of CPU fp32,
+and asserting it makes this test machine-dependent. 1e-5 relative sits ~2.6x
+above the observed CI value and below the 3.8e-6 analytic bound's own margin,
+while staying orders of magnitude tighter than a wrong slice offset, which is
+O(1) wrong rather than O(1e-7).
 """
 import pytest
 import torch
@@ -39,6 +49,11 @@ import torch.nn.functional as F
 from koopman_lm.modules.seq.ska import SKAModule
 
 pytestmark = pytest.mark.correctness
+
+# See module docstring: derived from d_model * eps(fp32), with margin over the
+# 4.768e-07 observed on GitHub's runner. NOT exact -- bit-identity holds on some
+# CPU/BLAS combinations and not others.
+GEMM_SPLIT_REL_TOL = 1e-5
 
 # head_dim != rank on purpose: makes a k/q vs v offset mix-up observable.
 D_MODEL, N_HEADS, RANK, HEAD_DIM = 32, 2, 8, 4
@@ -78,12 +93,13 @@ def test_fused_projection_equals_three_separate_gemms():
         ):
             got = combined[..., lo:hi]
             want = proj(x)
-            assert torch.equal(got, want), (
-                f"{name}_proj slice [{lo}:{hi}] is not bit-identical to "
-                f"{name}_proj(x): max|diff|={(got - want).abs().max().item():.3e}. "
-                "Either the slice offsets no longer match the cat order, or this "
-                "backend reorders the GEMM accumulation (see module docstring -- "
-                "expected on GPU/bf16, not on CPU fp32).")
+            scale = want.abs().max().clamp_min(torch.finfo(want.dtype).eps)
+            err = ((got - want).abs().max() / scale).item()
+            assert err < GEMM_SPLIT_REL_TOL, (
+                f"{name}_proj slice [{lo}:{hi}] differs from {name}_proj(x) by "
+                f"rel {err:.3e} (tol {GEMM_SPLIT_REL_TOL:.3e}). A value this "
+                "large is a wrong slice offset or cat order, not GEMM reordering "
+                "-- reordering lands around 1e-7 (see module docstring).")
 
 
 def test_fused_slice_widths_cover_the_whole_projection_exactly():
