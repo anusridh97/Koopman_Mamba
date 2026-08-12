@@ -9,7 +9,7 @@ pytestmark = pytest.mark.correctness
 
 
 def test_write_result_creates_the_keyed_path(tmp_path):
-    from experimentation.run.eval_result import eval_result_path, write_result
+    from experimentation.evaluation.result import eval_result_path, write_result
 
     path = write_result(
         tmp_path, checkpoint="step_1000", task="zeroshot",
@@ -21,7 +21,7 @@ def test_write_result_creates_the_keyed_path(tmp_path):
 
 
 def test_write_result_envelope_has_the_common_fields(tmp_path):
-    from experimentation.run.eval_result import read_result, write_result
+    from experimentation.evaluation.result import read_result, write_result
 
     path = write_result(
         tmp_path, checkpoint="final", task="fineweb_ppl",
@@ -37,7 +37,7 @@ def test_write_result_envelope_has_the_common_fields(tmp_path):
 
 
 def test_write_result_overwrites_on_rescoring(tmp_path):
-    from experimentation.run.eval_result import read_result, write_result
+    from experimentation.evaluation.result import read_result, write_result
 
     path = write_result(tmp_path, checkpoint="final", task="fineweb_ppl",
                           metrics={"ppl": 12.3}, run_id="r1", git_commit="c1")
@@ -48,7 +48,7 @@ def test_write_result_overwrites_on_rescoring(tmp_path):
 
 
 def test_write_result_does_not_collide_across_checkpoints_or_tasks(tmp_path):
-    from experimentation.run.eval_result import write_result
+    from experimentation.evaluation.result import write_result
 
     p1 = write_result(tmp_path, checkpoint="step_1000", task="zeroshot",
                         metrics={"a": 1}, run_id="r", git_commit="c")

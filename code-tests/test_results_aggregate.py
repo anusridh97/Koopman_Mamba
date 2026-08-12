@@ -9,7 +9,7 @@ pytestmark = pytest.mark.correctness
 
 def _make_run(run_root, name, group_id, run_id, seed, lr, d_model, results,
               sweep_id=None, sweep_name=None):
-    from experimentation.run.eval_result import write_result
+    from experimentation.evaluation.result import write_result
 
     run_dir = run_root / f"{name}.{group_id}" / f"seed{seed}.{run_id}"
     run_dir.mkdir(parents=True)

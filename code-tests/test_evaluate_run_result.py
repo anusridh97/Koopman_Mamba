@@ -1,5 +1,5 @@
 """experimentation/evaluation/evaluate.py wiring to the result envelope (§4.2):
-experimentation.run.eval_result.write_result and the <run_dir>/eval/<checkpoint>/
+experimentation.evaluation.result.write_result and the <run_dir>/eval/<checkpoint>/
 <task>.json layout. Before this, evaluate.py wrote raw JSON to a
 caller-supplied --output with no envelope, so the first real training run
 had to hand-wrap its own output.
@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from experimentation.evaluation.evaluate import find_run_dir, write_checkpoint_result
-from experimentation.run.eval_result import read_result
+from experimentation.evaluation.result import read_result
 
 pytestmark = pytest.mark.correctness
 

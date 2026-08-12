@@ -13,6 +13,8 @@ from typing import Any, Dict, List
 
 import yaml
 
+from experimentation.evaluation.result import iter_results
+
 
 def discover_spec_files(root) -> List[Path]:
     return sorted(Path(root).rglob("spec.yaml"))
@@ -49,12 +51,7 @@ def aggregate(root) -> List[Dict[str, Any]]:
             "sweep_id": spec.get("sweep_id"),
             "sweep_name": spec.get("sweep_name"),
         }
-        eval_dir = run_dir / "eval"
-        if not eval_dir.is_dir():
-            continue
-        for result_path in sorted(eval_dir.rglob("*.json")):
-            checkpoint = result_path.parent.name
-            task = result_path.stem
+        for checkpoint, task, result_path in iter_results(run_dir):
             result = json.loads(result_path.read_text())
             row = dict(axes)
             row.update({

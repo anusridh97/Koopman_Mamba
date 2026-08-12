@@ -34,6 +34,22 @@ def eval_result_path(run_dir, checkpoint: str, task: str) -> Path:
     return Path(run_dir) / "eval" / checkpoint / f"{task}.json"
 
 
+def iter_results(run_dir):
+    """Yield (checkpoint, task, path) for every result under <run_dir>/eval/.
+
+    The inverse of eval_result_path, and the reason it lives beside it: aggregation
+    used to rediscover the eval/<checkpoint>/<task>.json layout by rglobbing and
+    reading parent.name / stem, so the same contract was encoded in two places and
+    a change to the layout would have silently broken only the reader. Yields
+    nothing when there is no eval/ directory.
+    """
+    eval_dir = Path(run_dir) / "eval"
+    if not eval_dir.is_dir():
+        return
+    for path in sorted(eval_dir.rglob("*.json")):
+        yield path.parent.name, path.stem, path
+
+
 def write_result(run_dir, *, checkpoint: str, task: str, metrics: Dict[str, Any],
                   run_id: str, git_commit: str,
                   created_at: Optional[str] = None) -> Path:

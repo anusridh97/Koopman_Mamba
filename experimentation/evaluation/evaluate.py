@@ -51,12 +51,12 @@ from koopman_lm.models.baselines import (
     build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
     build_mamba_ska_koopman,
 )
-from experimentation.run.eval_result import write_result
+from experimentation.evaluation.result import write_result
 from experimentation.run.provenance import git_commit
 
 
 # ============================================================================
-# Result-envelope wiring (§4.2): experimentation.run.eval_result.write_result +
+# Result-envelope wiring (§4.2): experimentation.evaluation.result.write_result +
 # the <run_dir>/eval/<checkpoint>/<task>.json layout, for checkpoints that
 # live inside a experimentation.run-materialized run directory.
 # ============================================================================
