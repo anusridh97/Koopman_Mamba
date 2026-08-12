@@ -1,51 +1,27 @@
-"""Artifact write policy (§3.7).
+"""Run-directory write policy (§3.7).
 
 Earned bytes (checkpoints, result JSONs -- hours to days of GPU time) are
 protected by a refuse-to-clobber guard on run-directory creation. Derived
 bytes (spec.yaml, sbatch files, attempts.jsonl entries, aggregation tables)
-are cheap and reproducible, and use ordinary atomic writes (temp file +
-os.replace) so a preemption mid-write cannot corrupt them.
+are cheap and reproducible, and use the ordinary atomic writes in
+experimentation/atomic_io.py so a preemption mid-write cannot corrupt them.
+
+Renamed from run/artifacts.py: "artifacts" described neither half of what that
+file held. This half is run-directory lifecycle -- create, guard, append -- which
+is what the module docstring already called it.
 """
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from experimentation.atomic_io import atomic_write_text
+
 
 class RunDirConflictError(RuntimeError):
     """Raised when a run directory already holds a completed run (`final/`)."""
-
-
-def atomic_write_text(path, text: str) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.parent / (path.name + f".tmp{os.getpid()}")
-    tmp.write_text(text)
-    os.replace(tmp, path)
-
-
-def atomic_write_json(path, data: Dict[str, Any], indent: int = 2) -> None:
-    atomic_write_text(path, json.dumps(data, indent=indent, default=str))
-
-
-def atomic_torch_save(path, obj: Any) -> None:
-    """Binary counterpart of atomic_write_text: temp file + os.replace, so a
-    kill mid-write (a preemption, e.g.) cannot leave a truncated resume.pt.
-    torch is imported lazily so this module keeps working without it."""
-    import torch
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.parent / (path.name + f".tmp{os.getpid()}")
-    try:
-        torch.save(obj, tmp)
-        os.replace(tmp, path)
-    except BaseException:
-        if tmp.exists():
-            tmp.unlink()
-        raise
 
 
 def _existing_code_id(run_dir: Path) -> Optional[str]:

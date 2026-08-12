@@ -120,7 +120,8 @@ def test_materialize_writes_code_id_distinct_from_run_id(tmp_path):
     must be recoverable from spec.yaml so two runs that collide on run_id but
     ran different code can be told apart."""
     from koopman_lm.config import build_config
-    from experimentation.run.resolve import git_commit, materialize
+    from experimentation.run.provenance import git_commit
+    from experimentation.run.resolve import materialize
     from experimentation.run.spec import (
         OptimSpec, RuntimeSpec, RunSpec, SyntheticDataSpec, run_id,
     )
@@ -224,10 +225,10 @@ def _fake_run(stdout):
 
 
 def test_git_dirty_paths_parses_porcelain_output(monkeypatch):
-    from experimentation.run.resolve import git_dirty_paths
+    from experimentation.run.provenance import git_dirty_paths
 
     monkeypatch.setattr(
-        "experimentation.run.resolve.subprocess.run",
+        "experimentation.run.provenance.subprocess.run",
         _fake_run(" M experimentation/run/resolve.py\n?? scratch/junk.txt\n"))
     paths = git_dirty_paths()
     assert len(paths) == 2
@@ -236,27 +237,27 @@ def test_git_dirty_paths_parses_porcelain_output(monkeypatch):
 
 
 def test_git_dirty_paths_empty_when_clean(monkeypatch):
-    from experimentation.run.resolve import git_dirty_paths
+    from experimentation.run.provenance import git_dirty_paths
 
-    monkeypatch.setattr("experimentation.run.resolve.subprocess.run", _fake_run(""))
+    monkeypatch.setattr("experimentation.run.provenance.subprocess.run", _fake_run(""))
     assert git_dirty_paths() == []
 
 
 def test_check_git_clean_raises_and_lists_paths_when_dirty(monkeypatch):
-    from experimentation.run.resolve import DirtyTreeError, check_git_clean
+    from experimentation.run.provenance import DirtyTreeError, check_git_clean
 
     monkeypatch.setattr(
-        "experimentation.run.resolve.subprocess.run",
+        "experimentation.run.provenance.subprocess.run",
         _fake_run(" M experimentation/run/resolve.py\n"))
     with pytest.raises(DirtyTreeError, match="resolve.py"):
         check_git_clean(allow_dirty=False)
 
 
 def test_check_git_clean_allow_dirty_warns_and_returns_true(monkeypatch, capsys):
-    from experimentation.run.resolve import check_git_clean
+    from experimentation.run.provenance import check_git_clean
 
     monkeypatch.setattr(
-        "experimentation.run.resolve.subprocess.run",
+        "experimentation.run.provenance.subprocess.run",
         _fake_run(" M experimentation/run/resolve.py\n"))
     dirty = check_git_clean(allow_dirty=True)
     assert dirty is True
@@ -266,9 +267,9 @@ def test_check_git_clean_allow_dirty_warns_and_returns_true(monkeypatch, capsys)
 
 
 def test_check_git_clean_returns_false_when_clean(monkeypatch):
-    from experimentation.run.resolve import check_git_clean
+    from experimentation.run.provenance import check_git_clean
 
-    monkeypatch.setattr("experimentation.run.resolve.subprocess.run", _fake_run(""))
+    monkeypatch.setattr("experimentation.run.provenance.subprocess.run", _fake_run(""))
     assert check_git_clean(allow_dirty=False) is False
 
 

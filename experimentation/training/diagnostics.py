@@ -9,7 +9,7 @@ sequence blocks and -- ONLY on the steps you ask for -- emits per-layer/per-head
 health metrics to a wandb-ready dict. When inactive each hook is a single
 boolean check, so normal training steps pay essentially nothing.
 
-Metrics emitted (see SKAModule.collect_diagnostics for the math):
+Metrics emitted (see koopman_lm.diagnostics.ska_health for the math):
   - spectral_radius : max|eig(A_eff)| per SKA layer/head. Healthy ~[0.3,0.95];
                       ~0 = operator unlearned; >1 = unstable.
   - lambda_min      : smallest eig of the regularized Gram. Pinned at the ridge
@@ -52,6 +52,8 @@ import time
 from contextlib import contextmanager
 
 import torch
+
+from koopman_lm.diagnostics import ska_health
 
 
 def _resolve_block_classes(ska_cls=None, mamba_cls=None, parallel_cls=None):
@@ -149,7 +151,7 @@ class SKAHealthMonitor:
                        "delta_norm": delta.norm(dim=-1).mean().detach()}
                 if is_ska:
                     h = module.norm(x)
-                    rec.update(module.ska.collect_diagnostics(h))
+                    rec.update(ska_health(module.ska, h))
             self._buf[key] = rec
         return hook
 
@@ -180,7 +182,7 @@ class SKAHealthMonitor:
     def collect(self, wrap_histograms=True):
         """Reduce the buffered per-layer records into a flat wandb-ready dict.
 
-        The operator metrics come back from collect_diagnostics as full
+        The operator metrics come back from ska_health as full
         (B, n_chunks, H) tensors. Here, per SKA layer, we emit THREE views so
         plotting can slice however it wants, without having pre-averaged:
           - <metric>            : histogram over the whole (b, chunk, head) pool

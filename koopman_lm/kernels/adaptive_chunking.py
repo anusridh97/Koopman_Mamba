@@ -1,8 +1,18 @@
 """
 adaptive_chunking.py -- Alternative chunk-causal statistics for SKA.
 
-Each function here has the SAME signature and return type as
-ska._compute_chunk_stats_and_cholesky:
+STATUS: NOT WIRED INTO ANY MODEL. Both functions here were reachable only via
+SKAModule._get_chunk_stats, whose post-Cholesky consumer computed M G^-1 and
+was itself unreachable; that whole route has been deleted. SKAModule.forward
+calls kernels.chunk_stats.chunk_stats directly and ignores chunk_strategy (it
+warns when you set it). These two functions remain exported from
+koopman_lm/__init__.py as standalone, tested statistics builders -- usable, but
+nothing calls them, and their L_flat/shapes contract below is now satisfied by
+no in-repo consumer. Anything reviving them must supply its own readout, and
+must NOT resurrect the M G^-1 form: the live kernels whiten instead
+(kernels/lin_alg.py::whiten_M, L^-1 M L^-T).
+
+Both functions share this signature and return type:
 
     Args:
         z_f:        [B, T, H, r]   float32 normalized keys
@@ -21,16 +31,10 @@ ska._compute_chunk_stats_and_cholesky:
         zq_flat:    [BCH, r, CS]   queries reshaped for post-Cholesky chain
         shapes:     tuple          (B, C, H, P, CS, T, T_padded, pad_len)
 
-This means SKAModule.forward can swap between them with a single
-if/elif without changing anything else in the forward path.  The
-post-Cholesky matmul chain (_post_cholesky_pytorch / _post_cholesky_triton)
-is completely unchanged.
-
-
 Strategy overview
 -----------------
 
-standard (in ska.py):
+standard (kernels/chunk_stats.py, what the model actually runs):
     Non-overlapping chunks, uniform exclusive prefix-sum.
     Fast, simple, but chunk 0 has zero history and information
     at the end of chunk c isn't available until chunk c+1.
@@ -50,17 +54,15 @@ decay:
     Best for distributed-information tasks (MQAR-Shuffle).
 
 
-How to enable
--------------
+Config fields (retained, but inert)
+-----------------------------------
 
-In KoopmanLMConfig:
-    ska_chunk_strategy:      'standard', 'overlap', or 'decay'
-    ska_overlap_fraction:    0.5  (only used when strategy='overlap')
-    ska_decay_alpha:         0.95 (only used when strategy='decay')
-
-These flow through model.py -> SKABlock -> SKAModule.__init__(), where
-SKAModule stores them as attributes and uses them in forward() to pick
-which function to call from this file.
+KoopmanLMConfig still declares ska_chunk_strategy / ska_overlap_fraction /
+ska_decay_alpha, and they still flow model.py -> SKABlock -> SKAModule, which
+stores them as attributes. Nothing reads them after that. The fields are kept
+deliberately: run/resolve.py::_check_model_key_set validates materialized
+spec.yaml files field-for-field, so deleting a dataclass field would make every
+existing run's spec unloadable.
 """
 
 import torch
@@ -77,9 +79,9 @@ def compute_chunk_stats_overlap(z_f, zq_f, v_f, r, H, P, CS, ridge_eps,
     accumulated G/M/C statistics are scaled down by the ratio of
     unique tokens to total tokens per chunk to avoid double-counting.
 
-    The output contract is identical to _compute_chunk_stats_and_cholesky:
-    the shapes tuple encodes the chunk geometry so that post-Cholesky
-    code can unpack y_hat correctly.
+    The shapes tuple encodes the chunk geometry so a post-Cholesky readout
+    could unpack y_hat correctly -- see the module docstring: no such readout
+    exists in-repo anymore.
     """
     B, T = z_f.shape[:2]
     device = z_f.device

@@ -80,7 +80,7 @@ def save_resume_state(path, *, step: int, epoch: int, samples_consumed: int,
     `step` whenever it calls this."""
     import torch
 
-    from experimentation.run.artifacts import atomic_torch_save
+    from experimentation.atomic_io import atomic_torch_save
 
     state = {
         "step": step,

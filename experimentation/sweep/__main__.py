@@ -4,7 +4,7 @@
 Expands configs/sweeps/<name>.yaml (§4.2) into one RunSpec per cell via
 experimentation.sweep.spec.expand_cells -- the single place the grid is declared
 -- then drives each surviving cell through the same primitives
-`python -m experimentation.run` uses per-run: experimentation.run.resolve/artifacts/
+`python -m experimentation.run` uses per-run: experimentation.run.resolve/write_policy/
 launch. This is a NEW entry point, deliberately not a modification of
 experimentation/run/__main__.py (a separate agent owns that file's SIGUSR1 work).
 
@@ -33,11 +33,11 @@ import socket
 from pathlib import Path
 from typing import List, Tuple
 
-from experimentation.run.artifacts import append_attempt, create_run_dir, make_attempt_record
+from experimentation.run.write_policy import append_attempt, create_run_dir, make_attempt_record
 from experimentation.run.data_verify import verify_shard
-from experimentation.run.launch import LocalLauncher
-from experimentation.run.resolve import check_git_clean, git_commit, materialize
-from experimentation.run.slurm import SlurmLauncher
+from experimentation.run.launchers import LocalLauncher, SlurmLauncher
+from experimentation.run.provenance import check_git_clean, git_commit
+from experimentation.run.resolve import materialize
 from experimentation.run.spec import (
     RunSpec, ShardDataSpec, group_id as compute_group_id, run_dir_path,
     run_id as compute_run_id,

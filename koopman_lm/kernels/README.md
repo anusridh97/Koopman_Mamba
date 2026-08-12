@@ -20,7 +20,7 @@ than a child of it. (`fast.py`, the one file that used to define an
 | `chunk_stats.py`, `chunk_stats_exact.py` | per-chunk / per-token sufficient statistics |
 | `factor_scan.py` | all-prefix Cholesky factors via a PSD square-root scan |
 | `inverse_cholesky.py`, `incremental_transport.py`, `fused_state_reference.py` | alternative/reference state formulations |
-| `adaptive_chunking.py`, `small_rank_backend.py` | chunking policy, JIT loader |
+| `adaptive_chunking.py`, `small_rank_backend.py` | overlap/decay stats (exported but unwired — see its docstring), JIT loader |
 
 **The PyTorch prefix scan is the correctness reference.** The CUDA path must
 match it; it is never silently substituted for it.
