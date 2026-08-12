@@ -1,9 +1,18 @@
-"""Shared normalization factory.
+"""Normalization factory.
 
-Keeping every residual branch on the same normalization policy is important for
-clean architecture ablations.  The original repository hard-coded LayerNorm in
-Mamba, SKA, the MLP, and the final norm independently, which made it difficult
-to test a Llama/Mamba-style RMSNorm model without changing four implementations.
+One policy for every residual branch, so a LayerNorm-vs-RMSNorm ablation is one
+config flag (`cfg.norm_type`) rather than four edits. Seven call sites depend on
+that: seq/{mamba,ska_block,attention}.py, mlp/{swiglu,koopman}.py, and
+models/{koopman_lm,baselines}.py for the final norm.
+
+Both kinds are `torch.nn` builtins, so this file exists only to map the config
+string onto a class. There is deliberately no `norm/` package and no custom
+implementation here -- there would be nothing to put in them. If a norm ever
+needs its own math (gated RMSNorm, QK-norm), it gets a module of its own and
+this factory learns one more name.
+
+Note `Mamba2Block` also has an *internal* `RMSNormGated(d_inner)` that
+`mamba_ssm` owns; it is unrelated to this and is not switched by `norm_type`.
 """
 from __future__ import annotations
 
