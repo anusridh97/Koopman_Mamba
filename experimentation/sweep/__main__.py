@@ -34,12 +34,12 @@ from pathlib import Path
 from typing import List, Tuple
 
 from experimentation.run.write_policy import append_attempt, create_run_dir, make_attempt_record
-from experimentation.run.data_verify import verify_shard
+from experimentation.run.data_verify import verify_data
 from experimentation.run.launchers import LocalLauncher, SlurmLauncher
 from experimentation.run.provenance import check_git_clean, git_commit
 from experimentation.run.resolve import materialize
 from experimentation.run.spec import (
-    RunSpec, ShardDataSpec, group_id as compute_group_id, run_dir_path,
+    RunSpec, group_id as compute_group_id, run_dir_path,
     run_id as compute_run_id,
 )
 from experimentation.sweep.spec import SweepCell, SweepSpec, expand_cells, load_sweep_spec
@@ -90,8 +90,9 @@ def _print_plan(sweep: SweepSpec, cells: List[SweepCell], run_root) -> None:
 def _materialize_cell(cell: SweepCell, run_root, sweep: SweepSpec, *,
                        dirty: bool, force: bool, dry_run: bool) -> Path:
     spec = cell.spec
-    if isinstance(spec.data, ShardDataSpec):
-        verify_shard(spec.data, dry_run=dry_run)
+    # Same single gate as run/__main__.py -- reject before any cell directory
+    # exists, so a sweep over an unlaunchable spec writes nothing.
+    verify_data(spec.data, dry_run=dry_run)
     run_dir = run_dir_path(run_root, spec)
     create_run_dir(run_dir, force=force, code_id=git_commit())
     materialize(spec, run_dir, dirty=dirty,

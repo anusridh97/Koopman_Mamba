@@ -8,11 +8,57 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from experimentation.run.spec import ShardDataSpec
+from experimentation.run.spec import ShardDataSpec, SyntheticDataSpec
 
 
 class DataVerificationError(RuntimeError):
     """Raised when a shard's meta.json disagrees with the RunSpec naming it."""
+
+
+class UnlaunchableDataSpecError(RuntimeError):
+    """Raised when a spec is well-formed but cannot be launched at all.
+
+    Distinct from DataVerificationError, which means "the data on disk does not
+    match the spec". This means "there is no code path that could run this spec",
+    which is not a data problem and is not fixable by materializing a shard.
+    """
+
+
+def verify_data(data, *, dry_run: bool = False) -> None:
+    """Dispatch on data kind, BEFORE any run directory exists.
+
+    This is the single gate every launch path goes through. It exists because the
+    check it replaces was an `isinstance(spec.data, ShardDataSpec)` guard that
+    silently *skipped* anything else -- so a `kind: synthetic` spec sailed past
+    verification, got a run directory, a materialized spec.yaml, a
+    model_config.json and an attempts.jsonl entry, and only then hit
+    build_train_argv's ValueError. Under --dry_run, whose entire purpose is safe
+    inspection. The attempts.jsonl line was the worst part: real timestamp, host
+    and code_id, recording an attempt that never happened, in a directory
+    `_existing_code_id` reads on the next launch.
+
+    Rejecting here rather than at the launcher means the failure costs nothing
+    and leaves nothing behind.
+
+    `dry_run` is forwarded to verify_shard, which relaxes exactly one case (an
+    absent meta.json). It is deliberately NOT honoured for synthetic: a dry run
+    of an unlaunchable spec is still unlaunchable, so relaxing it would only
+    delay the same error to the launcher and recreate the bug.
+    """
+    if isinstance(data, ShardDataSpec):
+        verify_shard(data, dry_run=dry_run)
+        return
+    if isinstance(data, SyntheticDataSpec):
+        raise UnlaunchableDataSpecError(
+            f"data.kind='synthetic' (generator={data.generator!r}) cannot be "
+            "launched: experimentation.training.train's CLI has no synthetic "
+            "data path. This needs TrainTask/SyntheticTask (design §6.2), which "
+            "is not yet implemented -- the spec itself is valid and resolves "
+            "fine, so `python -m experimentation.run` can still be used to "
+            "inspect it once that path exists.")
+    raise UnlaunchableDataSpecError(
+        f"unrecognized data spec type {type(data).__name__}; expected "
+        "ShardDataSpec or SyntheticDataSpec")
 
 
 def verify_shard(data: ShardDataSpec, *, dry_run: bool = False) -> None:
