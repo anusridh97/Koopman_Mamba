@@ -270,7 +270,7 @@ def test_reset_projection_params_keeps_v2_params_after_reinit():
 
 
 def test_utilization_report_runs_and_detects_planted_pathologies():
-    from koopman_lm.modules.mlp.koopman_diag import (
+    from koopman_lm.diagnostics.koopman_mlp import (
         utilization_report, gain_stats, dead_pair_stats, format_report)
     model, cfg = _tiny_koopman(n_layers=4)
     model.eval()

@@ -1,7 +1,7 @@
 """SKA health diagnostics (Phase 1): CPU-only tests, no mamba_ssm / wandb.
 
 Covers:
-  1. SKAModule.collect_diagnostics math invariants (radius<=1, lambda_min>=ridge,
+  1. koopman_lm.diagnostics.ska_health math invariants (radius<=1, lambda_min>=ridge,
      beta~0.5 and gate~init at init, all finite, correct per-head shapes/keys),
      plus the gamma-in-A_eff adaptation for the new module's learnable regimes.
   2. Behavioral check: a persistent (near-constant) key sequence yields a larger
@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 
 from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.diagnostics import ska_health
 from koopman_lm.modules.seq.ska import SKAModule
 from koopman_lm.modules.seq.ska_block import SKABlock
 from koopman_lm.models.koopman_lm import KoopmanLM
@@ -59,7 +60,7 @@ def test_invariants():
     torch.manual_seed(0)
     ska = _make_ska().eval()
     B, T = 2, 40
-    m = ska.collect_diagnostics(torch.randn(B, T, D))
+    m = ska_health(ska, torch.randn(B, T, D))
 
     expected = {"spectral_radius", "lambda_min", "gap", "n_chunks", "gate_mag",
                 "beta_mean", "outproj_norm", "eta", "gamma", "ridge_eps"}
@@ -94,7 +95,7 @@ def test_invariants():
 def test_max_batch_caps_diagnostic_batch():
     torch.manual_seed(0)
     ska = _make_ska().eval()
-    m = ska.collect_diagnostics(torch.randn(5, 40, D), max_batch=2)
+    m = ska_health(ska, torch.randn(5, 40, D), max_batch=2)
     assert m["spectral_radius"].shape[0] == 2, \
         "max_batch should cap the diagnosed batch"
 
@@ -103,7 +104,7 @@ def test_gate_fallback_without_layerscale():
     # when layerscale is off, gate_mag falls back to |resolved eta| (not None)
     torch.manual_seed(0)
     ska = _make_ska(layerscale=False).eval()
-    m = ska.collect_diagnostics(torch.randn(2, 24, D))
+    m = ska_health(ska, torch.randn(2, 24, D))
     assert ska.layerscale_gate is None
     assert _finite(m["gate_mag"]) and float(m["gate_mag"]) > 0
     assert abs(float(m["gate_mag"]) - float(m["eta"])) < 1e-6
@@ -114,7 +115,7 @@ def test_gate_fallback_with_squashed_eta():
     # gate_mag must resolve through _resolve_eta()
     torch.manual_seed(0)
     ska = _make_ska(layerscale=False, eta_value=1.5, eta_bounds=(1.4, 1.7)).eval()
-    m = ska.collect_diagnostics(torch.randn(2, 24, D))
+    m = ska_health(ska, torch.randn(2, 24, D))
     assert abs(float(m["eta"]) - 1.5) < 1e-5
     assert abs(float(m["gate_mag"]) - 1.5) < 1e-5
 
@@ -130,9 +131,9 @@ def test_gamma_scales_effective_operator():
     x = torch.randn(2, 48, D)
 
     torch.manual_seed(123)   # _spectral_radius power iteration uses randn
-    rad_1 = ska_1.collect_diagnostics(x)["spectral_radius"]
+    rad_1 = ska_health(ska_1, x)["spectral_radius"]
     torch.manual_seed(123)
-    rad_h = ska_h.collect_diagnostics(x)["spectral_radius"]
+    rad_h = ska_health(ska_h, x)["spectral_radius"]
 
     assert torch.allclose(rad_h, 0.5 * rad_1, rtol=1e-4, atol=1e-6), \
         "gamma is not folded into the diagnosed operator"
@@ -154,12 +155,12 @@ def test_persistence_tracks_radius():
 
     # transient: independent keys each step
     x_rand = torch.randn(B, T, D)
-    rad_rand = _valid_mean(ska.collect_diagnostics(x_rand)["spectral_radius"])
+    rad_rand = _valid_mean(ska_health(ska, x_rand)["spectral_radius"])
 
     # persistent: (almost) the same token repeated -> lag-1 operator ~ I
     base = torch.randn(B, 1, D)
     x_const = base.expand(B, T, D) + 0.02 * torch.randn(B, T, D)
-    rad_const = _valid_mean(ska.collect_diagnostics(x_const)["spectral_radius"])
+    rad_const = _valid_mean(ska_health(ska, x_const)["spectral_radius"])
 
     assert rad_const > rad_rand, \
         f"persistent radius {rad_const:.3f} should exceed transient {rad_rand:.3f}"
@@ -172,7 +173,7 @@ def test_rank_deficiency_pins_lambda_min():
     B, T = 2, 48
     base = torch.randn(B, 1, D)
     x_const = base.expand(B, T, D).contiguous()   # exactly rank-1 keys
-    lam = ska.collect_diagnostics(x_const)["lambda_min"]
+    lam = ska_health(ska, x_const)["lambda_min"]
     lmin = lam[:, 1:].min().item()   # history-bearing chunks only
     # rank-deficient keys => smallest Gram eig sits on the ridge floor.
     # chunk_stats adds ridge + a 1e-4 jitter, so the floor is ridge + 1e-4.
