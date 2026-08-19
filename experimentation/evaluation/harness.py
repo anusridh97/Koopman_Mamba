@@ -48,16 +48,36 @@ def detect_scale(meta):
 
     Prefers the stored cfg (hashes it to confirm the recorded cfg_hash and to
     match it against a known factory). Returns a provenance dict.
+
+    `cfg_hash` is the value the checkpoint recorded -- a provenance fact, kept
+    verbatim. `cfg_hash_recomputed` is this code's hash of the stored cfg, and
+    `cfg_hash_mismatch` is the verdict: True when the two disagree, False when
+    they agree, None when the checkpoint recorded no hash to confirm.
+
+    The disagreement case is real and used to be invisible: this function
+    overwrote the recorded value with the recomputed one, so a checkpoint whose
+    config schema drifted after it was written was silently accepted as
+    self-consistent. Confirming a claim means reporting when it fails, not
+    replacing the claim with the evidence.
     """
+    recorded = meta.get("cfg_hash")
     info = {"model_size": meta.get("model_size"),
             "model_type": meta.get("model_type", "koopman"),
-            "cfg_hash": meta.get("cfg_hash"),
+            "cfg_hash": recorded,
+            "cfg_hash_recomputed": None,
+            "cfg_hash_mismatch": None,
             "param_count": None,
             "matched_factory": None}
     cfg = meta.get("cfg")
     if cfg is not None:
         h = config_hash(cfg)
-        info["cfg_hash"] = h
+        info["cfg_hash_recomputed"] = h
+        if recorded is None:
+            # Nothing was claimed, so there is nothing to contradict; the
+            # recomputed hash is the only identity available.
+            info["cfg_hash"] = h
+        else:
+            info["cfg_hash_mismatch"] = recorded != h
         info["param_count"] = int(cfg.param_count_estimate())
         # match against a known scale by hash (auto-detect scale)
         for name, factory in CONFIG_FACTORIES.items():
