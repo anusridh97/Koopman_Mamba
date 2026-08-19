@@ -147,8 +147,8 @@ def test_the_fields_are_reachable_as_sweep_overrides():
         "data": {"kind": "shard", "shard_dir": "/tmp/s",
                  "tokenizer": "t", "mix": {"f": 1.0}, "n_tokens": 10},
         "optim": {"lr": 4e-4, "warmup_steps": 10, "max_steps": 100,
-                  "effective_batch": 16, "per_device_batch_size": 16},
-        "runtime": {"seed": 42},
+                  "effective_batch": 16},
+        "runtime": {"per_device_batch_size": 16, "seed": 42},
     }
     spec = build_cell_run_spec("precision-sweep", sections, {
         "model.compute_precision": "fp32",

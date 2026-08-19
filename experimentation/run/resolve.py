@@ -46,11 +46,54 @@ def _load_raw_chain(path: Path) -> Dict[str, Any]:
     return _deep_merge(base, raw)
 
 
+_MICROBATCH = "per_device_batch_size"
+
+
+def _migrate_microbatch(raw: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Move a pre-2026-08-19 `optim.per_device_batch_size` into `runtime`.
+
+    The field moved because it is a memory-fitting detail rather than a
+    scientific input (see run/spec.py). Every authored spec in the repo and every
+    already-materialized spec.yaml still puts it under `optim:`, and a run
+    directory's spec.yaml is the only record of what that run did -- so a bare
+    move would make finished runs unreadable.
+
+    Migrated with a DeprecationWarning rather than silently: a silent move leaves
+    the file looking correct while meaning something new, and the warning is what
+    prompts the file to be updated. Follows the same "deprecated, not deleted"
+    precedent the precision design sets for runtime.precision.
+    """
+    optim = raw.get("optim")
+    if not isinstance(optim, dict) or _MICROBATCH not in optim:
+        return raw
+    runtime = raw.setdefault("runtime", {})
+    if not isinstance(runtime, dict):
+        raise ValueError(f"{source}: 'runtime' must be a mapping")
+    legacy = optim.pop(_MICROBATCH)
+    if _MICROBATCH in runtime:
+        if runtime[_MICROBATCH] != legacy:
+            raise ValueError(
+                f"{source} declares {_MICROBATCH} in both 'optim' ({legacy}) and "
+                f"'runtime' ({runtime[_MICROBATCH]}). Guessing which one wins "
+                f"would be worse than refusing; delete the 'optim' entry.")
+        return raw
+    import warnings
+
+    warnings.warn(
+        f"{source}: optim.{_MICROBATCH} moved to runtime.{_MICROBATCH} on "
+        f"2026-08-19 (a microbatch is a memory detail, not a scientific input, "
+        f"so it must not be hashed into run_id). Migrated automatically; update "
+        f"the file to silence this.",
+        DeprecationWarning, stacklevel=3)
+    runtime[_MICROBATCH] = legacy
+    return raw
+
+
 def resolve_run_spec(path) -> RunSpec:
     """Flatten a configs/runs/<name>.yaml (possibly with extends:) into a
     RunSpec. Callers should immediately materialize() the result -- nothing
     downstream should re-read the authoring YAML."""
-    raw = _load_raw_chain(Path(path))
+    raw = _migrate_microbatch(_load_raw_chain(Path(path)), str(path))
     model = resolve_model_config(raw["model"])
     data = data_spec_from_dict(raw["data"])
     optim = OptimSpec(**raw["optim"])
@@ -136,7 +179,8 @@ def _check_model_key_set(model_dict: Dict[str, Any]) -> None:
 def load_materialized_spec(spec_yaml_path) -> RunSpec:
     """Read a materialized spec.yaml back into a RunSpec (used by eval/resume;
     never re-reads a base config)."""
-    raw = yaml.safe_load(Path(spec_yaml_path).read_text())
+    raw = _migrate_microbatch(
+        yaml.safe_load(Path(spec_yaml_path).read_text()), str(spec_yaml_path))
     _check_model_key_set(raw["model"])
     model = KoopmanLMConfig(**raw["model"])
     data = data_spec_from_dict(raw["data"])
@@ -151,5 +195,11 @@ def load_raw_spec(path) -> Dict[str, Any]:
     construction -- namely experimentation.sweep, which must apply per-cell
     "<section>.<field>" overrides onto a base run spec's raw sections before
     building each cell's RunSpec. resolve_run_spec itself only ever returns
-    the fully-built RunSpec, which is too late for that."""
-    return _load_raw_chain(Path(path))
+    the fully-built RunSpec, which is too late for that.
+
+    Migrates a pre-2026-08-19 `optim.per_device_batch_size` like the other two
+    loaders do. Missing it here was a real gap: this is the entry point
+    `sweep/spec.py::_base_sections` uses, so a sweep over a legacy base spec would
+    have failed at OptimSpec construction while a lone run of the same spec
+    migrated cleanly."""
+    return _migrate_microbatch(_load_raw_chain(Path(path)), str(path))

@@ -80,8 +80,8 @@ def test_overrides_build_a_real_runspec_through_the_sweep_machinery():
                  "tokenizer": "NousResearch/Llama-2-7b-hf",
                  "mix": {"fineweb": 1.0}, "n_tokens": 1000},
         "optim": {"lr": 4.0e-4, "warmup_steps": 300, "max_steps": 15000,
-                  "effective_batch": 96, "per_device_batch_size": 16},
-        "runtime": {"seed": 42},
+                  "effective_batch": 96},
+        "runtime": {"per_device_batch_size": 16, "seed": 42},
     }
     overrides = params_to_overrides(_baseline_params(), _base_model(), max_steps=15000)
     spec = build_cell_run_spec("ska-search", sections, overrides)

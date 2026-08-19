@@ -66,15 +66,28 @@ def test_data_spec_from_dict_dispatches_on_kind():
         data_spec_from_dict({"kind": "bogus"})
 
 
-def test_optim_spec_validates_batch_divisibility():
-    from experimentation.run.spec import OptimSpec
+def test_run_spec_validates_batch_divisibility():
+    """The check moved from OptimSpec to RunSpec on 2026-08-19, because
+    effective_batch is now on optim and the microbatch is on runtime -- RunSpec is
+    the only place that sees both. It still has to fire: a split that does not
+    divide into whole steps trains on a different batch than it declares."""
+    from koopman_lm.config import build_config
+    from experimentation.run.spec import (OptimSpec, RunSpec, RuntimeSpec,
+                                          ShardDataSpec)
 
-    ok = OptimSpec(lr=4e-4, warmup_steps=300, max_steps=15000,
-                    effective_batch=96, per_device_batch_size=16)
-    assert ok.schedule == "cosine"
-    with pytest.raises(ValueError):
-        OptimSpec(lr=4e-4, warmup_steps=300, max_steps=15000,
-                   effective_batch=100, per_device_batch_size=16)
+    def _build(effective, pdbs):
+        return RunSpec(
+            name="x", model=build_config("50m"),
+            data=ShardDataSpec(kind="shard", shard_dir="/tmp/s", tokenizer="t",
+                               mix={"f": 1.0}, n_tokens=10),
+            optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100,
+                            effective_batch=effective),
+            runtime=RuntimeSpec(per_device_batch_size=pdbs))
+
+    _build(64, 16)                       # divides -> fine
+    with pytest.raises(ValueError, match="multiple of"):
+        _build(64, 7)
+
 
 
 def test_optim_spec_rejects_non_numeric_lr():
@@ -89,7 +102,7 @@ def test_optim_spec_rejects_non_numeric_lr():
 def test_runtime_spec_batch_defaults_are_valid():
     from experimentation.run.spec import RuntimeSpec
 
-    rt = RuntimeSpec()
+    rt = RuntimeSpec(per_device_batch_size=16, )
     assert rt.partition == "batch"
     assert rt.account == "marlowe-m000151-pm06"
     assert rt.qos == "medium"
@@ -100,7 +113,7 @@ def test_runtime_spec_rejects_batch_with_default_account():
     from experimentation.run.spec import RuntimeSpec
 
     with pytest.raises(ValueError):
-        RuntimeSpec(partition="batch", account="marlowe-m000151")
+        RuntimeSpec(per_device_batch_size=16, partition="batch", account="marlowe-m000151")
 
 
 def test_runtime_spec_rejects_batch_with_wrong_qos():

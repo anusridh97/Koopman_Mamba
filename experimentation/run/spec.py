@@ -95,7 +95,6 @@ class OptimSpec:
     max_steps: int
     schedule: str = "cosine"
     effective_batch: int = 512
-    per_device_batch_size: int = 8
     weight_decay: float = 0.1
     grad_clip: float = 1.0
 
@@ -110,10 +109,8 @@ class OptimSpec:
             raise ValueError(f"schedule={self.schedule!r}; only 'cosine' is implemented")
         if self.warmup_steps < 0 or self.max_steps <= 0:
             raise ValueError("warmup_steps must be >= 0 and max_steps > 0")
-        if self.effective_batch % self.per_device_batch_size != 0:
-            raise ValueError(
-                f"effective_batch={self.effective_batch} must be a multiple of "
-                f"per_device_batch_size={self.per_device_batch_size}")
+        # The effective_batch / per_device_batch_size divisibility check now spans
+        # two specs, so it lives on RunSpec -- the only place that sees both.
 
 
 _BATCH_REQUIRED_ACCOUNT = "marlowe-m000151-pm06"
@@ -127,6 +124,13 @@ class RuntimeSpec:
     partition/account/worker count/ddp setting is the same experiment run
     differently."""
     seed: int = 42
+    # Moved here from OptimSpec on 2026-08-19. A microbatch is how a run is FITTED
+    # INTO MEMORY, not what it computes: halving it while doubling gradient
+    # accumulation preserves effective_batch exactly and changes no result. While
+    # it sat in OptimSpec -- hashed whole into run_id -- descending a rung of the
+    # OOM ladder renamed the experiment. See
+    # specs/2026-08-19-microbatch-identity-mapping.md.
+    per_device_batch_size: int = 8
     precision: str = "bf16"
     ddp: bool = False
     gpus: int = 1
@@ -187,6 +191,15 @@ class RunSpec:
             raise TypeError(f"RunSpec.optim must be an OptimSpec, got {type(self.optim)}")
         if not isinstance(self.runtime, RuntimeSpec):
             raise TypeError(f"RunSpec.runtime must be a RuntimeSpec, got {type(self.runtime)}")
+        # Cross-spec, so it can only live here: effective_batch is the scientific
+        # quantity (OptimSpec) and the microbatch is a memory detail
+        # (RuntimeSpec), but the split has to divide into whole steps or the run
+        # trains on a different batch than it declares.
+        if self.optim.effective_batch % self.runtime.per_device_batch_size != 0:
+            raise ValueError(
+                f"optim.effective_batch={self.optim.effective_batch} must be a "
+                f"multiple of runtime.per_device_batch_size="
+                f"{self.runtime.per_device_batch_size}")
 
 
 def _json_stable(payload: Dict[str, Any]) -> str:

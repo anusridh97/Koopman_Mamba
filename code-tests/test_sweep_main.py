@@ -48,8 +48,9 @@ def _write_sweep(tmp_path, *, axes_yaml, max_concurrent=None):
           warmup_steps: 300
           max_steps: 15000
           effective_batch: 96
-          per_device_batch_size: 16
         runtime:
+          per_device_batch_size: 16
+          per_device_batch_size: 16
           seed: 42
     """))
     sweep_path = tmp_path / "sweep.yaml"
@@ -197,7 +198,6 @@ def test_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path):
           warmup_steps: 300
           max_steps: 15000
           effective_batch: 96
-          per_device_batch_size: 16
         runtime:
           seed: 42
     """))

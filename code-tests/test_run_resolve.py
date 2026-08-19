@@ -26,8 +26,8 @@ def test_resolve_run_spec_follows_extends_chain(tmp_path):
           warmup_steps: 100
           max_steps: 1000
           effective_batch: 64
-          per_device_batch_size: 8
         runtime:
+          per_device_batch_size: 8
           seed: 42
     """)
     _write(tmp_path / "leaf.yaml", """

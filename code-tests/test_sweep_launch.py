@@ -45,8 +45,8 @@ def _shard_spec(tmp_path, *, seed=42):
           warmup_steps: 10
           max_steps: 100
           effective_batch: 16
-          per_device_batch_size: 16
         runtime:
+          per_device_batch_size: 16
           seed: {seed}
     """))
     return resolve_run_spec(spec_path)
@@ -102,8 +102,8 @@ def test_materialize_cell_rejects_an_unlaunchable_spec_before_writing(tmp_path):
     spec = RunSpec(name="mqar-smoke", model=build_config("50m"),
                    data=SyntheticDataSpec(kind="synthetic", generator="mqar"),
                    optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100,
-                                   effective_batch=16, per_device_batch_size=16),
-                   runtime=RuntimeSpec(seed=42))
+                                   effective_batch=16),
+                   runtime=RuntimeSpec(per_device_batch_size=16, seed=42))
     run_root = tmp_path / "runs"
     with pytest.raises(UnlaunchableDataSpecError):
         materialize_cell(spec, run_root, dry_run=True)

@@ -29,8 +29,8 @@ def _write_base(tmp_path, name="50m-fineweb-3b"):
           warmup_steps: 300
           max_steps: 15000
           effective_batch: 96
-          per_device_batch_size: 16
         runtime:
+          per_device_batch_size: 16
           seed: 42
     """))
     return base_path

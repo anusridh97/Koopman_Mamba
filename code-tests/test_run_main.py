@@ -46,8 +46,9 @@ def _write_shard_run_spec(tmp_path):
           warmup_steps: 10
           max_steps: 100
           effective_batch: 16
-          per_device_batch_size: 16
         runtime:
+          per_device_batch_size: 16
+          per_device_batch_size: 16
           seed: 42
     """))
     return spec_path
@@ -172,7 +173,6 @@ def test_main_dry_run_does_not_crash_when_the_shard_does_not_exist_yet(tmp_path)
           warmup_steps: 10
           max_steps: 100
           effective_batch: 16
-          per_device_batch_size: 16
         runtime:
           seed: 42
     """))

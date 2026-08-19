@@ -105,7 +105,7 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
     run_dir = Path(run_dir)
     model_config_path = run_dir / "model_config.json"
     grad_accum = ddp_grad_accum(spec.optim.effective_batch,
-                                 spec.optim.per_device_batch_size, world_size)
+                                 spec.runtime.per_device_batch_size, world_size)
     # train.py's --save_steps default (5000) is silently unreachable for any
     # RunSpec with fewer max_steps than that -- e.g. a short proof-of-pipeline
     # run never writes a single step_<N>/ checkpoint, which also makes
@@ -118,7 +118,7 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
         "--data_dir", spec.data.shard_dir,
         "--tokenizer", spec.data.tokenizer,
         "--max_seq_len", str(spec.model.max_seq_len),
-        "--per_device_train_batch_size", str(spec.optim.per_device_batch_size),
+        "--per_device_train_batch_size", str(spec.runtime.per_device_batch_size),
         "--gradient_accumulation_steps", str(grad_accum),
         "--max_steps", str(spec.optim.max_steps),
         "--learning_rate", str(spec.optim.lr),

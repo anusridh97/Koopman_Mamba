@@ -11,20 +11,20 @@ exactly.
 they are two halves of one idea: that function validates a chosen split, this one
 lists the legal splits in the order to try them.
 
-**The identity consequence, verified and deliberately not fixed here.**
-`per_device_batch_size` lives in `OptimSpec`, and `OptimSpec` is hashed whole into
-`run_id`. So descending a rung changes the run identity even though
-`effective_batch` is unchanged and the science is identical:
+**The identity consequence, since resolved.** `per_device_batch_size` used to
+live in `OptimSpec`, which is hashed whole into `run_id`, so descending a rung
+changed a run's identity even though `effective_batch` was unchanged and the
+science identical:
 
     effective_batch=64, pdbs=16  ->  run_id 58674511
     effective_batch=64, pdbs=8   ->  run_id 02705fcd
 
-Arguably it belongs in `RuntimeSpec`, beside `gpus`/`nodes`/`ddp`, which is
-explicitly "the same experiment run differently" and is not hashed. But moving it
-would move every existing run's identity -- the same class of change as the
-precision-policy work, which the backlog treats as a decision requiring its own
-commit and a regenerated baseline. So the ladder records which rung succeeded and
-this stays a flagged question rather than a silent migration.
+It was flagged here rather than fixed, because moving the field moves every
+existing run's identity. That decision has since been taken: it now lives on
+`RuntimeSpec`, beside `gpus`/`nodes`/`ddp` -- explicitly "the same experiment run
+differently" -- so every rung is now ONE identity reusing ONE run directory and
+appending an `attempts.jsonl` record per attempt. See
+`specs/2026-08-19-microbatch-identity-mapping.md`.
 """
 import json
 
@@ -92,10 +92,10 @@ def test_non_positive_batches_are_rejected():
             batch_plans(*args)
 
 
-def test_descending_a_rung_changes_the_run_id(tmp_path):
-    """Pinned so the consequence is impossible to forget: this is why the ladder
-    records the rung that worked, and why moving per_device_batch_size into
-    RuntimeSpec is a separate decision."""
+def test_descending_a_rung_no_longer_changes_the_run_id(tmp_path):
+    """The resolution of the finding this file was written around. Before the
+    migration these differed (58674511 vs 02705fcd); a microbatch is how a run is
+    fitted into memory, so now they must agree."""
     from koopman_lm.config import build_config
     from experimentation.run.spec import (OptimSpec, RunSpec, RuntimeSpec,
                                           ShardDataSpec, run_id)
@@ -105,10 +105,10 @@ def test_descending_a_rung_changes_the_run_id(tmp_path):
                        data=ShardDataSpec(kind="shard", shard_dir="/tmp/s",
                                           tokenizer="t", mix={"f": 1.0}, n_tokens=10),
                        optim=OptimSpec(lr=4e-4, warmup_steps=10, max_steps=100,
-                                       effective_batch=64, per_device_batch_size=pdbs),
-                       runtime=RuntimeSpec(seed=42))
+                                       effective_batch=64),
+                       runtime=RuntimeSpec(seed=42, per_device_batch_size=pdbs))
 
-    assert run_id(spec(16)) != run_id(spec(8))
+    assert run_id(spec(16)) == run_id(spec(8))
 
 
 # -------------------------------------------------------- oom detection ----
@@ -196,7 +196,7 @@ class _OomThenSucceedLauncher:
         self.marker = marker
 
     def submit(self, spec, run_dir, dry_run=False, resume=False):
-        self.attempts.append((spec.optim.per_device_batch_size, run_dir))
+        self.attempts.append((spec.runtime.per_device_batch_size, run_dir))
         if len(self.attempts) <= self.oom_attempts:
             (run_dir / "slurm-1.out").write_text(f"{self.marker}\n")
             raise RuntimeError("child exited non-zero")
@@ -222,8 +222,8 @@ def _context(tmp_path):
                      "tokenizer": "NousResearch/Llama-2-7b-hf",
                      "mix": {"fineweb": 1.0}, "n_tokens": 1000},
             "optim": {"lr": 4.0e-4, "warmup_steps": 10, "max_steps": 100,
-                      "effective_batch": 64, "per_device_batch_size": 16},
-            "runtime": {"seed": 42},
+                      "effective_batch": 64},
+            "runtime": {"seed": 42, "per_device_batch_size": 16},
         },
         "base_model": cfg,
         "space": search_space(cfg, base_name="50m"),
@@ -253,9 +253,11 @@ def test_an_oom_descends_one_rung_and_succeeds(tmp_path):
     assert outcome.per_device_batch_size == 8
 
 
-def test_each_rung_gets_its_own_run_directory(tmp_path):
-    """Because per_device_batch_size is hashed, the retry is a different run_id --
-    so it must not be written into the first rung's directory."""
+def test_every_rung_shares_one_run_directory(tmp_path):
+    """The inverse of what this asserted before the migration. The microbatch no
+    longer affects run_id, so a retry is the same run fitted into memory
+    differently: it reuses the directory and appends another attempt record rather
+    than forking a second identity."""
     optuna = pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import run_trial
     from experimentation.sweep.search.study import create_study, to_distributions
@@ -268,7 +270,9 @@ def test_each_rung_gets_its_own_run_directory(tmp_path):
               batch_ladder=True, **context)
 
     directories = {run_dir for _, run_dir in launcher.attempts}
-    assert len(directories) == 2
+    assert len(directories) == 1, "one experiment, one directory"
+    attempts = (directories.pop() / "attempts.jsonl").read_text().strip().splitlines()
+    assert len(attempts) == 2, "but every attempt is still recorded"
 
 
 def test_a_non_oom_failure_does_not_descend(tmp_path):

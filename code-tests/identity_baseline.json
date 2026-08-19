@@ -15,112 +15,112 @@
   "run_spec": {
     "configs/runs/50m-fineweb-3b.yaml": {
       "config_hash": "c5cec7fb54cb426da6a00991fe4ebef1dbf31529b037ed9ba2efebd134723c6f",
-      "group_id": "eaf32d51",
-      "run_id": "a9b06e63"
+      "group_id": "d71e3f5c",
+      "run_id": "e9b2dec7"
     },
     "configs/runs/50m-first-real.yaml": {
       "config_hash": "c267087fb1381954f00577fe3e21705a333c153f967ee94d8d2addc042bbe3e1",
-      "group_id": "f9815bf2",
-      "run_id": "e3c1ff03"
+      "group_id": "92c7bb96",
+      "run_id": "27f0de5d"
     },
     "configs/runs/50m-mqar-smoke.yaml": {
       "config_hash": "c5cec7fb54cb426da6a00991fe4ebef1dbf31529b037ed9ba2efebd134723c6f",
-      "group_id": "77d93ee6",
-      "run_id": "3ebf0ae1"
+      "group_id": "0def5819",
+      "run_id": "dd0aa1df"
     }
   },
   "sweep": {
     "configs/sweeps/ska-rank-lr.yaml": {
       "cells": [
         {
-          "group_id": "970f7e35",
+          "group_id": "e6e5875c",
           "overrides": {
             "model.ska_rank": "16",
             "optim.lr": "0.0002",
             "runtime.seed": "42"
           },
-          "run_id": "f1f75a15"
+          "run_id": "6a10f5a9"
         },
         {
-          "group_id": "970f7e35",
+          "group_id": "e6e5875c",
           "overrides": {
             "model.ska_rank": "16",
             "optim.lr": "0.0002",
             "runtime.seed": "43"
           },
-          "run_id": "21babe66"
+          "run_id": "d2c23ff3"
         },
         {
-          "group_id": "badaf2f1",
+          "group_id": "7d4e9415",
           "overrides": {
             "model.ska_rank": "24",
             "optim.lr": "0.0002",
             "runtime.seed": "42"
           },
-          "run_id": "6e9f4bcc"
+          "run_id": "2c899f48"
         },
         {
-          "group_id": "badaf2f1",
+          "group_id": "7d4e9415",
           "overrides": {
             "model.ska_rank": "24",
             "optim.lr": "0.0002",
             "runtime.seed": "43"
           },
-          "run_id": "35c43817"
+          "run_id": "599a99e4"
         },
         {
-          "group_id": "eaf32d51",
+          "group_id": "d71e3f5c",
           "overrides": {
             "model.ska_rank": "24",
             "optim.lr": "0.0004",
             "runtime.seed": "42"
           },
-          "run_id": "a9b06e63"
+          "run_id": "e9b2dec7"
         },
         {
-          "group_id": "eaf32d51",
+          "group_id": "d71e3f5c",
           "overrides": {
             "model.ska_rank": "24",
             "optim.lr": "0.0004",
             "runtime.seed": "43"
           },
-          "run_id": "e9ded32a"
+          "run_id": "b59b3a30"
         },
         {
-          "group_id": "59ddffd1",
+          "group_id": "0f3ae876",
           "overrides": {
             "model.ska_rank": "32",
             "optim.lr": "0.0002",
             "runtime.seed": "42"
           },
-          "run_id": "4f4f4baf"
+          "run_id": "7ac8121f"
         },
         {
-          "group_id": "59ddffd1",
+          "group_id": "0f3ae876",
           "overrides": {
             "model.ska_rank": "32",
             "optim.lr": "0.0002",
             "runtime.seed": "43"
           },
-          "run_id": "ba5dca39"
+          "run_id": "7b828de8"
         },
         {
-          "group_id": "a478a06a",
+          "group_id": "28257823",
           "overrides": {
             "model.ska_rank": "32",
             "optim.lr": "0.0004",
             "runtime.seed": "42"
           },
-          "run_id": "c040b227"
+          "run_id": "a25e9ba4"
         },
         {
-          "group_id": "a478a06a",
+          "group_id": "28257823",
           "overrides": {
             "model.ska_rank": "32",
             "optim.lr": "0.0004",
             "runtime.seed": "43"
           },
-          "run_id": "f471be6b"
+          "run_id": "723f42fc"
         }
       ],
       "n_cells": 10,

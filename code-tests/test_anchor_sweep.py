@@ -42,8 +42,8 @@ def _write_base_spec(tmp_path):
           warmup_steps: 300
           max_steps: 15000
           effective_batch: 96
-          per_device_batch_size: 16
         runtime:
+          per_device_batch_size: 16
           seed: 42
           partition: batch
           account: marlowe-m000151-pm06

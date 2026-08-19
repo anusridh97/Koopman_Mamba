@@ -69,10 +69,10 @@ optim:
   max_steps: 300
   schedule: cosine
   effective_batch: 64
-  per_device_batch_size: 16
   weight_decay: 0.1
   grad_clip: 1.0
 runtime:
+  per_device_batch_size: 16
   seed: 42
   precision: bf16
   ddp: false

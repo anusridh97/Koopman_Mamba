@@ -74,10 +74,11 @@ class TrialOutcome:
     run_dir: Path
     objective: Optional[float]
     anchor: Optional[str]
-    # Which rung of the OOM ladder actually ran. Recorded because
-    # per_device_batch_size is hashed into run_id, so a descent changes the run's
-    # identity -- the number here is how you find the directory that holds the
-    # result.
+    # Which rung of the OOM ladder actually ran. Still recorded, though the
+    # reason has changed: per_device_batch_size moved to RuntimeSpec on
+    # 2026-08-19, so it is no longer hashed and every rung shares one run_id. The
+    # number is now provenance -- which microbatch the result was produced at --
+    # rather than the only way to find the directory.
     per_device_batch_size: Optional[int] = None
 
 
@@ -124,16 +125,19 @@ def run_trial(study: optuna.study.Study, trial, *,
     for position, pdbs in enumerate(rungs):
         attempt_overrides = dict(overrides)
         if pdbs is not None:
-            attempt_overrides["optim.per_device_batch_size"] = pdbs
+            attempt_overrides["runtime.per_device_batch_size"] = pdbs
         spec = build_cell_run_spec(study_name, base_sections, attempt_overrides)
-        # A fresh run_dir per rung, necessarily: per_device_batch_size is hashed
-        # into run_id, so the retry IS a different run and must not overwrite the
-        # first one's directory.
+        # Since the microbatch moved to RuntimeSpec every rung resolves to the SAME
+        # run_dir, which is the point: a retry is the same experiment fitted into
+        # memory differently, so it reuses the directory and appends another
+        # attempts.jsonl record rather than forking a second identity. force=True
+        # is what lets the second rung write into a directory the first already
+        # created.
         run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
-                                   force=force, dry_run=dry_run)
+                                   force=force or position > 0, dry_run=dry_run)
         identity = dict(trial_number=trial.number, run_id=run_id(spec),
                         group_id=group_id(spec), run_dir=run_dir, anchor=anchor,
-                        per_device_batch_size=spec.optim.per_device_batch_size)
+                        per_device_batch_size=spec.runtime.per_device_batch_size)
         try:
             launcher.submit(spec, run_dir, dry_run=dry_run)
             break
@@ -186,8 +190,11 @@ def _ladder(base_sections: Mapping[str, Mapping[str, Any]], *,
     if not enabled:
         return [None]
     optim = base_sections.get("optim", {})
+    runtime = base_sections.get("runtime", {})
     effective = int(optim.get("effective_batch", 0) or 0)
-    initial = int(optim.get("per_device_batch_size", 0) or 0)
+    # runtime since 2026-08-19 -- which is what makes the ladder
+    # identity-preserving instead of identity-forking.
+    initial = int(runtime.get("per_device_batch_size", 8) or 0)
     if effective < 1 or initial < 1:
         return [None]
     return [pdbs for pdbs, _ in batch_plans(effective, initial)]

@@ -180,8 +180,8 @@ def _base_spec(tmp_path):
                  "tokenizer": "NousResearch/Llama-2-7b-hf",
                  "mix": {"fineweb": 1.0}, "n_tokens": 3000000000},
         "optim": {"lr": 4.0e-4, "warmup_steps": 300, "max_steps": 15000,
-                  "effective_batch": 96, "per_device_batch_size": 16},
-        "runtime": {"seed": 42},
+                  "effective_batch": 96},
+        "runtime": {"per_device_batch_size": 16, "seed": 42},
     }))
     return path
 

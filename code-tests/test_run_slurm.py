@@ -21,8 +21,8 @@ def _shard_spec(**runtime_overrides):
             mix={"fineweb": 1.0}, n_tokens=3_000_000_000,
         ),
         optim=OptimSpec(lr=4e-4, warmup_steps=300, max_steps=15000,
-                          effective_batch=96, per_device_batch_size=16),
-        runtime=RuntimeSpec(**runtime_overrides),
+                          effective_batch=96),
+        runtime=RuntimeSpec(per_device_batch_size=16, **runtime_overrides),
     )
 
 
