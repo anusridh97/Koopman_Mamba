@@ -42,6 +42,7 @@ from koopman_lm.models.koopman_lm import KoopmanLM
 from experimentation.retrieval.encoder import RetrievalEncoder, info_nce
 from experimentation.retrieval.data import build_iterable_dataset, extract_pairs, RETRIEVAL_SOURCE_SPECS
 from experimentation.training.data.dataset import MemmapPackedDataset
+from experimentation.training.amp import amp_for
 from experimentation.run.provenance import git_commit, git_dirty_paths
 
 
@@ -176,7 +177,7 @@ def train(args):
         encoder.param_groups(args.backbone_lr, args.proj_lr, args.weight_decay),
         betas=(0.9, 0.95))
     sched = get_cosine_schedule_with_warmup(opt, args.warmup_steps, args.max_steps)
-    autocast = torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=args.bf16)
+    autocast, grad_scaler = amp_for(cfg, 'cuda', enabled=args.bf16)
 
     eval_pairs = _collect_eval_pairs(mix, tok, args.q_len, args.p_len, args.n_hard,
                                      args.seed + 99991, args.n_eval)

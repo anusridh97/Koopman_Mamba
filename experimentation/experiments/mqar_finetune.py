@@ -51,6 +51,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from koopman_lm.config import build_config, config_hash
 from experimentation.run.provenance import git_commit, git_dirty_paths
+from experimentation.training.amp import amp_for
 from experimentation.training.optim import param_groups
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
@@ -272,8 +273,8 @@ def train(args):
             resume="allow",
         )
 
-    autocast = torch.amp.autocast("cuda", dtype=torch.bfloat16,
-                                  enabled=(device.type == "cuda"))
+    autocast, grad_scaler = amp_for(cfg, "cuda",
+                                    enabled=(device.type == "cuda"))
     model.train()
     step     = start_step
     epoch    = 0

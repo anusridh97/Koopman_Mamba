@@ -70,6 +70,7 @@ import torch.nn.functional as F
 from experimentation.experiments.curricula import eval_niah, make_sysprompt, make_toolcall
 from koopman_lm.config import build_config, config_hash
 from experimentation.training.optim import param_groups
+from experimentation.training.amp import amp_for
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.baselines import (
     build_mamba_attention,
@@ -185,6 +186,33 @@ def save_checkpoint(output_dir, step, model, optimizer, scheduler, cfg, model_ty
     print(f"  Checkpoint -> {d}  (hash={config_hash(cfg)[:8]})")
 
 
+def _table2_config(model_size: str):
+    """The registry config, with compute_precision declared as fp16.
+
+    This trainer has always run fp16 with a GradScaler while the other three run
+    bf16, and that fact lived only in a hardcoded `dtype=torch.float16` line. It is
+    now on the config, so it travels with the checkpoint (meta.pt carries cfg) and
+    is legible from the run directory rather than from this file.
+
+    Declared rather than inherited on purpose: every registry config defaults to
+    bf16, so reading the default would silently switch Table 2 to bf16 and move its
+    numbers. The design's wording for this step is that table2's fp16 "becomes
+    visible in the config rather than buried in the trainer" -- preservation plus
+    legibility, not a change.
+
+    Note config_hash therefore differs from the same registry name built plainly.
+    That is correct: this IS a different configuration, and it always was; the
+    difference simply used to be invisible.
+    """
+    import dataclasses
+
+    from koopman_lm.config import KoopmanLMConfig
+
+    base = build_config(model_size)
+    return KoopmanLMConfig(
+        **dict(dataclasses.asdict(base), compute_precision='fp16'))
+
+
 def load_checkpoint(resume_from, model, optimizer, scheduler):
     p = Path(resume_from)
     model.load_state_dict(torch.load(p / "model.pt", map_location="cpu", weights_only=True))
@@ -201,7 +229,7 @@ def train(args) -> None:
     print(f"Device: {device}")
     print(f"Model: {args.model_type}  Config: {args.model_size}")
 
-    cfg = build_config(args.model_size)
+    cfg = _table2_config(args.model_size)
     print(f"Config hash: {config_hash(cfg)[:8]}")
 
     model = build_model(args.model_type, cfg, koopman_mlp_expand=args.koopman_mlp_expand).to(device)
@@ -230,8 +258,13 @@ def train(args) -> None:
     if args.resume_from:
         start_step = load_checkpoint(args.resume_from, model, optimizer, scheduler)
 
-    autocast = torch.amp.autocast("cuda", dtype=torch.float16, enabled=(device.type == "cuda"))
-    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+    # This trainer has always run fp16 with a scaler, unlike the other three,
+    # and that fact lived only in this line. It is now declared on the config
+    # (see _table2_config), so the precision travels with the checkpoint and is
+    # legible from the run directory. Behaviour is unchanged on purpose: reading
+    # the registry default instead would silently switch Table 2 to bf16 and move
+    # its numbers.
+    autocast, scaler = amp_for(cfg, "cuda", enabled=(device.type == "cuda"))
 
     model.train()
     t0 = time.time()

@@ -32,6 +32,7 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
 from experimentation.training.repro import seed_everything, enable_determinism, seed_worker
 from experimentation.training.optim import param_groups as _param_groups
+from experimentation.training.amp import amp_for
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.mamba import Mamba2Block
@@ -301,7 +302,9 @@ def train(args):
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps,
         num_training_steps=args.max_steps)
-    autocast_ctx = torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=args.bf16)
+    # dtype from the config, --bf16 still only switches autocast off. A scaler
+    # appears iff compute_precision is fp16 (derived, never configured).
+    autocast_ctx, grad_scaler = amp_for(cfg, 'cuda', enabled=args.bf16)
 
     if is_main and args.wandb_project:
         import wandb
