@@ -1,9 +1,9 @@
 """koopman_lm/precision.py -- one place that knows what a precision name means.
 
-Step 1 of the precision-policy design's implementation order, and deliberately
-inert: nothing consumes it yet, so this commit changes no behaviour and no
-identity. The config fields that will consume it move config_hash for all 11
-registry configs, which is a separate, deliberate step.
+Step 1 of the precision-policy design's implementation order. It landed inert --
+nothing imported it -- and step 2 (the three config fields) made config.py its
+first and so far only consumer; test_only_the_expected_modules_consume_precision
+at the bottom is how that stays a checked claim.
 
 Two domain decisions are load-bearing enough to pin here rather than leave to a
 docstring.
@@ -177,17 +177,31 @@ def test_precision_does_not_import_experimentation():
     assert not any(name.startswith("experimentation") for name in imported)
 
 
-def test_nothing_consumes_precision_yet():
-    """Step 1 of the design's order is explicitly inert. If this fails, the
-    wiring landed in the same commit as the helper, and "this commit changes no
-    behaviour" stopped being true."""
+# Modules allowed to import precision.py at each stage of the design's
+# implementation order. config.py arrived with step 2 (the three fields). The
+# model and training call sites are steps 3 onward and are NOT wired yet, so
+# this list is how "not yet wired" stays a checked claim rather than a memory.
+_EXPECTED_CONSUMERS = {"koopman_lm/config.py"}
+
+
+def test_only_the_expected_modules_consume_precision():
+    """The design lands in numbered steps, and each is meant to be separately
+    reviewable. This pins which step we are on: widening the set is the signal
+    that the model/training wiring (steps 3 onward) has landed, and that the
+    commit doing it owes a behavioural argument rather than "no-op".
+    """
     import subprocess
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
     result = subprocess.run(
-        ["grep", "-rn", "--include=*.py", "koopman_lm.precision",
+        ["grep", "-rl", "--include=*.py", "koopman_lm.precision",
          str(root / "koopman_lm"), str(root / "experimentation")],
         capture_output=True, text=True)
-    assert result.stdout.strip() == "", (
-        f"precision.py has consumers already:\n{result.stdout}")
+    consumers = {
+        str(Path(line).resolve().relative_to(root))
+        for line in result.stdout.split() if line
+    }
+    assert consumers == _EXPECTED_CONSUMERS, (
+        f"unexpected consumers: {sorted(consumers - _EXPECTED_CONSUMERS)}; "
+        f"missing: {sorted(_EXPECTED_CONSUMERS - consumers)}")

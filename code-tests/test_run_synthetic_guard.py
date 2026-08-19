@@ -97,10 +97,22 @@ def test_build_train_argv_keeps_its_own_guard():
 
 
 def test_a_shard_spec_still_launches_dry(tmp_path):
-    """Regression: the new dispatch must not break the shard path."""
+    """Regression: the new dispatch must not break the shard path.
+
+    The expected directory is derived rather than spelled out. It used to be
+    hardcoded as "50m-first-real.81033b58", which made this a second, silent pin
+    on run identity -- so the deliberate precision-policy hash change broke it
+    here as well as in test_identity_baseline.py, in a test whose subject is
+    "does a shard spec still materialize a directory" and not "what is its
+    group_id". One place pins hashes; this is not that place.
+    """
     from experimentation.run.__main__ import main
-    result = main(["configs/runs/50m-first-real.yaml", "--run_root", str(tmp_path),
-                   "--allow-dirty", "--dry_run"])
-    assert (tmp_path / "50m-first-real.81033b58").is_dir(), (
+    from experimentation.run.resolve import resolve_run_spec
+    from experimentation.run.spec import run_dir_path
+
+    spec_path = "configs/runs/50m-first-real.yaml"
+    main([spec_path, "--run_root", str(tmp_path), "--allow-dirty", "--dry_run"])
+    expected = run_dir_path(tmp_path, resolve_run_spec(spec_path))
+    assert expected.is_dir(), (
         "shard specs must still materialize a run directory")
-    del result
+    assert (expected / "spec.yaml").is_file()

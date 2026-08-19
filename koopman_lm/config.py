@@ -164,6 +164,21 @@ class KoopmanLMConfig:
     ska_layer_indices: Optional[Tuple[int, ...]] = field(
         default=None, metadata={"coerce": tuple})
 
+    # Precision policy (specs/2026-08-10-precision-policy-design.md).
+    # compute_precision sets the floor for the whole network; the two component
+    # fields RAISE it where the math needs more. Their domains make that
+    # invariant unsatisfiable to violate rather than something to validate:
+    # compute excludes fp64, and the component fields exclude bf16/fp16, so the
+    # floor can never exceed the component minimum. See koopman_lm/precision.py.
+    #
+    # The defaults state what the code already did -- bf16 autocast, an fp32 SKA
+    # core, an untouched MLP path -- so adding them changed no numerics. They do
+    # change config_hash for all 11 registry configs, which is why
+    # identity_baseline.json was regenerated alongside them.
+    compute_precision: str = 'bf16'            # fp32 | bf16 | fp16
+    ska_precision: str = 'fp32'                # fp32 | fp64
+    mlp_precision: Optional[str] = None        # None (no-op) | fp32 | fp64
+
     # Training
     max_seq_len: int = 8192
     tie_embeddings: bool = True
@@ -198,6 +213,41 @@ class KoopmanLMConfig:
             raise ValueError("norm_type must be layernorm or rmsnorm")
         if self.init_policy not in {'mamba_safe', 'legacy'}:
             raise ValueError("init_policy must be mamba_safe or legacy")
+
+        # --- precision policy -------------------------------------------
+        # Imported here rather than at module scope to keep config.py free of a
+        # torch import: it is loaded by tooling (gen_inventory, the sweep
+        # expander) that has no reason to pay for torch.
+        from koopman_lm.precision import COMPONENT_PRECISIONS, COMPUTE_PRECISIONS
+
+        if self.compute_precision not in COMPUTE_PRECISIONS:
+            raise ValueError(
+                f"compute_precision={self.compute_precision!r}; expected one of "
+                f"{sorted(COMPUTE_PRECISIONS)}. fp64 is deliberately excluded: it "
+                f"would let the global floor exceed what ska_precision/"
+                f"mlp_precision can raise to, which is the invariant those "
+                f"fields rely on (see koopman_lm/precision.py).")
+        if self.ska_precision not in COMPONENT_PRECISIONS:
+            raise ValueError(
+                f"ska_precision={self.ska_precision!r}; expected one of "
+                f"{sorted(COMPONENT_PRECISIONS)}. The whitened core takes a "
+                f"cholesky of a Gram matrix (kernels/ska_operator.py), and "
+                f"bf16's 8 mantissa bits make that unreliable -- part of why "
+                f"ska_ridge exists. This field protects that computation, so it "
+                f"cannot be used to lower its precision.")
+        if self.ska_precision == 'fp64' and self.ska_backend == 'cuda_prefix':
+            raise ValueError(
+                "ska_precision='fp64' is incompatible with "
+                "ska_backend='cuda_prefix': the fused kernel is fp32-only, "
+                "enforced in kernels/csrc/prefix_scan_ext.cu (CHECK_F32) and "
+                "again in kernels/cuda_prefix_scan.py. Use ska_backend='auto' or "
+                "'pytorch' for an fp64 core -- the exact prefix-scan path accepts "
+                "float64.")
+        if self.mlp_precision is not None and self.mlp_precision not in COMPONENT_PRECISIONS:
+            raise ValueError(
+                f"mlp_precision={self.mlp_precision!r}; expected None or one of "
+                f"{sorted(COMPONENT_PRECISIONS)}. None is the default and a "
+                f"strict no-op: the MLP path is left untouched.")
         if self.ska_prefix_scan and self.ska_inverse_cholesky:
             raise ValueError(
                 "ska_prefix_scan and ska_inverse_cholesky are alternative exact paths")
