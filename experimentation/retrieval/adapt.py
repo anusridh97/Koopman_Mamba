@@ -42,6 +42,7 @@ from koopman_lm.models.koopman_lm import KoopmanLM
 from experimentation.retrieval.encoder import RetrievalEncoder, info_nce
 from experimentation.retrieval.data import build_iterable_dataset, extract_pairs, RETRIEVAL_SOURCE_SPECS
 from experimentation.training.data.dataset import MemmapPackedDataset
+from experimentation.run.provenance import git_commit, git_dirty_paths
 
 
 # ---------------------------------------------------------------------------
@@ -250,9 +251,11 @@ def _save(encoder, backbone, cfg, tok, step, args, dirname=None):
     # backbone state (loadable by eval_sweep.sh / lm_harness) + full encoder.
     torch.save(backbone.state_dict(), os.path.join(d, "model.pt"))
     torch.save(encoder.state_dict(), os.path.join(d, "retrieval_encoder.pt"))
+    # code_id/dirty: see training/train.py::checkpoint_meta (provenance 4.1).
     torch.save({"step": step, "cfg": cfg, "cfg_hash": config_hash(cfg),
                 "proj_dim": args.proj_dim, "pool": args.pool,
-                "model_type": "koopman", "model_size": args.model_size},
+                "model_type": "koopman", "model_size": args.model_size,
+                "code_id": git_commit(), "dirty": bool(git_dirty_paths())},
                os.path.join(d, "meta.pt"))
     tok.save_pretrained(d)
     print(f"  saved {d}")

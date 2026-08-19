@@ -70,6 +70,7 @@ import torch.nn.functional as F
 from experimentation.experiments.curricula import eval_niah, make_sysprompt, make_toolcall
 from koopman_lm.config import build_config, config_hash
 from experimentation.training.optim import param_groups
+from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.baselines import (
     build_mamba_attention,
     build_mamba_only,
@@ -171,7 +172,10 @@ def save_checkpoint(output_dir, step, model, optimizer, scheduler, cfg, model_ty
     d.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), d / "model.pt")
     torch.save({"optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict()}, d / "optimizer.pt")
-    meta = {"step": step, "cfg": cfg, "cfg_hash": config_hash(cfg), "model_type": model_type}
+    # code_id/dirty: see training/train.py::checkpoint_meta (provenance 4.1).
+    meta = {"step": step, "cfg": cfg, "cfg_hash": config_hash(cfg),
+            "model_type": model_type,
+            "code_id": git_commit(), "dirty": bool(git_dirty_paths())}
     if results:
         meta["niah_table2"] = results
     torch.save(meta, d / "meta.pt")

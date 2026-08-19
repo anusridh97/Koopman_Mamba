@@ -50,6 +50,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from koopman_lm.config import build_config, config_hash
+from experimentation.run.provenance import git_commit, git_dirty_paths
 from experimentation.training.optim import param_groups
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
@@ -123,12 +124,15 @@ def save_checkpoint(output_dir, step, model, optimizer, scheduler, cfg,
     torch.save({"optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict()}, d / "optimizer.pt")
 
+    # code_id/dirty: see training/train.py::checkpoint_meta (provenance 4.1).
     meta = {
         "step":       step,
         "cfg":        cfg,
         "cfg_hash":   config_hash(cfg),
         "model_size": model_size,
         "model_type": model_type,
+        "code_id":    git_commit(),
+        "dirty":      bool(git_dirty_paths()),
     }
     if cell_result is not None:
         meta["mqar_intask"] = cell_result

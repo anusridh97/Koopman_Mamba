@@ -114,9 +114,12 @@ Four changes. Two are trivial, one is a policy, one is selective.
 
 ```python
 # training/train.py:checkpoint_meta
-from experimentation.run.resolve import git_commit, git_dirty_paths   # :108, :71
+from experimentation.run.provenance import git_commit, git_dirty_paths
 return {..., "code_id": git_commit(), "dirty": bool(git_dirty_paths())}
 ```
+
+(This doc originally said `run/resolve.py`; `3100e9c` extracted both helpers
+into `run/provenance.py`, which is where they live.)
 
 Applied to all **four** places that write a checkpoint meta dict:
 
@@ -133,11 +136,11 @@ itself a duplication worth collapsing, but out of scope here.)
 `meta.pt` is not hashed, so this changes **no identity** — it is purely additive.
 Every checkpoint becomes self-attributing.
 
-The import is `from experimentation.run.resolve import git_commit,
-git_dirty_paths`. `training/` already imports from `run/` this way
-(`training/resume.py:83` pulls `atomic_torch_save` from `run/artifacts.py`), so
-this introduces no new layering edge, and it does not touch the
-`koopman_lm` ← `experimentation` boundary at all.
+The import is `from experimentation.run.provenance import git_commit,
+git_dirty_paths`. `training/` already imports across the package this way
+(`training/resume.py` pulls `atomic_torch_save` from
+`experimentation/atomic_io.py`), so this introduces no new layering edge, and it
+does not touch the `koopman_lm` ← `experimentation` boundary at all.
 
 Also fix 3.4: `harness.py` **compares** rather than overwrites, and surfaces a
 mismatch as an explicit `cfg_hash_mismatch` field in the provenance dict rather

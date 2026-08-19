@@ -32,6 +32,7 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
 from experimentation.training.repro import seed_everything, enable_determinism, seed_worker
 from experimentation.training.optim import param_groups as _param_groups
+from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.mamba import Mamba2Block
 from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
@@ -490,6 +491,20 @@ def checkpoint_meta(cfg, step, model_type, model_size):
 
     Includes the content-addressed ``cfg_hash`` so a checkpoint can always be
     traced back to its exact config (scaling plan Phase 0, reproducibility infra).
+
+    ``code_id`` and ``dirty`` answer the other half of "what did this run do?"
+    (run-provenance design 4.1). ``cfg_hash`` pins the *config*; nothing here
+    pinned the *code*, so a checkpoint separated from its run directory was
+    unattributable -- and separation is routine, since evaluation/evaluate.py
+    takes a bare ``--checkpoint <path>`` and evaluation/harness.py rebuilds all
+    its provenance from this dict alone. Results carried ``git_commit`` in
+    evaluation/result.py's envelope while the checkpoints they scored did not.
+
+    ``dirty`` travels with ``code_id`` because a commit hash recorded from an
+    uncommitted tree does not describe the code that ran, and after the fact
+    there is no way to tell the two cases apart.
+
+    meta.pt is not hashed into any identity, so this is purely additive.
     """
     return {
         "step": step,
@@ -498,6 +513,8 @@ def checkpoint_meta(cfg, step, model_type, model_size):
         "model_type": model_type,
         "model_size": model_size,
         "torch_version": torch.__version__,
+        "code_id": git_commit(),
+        "dirty": bool(git_dirty_paths()),
     }
 
 
