@@ -54,6 +54,8 @@ import optuna
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.run.train_argv import batch_plans
 from experimentation.sweep.launch import materialize_cell
+from experimentation.sweep.search.metrics import (
+    looks_like_oom, objective_from_metrics)
 from experimentation.sweep.search.space import params_to_overrides
 from experimentation.sweep.search.study import ANCHOR_ATTR, to_distributions
 from experimentation.sweep.spec import build_cell_run_spec
@@ -79,45 +81,6 @@ class TrialOutcome:
     per_device_batch_size: Optional[int] = None
 
 
-def objective_from_metrics(metrics: Mapping[str, Any], *,
-                           parameter_penalty: float = 0.0,
-                           param_count: Optional[int] = None,
-                           baseline_param_count: Optional[int] = None,
-                           throughput_penalty: float = 0.0,
-                           target_tokens_per_sec: float = 0.0,
-                           ska_delta_reward: float = 0.0,
-                           ska_delta_cap: float = 0.10) -> float:
-    """A quick_eval payload -> the scalar optuna minimises.
-
-    Pure, and every weight defaults to zero so the objective starts as the
-    measured loss and nothing else. Each term is one-sided: a config smaller than
-    the baseline earns no bonus, a config faster than the target earns no bonus,
-    and an ablation delta that went the wrong way earns no bonus. One-sidedness
-    matters because these are constraints being expressed as penalties, not
-    quantities being jointly optimised.
-    """
-    full = metrics.get("full", {})
-    score = float(full.get("loss", 0.0))
-
-    if parameter_penalty > 0 and param_count and baseline_param_count:
-        excess_millions = max(0.0, (param_count - baseline_param_count) / 1e6)
-        score += parameter_penalty * excess_millions
-
-    if throughput_penalty > 0 and target_tokens_per_sec > 0:
-        measured = float(full.get("tokens_per_sec") or 0.0)
-        if measured > 0:
-            score += throughput_penalty * max(0.0, target_tokens_per_sec / measured - 1.0)
-
-    ablation = metrics.get("ska_ablation", {})
-    if ska_delta_reward > 0 and ablation.get("supported"):
-        delta = float(ablation.get("loss_delta") or 0.0)
-        # Capped, and floored at zero: a negative delta means zeroing SKA made
-        # the model better, which must not become a reward by sign error.
-        score -= ska_delta_reward * max(0.0, min(delta, ska_delta_cap))
-
-    return score
-
-
 def run_trial(study: optuna.study.Study, trial, *,
               base_sections: Mapping[str, Mapping[str, Any]],
               base_model: KoopmanLMConfig,
@@ -140,8 +103,6 @@ def run_trial(study: optuna.study.Study, trial, *,
     concrete learning rate by the time a trial exists. It stays in the signature
     so `drive` can pass one context dict to both this and `enqueue_anchors`.
     """
-    from experimentation.sweep.search.metrics import looks_like_oom
-
     anchor = trial.user_attrs.get(ANCHOR_ATTR)
     overrides = params_to_overrides(trial.params, base_model, max_steps=max_steps,
                                    seq_len=seq_len, backend_policy=backend_policy)

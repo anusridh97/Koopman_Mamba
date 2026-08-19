@@ -47,12 +47,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-import optuna
-
-from experimentation.sweep.search.driver import objective_from_metrics
-from experimentation.sweep.search.study import is_anchor
-
 __all__ = ["OOM_MARKERS", "TRAIN_RE", "Progress", "looks_like_oom",
+           "objective_from_metrics",
            "parse_progress", "read_progress", "ema_losses",
            "read_quick_eval_metrics", "read_quick_eval_objective",
            "wait_for_objective"]
@@ -92,6 +88,44 @@ def looks_like_oom(run_dir) -> bool:
                 return True
     return False
 
+
+def objective_from_metrics(metrics: Mapping[str, Any], *,
+                           parameter_penalty: float = 0.0,
+                           param_count: Optional[int] = None,
+                           baseline_param_count: Optional[int] = None,
+                           throughput_penalty: float = 0.0,
+                           target_tokens_per_sec: float = 0.0,
+                           ska_delta_reward: float = 0.0,
+                           ska_delta_cap: float = 0.10) -> float:
+    """A quick_eval payload -> the scalar optuna minimises.
+
+    Pure, and every weight defaults to zero so the objective starts as the
+    measured loss and nothing else. Each term is one-sided: a config smaller than
+    the baseline earns no bonus, a config faster than the target earns no bonus,
+    and an ablation delta that went the wrong way earns no bonus. One-sidedness
+    matters because these are constraints being expressed as penalties, not
+    quantities being jointly optimised.
+    """
+    full = metrics.get("full", {})
+    score = float(full.get("loss", 0.0))
+
+    if parameter_penalty > 0 and param_count and baseline_param_count:
+        excess_millions = max(0.0, (param_count - baseline_param_count) / 1e6)
+        score += parameter_penalty * excess_millions
+
+    if throughput_penalty > 0 and target_tokens_per_sec > 0:
+        measured = float(full.get("tokens_per_sec") or 0.0)
+        if measured > 0:
+            score += throughput_penalty * max(0.0, target_tokens_per_sec / measured - 1.0)
+
+    ablation = metrics.get("ska_ablation", {})
+    if ska_delta_reward > 0 and ablation.get("supported"):
+        delta = float(ablation.get("loss_delta") or 0.0)
+        # Capped, and floored at zero: a negative delta means zeroing SKA made
+        # the model better, which must not become a reward by sign error.
+        score -= ska_delta_reward * max(0.0, min(delta, ska_delta_cap))
+
+    return score
 
 def read_quick_eval_metrics(run_dir) -> Optional[Dict[str, Any]]:
     """The newest quick_eval payload under `run_dir/eval/`, or None.
@@ -254,6 +288,15 @@ def wait_for_objective(study: optuna.study.Study, trial, run_dir, *,
     compares against, so pruning them removes the thing later trials are judged
     by.
     """
+    # optuna and is_anchor are imported here rather than at module scope: the
+    # rest of this module -- log parsing, OOM detection, objective reading -- is
+    # pure and must stay importable with optuna absent. Hard-importing it at the
+    # top silently pulled the whole search package's optional dependency into the
+    # OOM ladder, which broke the CPU suite.
+    import optuna
+
+    from experimentation.sweep.search.study import is_anchor
+
     run_dir = Path(run_dir)
     cancel = cancel if cancel is not None else _default_cancel
     prunable = prune_anchors or not is_anchor(trial)
