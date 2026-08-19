@@ -1,0 +1,194 @@
+"""ask -> materialize -> launch -> read -> tell. The loop, without a closure.
+
+The original harness wrapped training in an `objective(trial)` that optuna
+called, which forced one long-lived process holding a child process, a GPU thread
+pool and a stdout pipe -- and therefore forced abandoning Slurm. optuna's
+ask/tell interface removes that constraint: the gap between `ask()` and `tell()`
+can be a scheduler queue, so this drives the *existing* run system instead of
+replacing it.
+
+    trial   = study.ask(distributions)          # params, or a queued anchor
+    spec    = build_cell_run_spec(...)          # sweep/spec.py, unmodified
+    run_dir = materialize_cell(spec, ...)       # sweep/launch.py, unmodified
+    launcher.submit(spec, run_dir)              # run/launchers.py, unmodified
+    study.tell(trial, objective)
+
+Everything the run system guarantees comes along for free: a content-hashed
+run_id and group_id, the refusal to launch from a dirty tree, verify_shard
+against the data's own meta.json, atomic materialization, the claim against
+concurrent writers, an attempts.jsonl audit trail, and -- through
+`results.py` -- a queryable table at the end.
+
+**The launcher and the objective reader are injected.** Not for testability
+alone: `LocalLauncher`/`SlurmLauncher` are already passed as objects here, and
+the reader genuinely has to differ by launcher, because a local run can be read
+the moment `submit()` returns while a queued one cannot be read for hours. That
+same seam is what lets the whole loop be exercised on a CPU box.
+
+**Scalarisation is one pure function.** `objective_from_metrics` turns a
+quick_eval payload into the single number optuna minimises, and every penalty
+weight defaults to zero -- so the objective is the measured held-out loss until
+someone deliberately trades it against parameter count, throughput, or how much
+the SKA branch earns. The parameter penalty is worth turning on: the default
+space spans a ~5.9% parameter range, and without it a config can win on capacity
+rather than on architecture, which is not a claim a paper can make.
+
+**A failed trial is told, not raised.** One OOM must not end a study, and a
+missing metric must never be replaced with a plausible number -- a fabricated
+objective would steer every later proposal.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional
+
+import optuna
+
+from koopman_lm.config import KoopmanLMConfig
+from experimentation.sweep.launch import materialize_cell
+from experimentation.sweep.search.space import params_to_overrides
+from experimentation.sweep.search.study import ANCHOR_ATTR, to_distributions
+from experimentation.sweep.spec import build_cell_run_spec
+from experimentation.run.spec import group_id, run_id
+
+__all__ = ["TrialOutcome", "objective_from_metrics", "run_trial", "drive"]
+
+
+@dataclass(frozen=True)
+class TrialOutcome:
+    """What happened to one trial, in terms a human can act on."""
+    trial_number: int
+    state: str                      # "complete" | "failed"
+    run_id: str
+    group_id: str
+    run_dir: Path
+    objective: Optional[float]
+    anchor: Optional[str]
+
+
+def objective_from_metrics(metrics: Mapping[str, Any], *,
+                           parameter_penalty: float = 0.0,
+                           param_count: Optional[int] = None,
+                           baseline_param_count: Optional[int] = None,
+                           throughput_penalty: float = 0.0,
+                           target_tokens_per_sec: float = 0.0,
+                           ska_delta_reward: float = 0.0,
+                           ska_delta_cap: float = 0.10) -> float:
+    """A quick_eval payload -> the scalar optuna minimises.
+
+    Pure, and every weight defaults to zero so the objective starts as the
+    measured loss and nothing else. Each term is one-sided: a config smaller than
+    the baseline earns no bonus, a config faster than the target earns no bonus,
+    and an ablation delta that went the wrong way earns no bonus. One-sidedness
+    matters because these are constraints being expressed as penalties, not
+    quantities being jointly optimised.
+    """
+    full = metrics.get("full", {})
+    score = float(full.get("loss", 0.0))
+
+    if parameter_penalty > 0 and param_count and baseline_param_count:
+        excess_millions = max(0.0, (param_count - baseline_param_count) / 1e6)
+        score += parameter_penalty * excess_millions
+
+    if throughput_penalty > 0 and target_tokens_per_sec > 0:
+        measured = float(full.get("tokens_per_sec") or 0.0)
+        if measured > 0:
+            score += throughput_penalty * max(0.0, target_tokens_per_sec / measured - 1.0)
+
+    ablation = metrics.get("ska_ablation", {})
+    if ska_delta_reward > 0 and ablation.get("supported"):
+        delta = float(ablation.get("loss_delta") or 0.0)
+        # Capped, and floored at zero: a negative delta means zeroing SKA made
+        # the model better, which must not become a reward by sign error.
+        score -= ska_delta_reward * max(0.0, min(delta, ska_delta_cap))
+
+    return score
+
+
+def run_trial(study: optuna.study.Study, trial, *,
+              base_sections: Mapping[str, Mapping[str, Any]],
+              base_model: KoopmanLMConfig,
+              space: Mapping[str, Mapping[str, Any]],
+              max_steps: int,
+              run_root,
+              study_name: str,
+              launcher,
+              read_objective: Callable[[Path], Optional[float]],
+              base_lr: float = 4e-4,
+              backend_policy: str = "exact_auto",
+              seq_len: Optional[int] = None,
+              dry_run: bool = False,
+              force: bool = False,
+              dirty: bool = False) -> TrialOutcome:
+    """Turn one asked-for trial into a launched run, and report the result back.
+
+    `base_lr` is accepted and unused here -- the sampler has already produced a
+    concrete learning rate by the time a trial exists. It stays in the signature
+    so `drive` can pass one context dict to both this and `enqueue_anchors`.
+    """
+    anchor = trial.user_attrs.get(ANCHOR_ATTR)
+    overrides = params_to_overrides(trial.params, base_model, max_steps=max_steps,
+                                   seq_len=seq_len, backend_policy=backend_policy)
+    spec = build_cell_run_spec(study_name, base_sections, overrides)
+
+    # Reuse sweep's stamp keys so results.py's existing sweep_name column stays
+    # meaningful, and add the study-specific pair beside them.
+    stamp = {
+        "sweep_name": study_name,
+        "study_name": study_name,
+        "trial_number": trial.number,
+    }
+    if anchor:
+        stamp["anchor_name"] = anchor
+
+    run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
+                               force=force, dry_run=dry_run)
+    identity = dict(trial_number=trial.number, run_id=run_id(spec),
+                    group_id=group_id(spec), run_dir=run_dir, anchor=anchor)
+
+    try:
+        launcher.submit(spec, run_dir, dry_run=dry_run)
+    except Exception as exc:                       # noqa: BLE001 -- see docstring
+        # One bad config must not end the study. Record why on the trial so the
+        # reason survives in the journal rather than only in a log.
+        trial.set_user_attr("failure", f"{type(exc).__name__}: {exc}")
+        study.tell(trial, state=optuna.trial.TrialState.FAIL)
+        return TrialOutcome(state="failed", objective=None, **identity)
+
+    objective = read_objective(run_dir)
+    if objective is None:
+        # Training can exit cleanly and still leave no metric -- a missing
+        # checkpoint, a preemption between the save and the eval. Telling optuna
+        # a stand-in number would steer every later proposal off a fiction.
+        trial.set_user_attr("failure", "no objective could be read")
+        study.tell(trial, state=optuna.trial.TrialState.FAIL)
+        return TrialOutcome(state="failed", objective=None, **identity)
+
+    trial.set_user_attr("run_id", identity["run_id"])
+    trial.set_user_attr("run_dir", str(run_dir))
+    study.tell(trial, float(objective))
+    return TrialOutcome(state="complete", objective=float(objective), **identity)
+
+
+def _finished(study: optuna.study.Study) -> int:
+    terminal = {optuna.trial.TrialState.COMPLETE,
+                optuna.trial.TrialState.PRUNED,
+                optuna.trial.TrialState.FAIL}
+    return sum(1 for t in study.trials if t.state in terminal)
+
+
+def drive(study: optuna.study.Study, *, n_trials: int, **kwargs) -> List[TrialOutcome]:
+    """Run trials until the study holds `n_trials` finished ones.
+
+    `n_trials` is the study's target size, not "this many more". Resuming a
+    15-trial study that already finished 10 runs 5 -- which is the behaviour a
+    human expects after a launcher crash, and the opposite of what "run 15" would
+    do.
+    """
+    distributions = to_distributions(kwargs["space"])
+    outcomes: List[TrialOutcome] = []
+    while _finished(study) < n_trials:
+        trial = study.ask(distributions)
+        outcomes.append(run_trial(study, trial, **kwargs))
+    return outcomes
