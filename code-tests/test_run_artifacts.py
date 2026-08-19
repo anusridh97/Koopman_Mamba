@@ -229,3 +229,54 @@ def test_claim_run_dir_leaves_no_sentinel_behind(tmp_path):
     with claim_run_dir(run_dir):
         pass
     assert not (run_dir / ".running").exists()
+
+
+# ---- atomic_write_bytes (run-provenance design 4.2 needs a binary writer) ----
+
+def test_atomic_write_bytes_round_trips_non_utf8_and_creates_parents(tmp_path):
+    """The caller is source.tar.gz, so the payload is gzip -- bytes that are not
+    valid UTF-8. Routing it through atomic_write_text would raise or mangle it."""
+    from experimentation.atomic_io import atomic_write_bytes
+
+    payload = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\xff\xfe not utf-8 \x00"
+    target = tmp_path / "nested" / "source.tar.gz"
+    atomic_write_bytes(target, payload)
+    assert target.read_bytes() == payload
+    assert list(tmp_path.rglob("*.tmp*")) == []
+
+
+def test_atomic_write_bytes_failure_does_not_corrupt_the_existing_file(tmp_path, monkeypatch):
+    """Same guarantee atomic_torch_save gives: a kill mid-write leaves the
+    previous good file intact and no temp behind. An archive written beside a
+    finished run's spec.yaml is provenance -- a truncated one is worse than none,
+    because its hash would silently name the wrong code."""
+    from pathlib import Path
+
+    from experimentation.atomic_io import atomic_write_bytes
+
+    target = tmp_path / "source.tar.gz"
+    atomic_write_bytes(target, b"good")
+
+    # Patch the write step, not os.replace: os.replace is used by pytest's own
+    # machinery, so stubbing it globally would break the test run rather than
+    # the code under test. This mirrors how the atomic_torch_save test stubs
+    # torch.save.
+    def _boom(self, data):
+        raise RuntimeError("simulated kill mid-write")
+
+    monkeypatch.setattr(Path, "write_bytes", _boom)
+    with pytest.raises(RuntimeError):
+        atomic_write_bytes(target, b"doomed")
+    monkeypatch.undo()
+
+    assert target.read_bytes() == b"good"
+    assert list(tmp_path.rglob("*.tmp*")) == []
+
+
+def test_atomic_write_bytes_overwrites_in_place(tmp_path):
+    from experimentation.atomic_io import atomic_write_bytes
+
+    target = tmp_path / "source.tar.gz"
+    atomic_write_bytes(target, b"first")
+    atomic_write_bytes(target, b"second")
+    assert target.read_bytes() == b"second"
