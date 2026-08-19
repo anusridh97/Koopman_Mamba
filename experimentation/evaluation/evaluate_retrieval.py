@@ -68,6 +68,7 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 import dataclasses
 from koopman_lm.config import build_config
+from experimentation.training.amp import amp_for
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import (
     build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
@@ -538,8 +539,12 @@ def finetune_model(model, train_dataset, device, args):
         num_training_steps=args.ft_steps,
     )
 
-    autocast_ctx = torch.amp.autocast('cuda', dtype=torch.bfloat16,
-                                       enabled=device.type == 'cuda')
+    # A fine-tune loop, so this is compute precision and belongs with the other
+    # training sites rather than being hardcoded here. cfg comes off the model
+    # being fine-tuned; when it is absent amp_for defaults to bf16, which is
+    # exactly what this line did before.
+    autocast_ctx, grad_scaler = amp_for(getattr(ft_model, 'cfg', None), 'cuda',
+                                        enabled=device.type == 'cuda')
 
     step = 0
     epoch = 0

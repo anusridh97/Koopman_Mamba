@@ -187,6 +187,7 @@ _EXPECTED_CONSUMERS = {
     "koopman_lm/modules/mlp/koopman.py",  # step 3: the rotation coefficients
     "experimentation/run/spec.py",         # step 4: the runtime/model cross-check
     "experimentation/training/amp.py",      # step 5: the trainers' shared amp helper
+    "experimentation/evaluation/lm_harness_eval.py",  # step 6: the serving cast
 }
 
 

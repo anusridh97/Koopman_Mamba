@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import dataclasses
 from koopman_lm.config import build_config
+from koopman_lm.precision import as_dtype
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import (
     build_mamba_only,
@@ -66,7 +67,13 @@ class KoopmanEvalWrapper(HFLM):
         max_length=2048,
         batch_size=None,
         device="cuda",
-        dtype=torch.bfloat16,
+        # Serving precision: a per-invocation caller choice, not a config field
+        # (precision design 5). It casts WEIGHTS -- the checkpoint declares
+        # compute, the caller chooses storage, and naming this `dtype` invited
+        # exactly the confusion between the two that the design dissolves. The
+        # bf16 default is preserved deliberately: changing it would silently move
+        # every lm-eval-harness number this repo has reported.
+        weight_dtype="bf16",
     ):
         # Skip HFLM.__init__ (it tries to load a HF model), but we need
         # LM.__init__ for the base harness plumbing.
@@ -132,9 +139,11 @@ class KoopmanEvalWrapper(HFLM):
         self._model.load_state_dict(state)
 
         self._device = torch.device(device)
-        if isinstance(dtype, str):
-            dtype = getattr(torch, dtype)
-        self._model = self._model.to(device=self._device, dtype=dtype)
+        # as_dtype rather than getattr(torch, ...): the old form silently accepted
+        # any torch attribute name, so a typo became an AttributeError deep in
+        # .to() rather than a named rejection here.
+        self._model = self._model.to(device=self._device,
+                                     dtype=as_dtype(weight_dtype))
         self._model.eval()
 
         # Mamba/SKA variants have an O(1)-state recurrent implementation.

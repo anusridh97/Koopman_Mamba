@@ -1,8 +1,9 @@
 """What a precision name means: one mapping, one autocast helper, one rule.
 
-Step 1 of the precision-policy design, and deliberately inert -- nothing imports
-it yet. The config fields that will consume it move `config_hash` for all 11
-registry configs, so they land separately and on purpose.
+The foundation of the precision-policy design. It landed inert (step 1) and now
+has consumers across the config, both model paths, the run layer and the trainers
+-- code-tests/test_precision.py pins exactly which, so a new one cannot appear
+without a commit saying why.
 
 Lives at the package root beside `config.py` and `pooling.py`: the category of
 thing every subpackage may use and none owns. It must live under `koopman_lm/`
@@ -40,7 +41,7 @@ from typing import Any, Dict, Iterator, Tuple
 import torch
 
 __all__ = ["DTYPES", "COMPUTE_PRECISIONS", "COMPONENT_PRECISIONS",
-           "dtype_of", "rank_of", "needs_grad_scaler", "autocast"]
+           "dtype_of", "as_dtype", "rank_of", "needs_grad_scaler", "autocast"]
 
 DTYPES: Dict[str, torch.dtype] = {
     "fp16": torch.float16,
@@ -77,6 +78,25 @@ def _validate(name: Any) -> str:
 def dtype_of(name: str) -> torch.dtype:
     """A precision name -> the torch dtype it denotes."""
     return DTYPES[_validate(name)]
+
+
+def as_dtype(value) -> torch.dtype:
+    """A precision name *or* a torch dtype -> a torch dtype.
+
+    The inference-side counterpart to dtype_of, and the difference is deliberate.
+    dtype_of refuses a torch.dtype so the *config* surface stays exactly one
+    thing: a config is read from a YAML file, where only names exist. Serving
+    precision (design 5) is a per-invocation argument that reaches callers from a
+    CLI string or from Python, so both spellings are legitimate there.
+
+    fp16 is admissible for serving. Inference has no gradients, so it carries none
+    of the loss-scaling requirement that makes fp16 *training* need a GradScaler;
+    it can still overflow on large activations, which is the caller's trade to
+    make.
+    """
+    if isinstance(value, torch.dtype):
+        return value
+    return dtype_of(value)
 
 
 def rank_of(name: str) -> int:
