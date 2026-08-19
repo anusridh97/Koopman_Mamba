@@ -130,12 +130,31 @@ def _rotation_coeffs(m):
         spectral_norm_gamma.
     """
     mode = _resolve_rotation_param(m)
+
+    # mlp_precision, when set, RAISES the width these coefficients are computed
+    # at. The cast has to happen BEFORE the trig, not after: cos(theta.double())
+    # is more accurate than cos(theta).double(), and only the former is worth a
+    # config field. `precision=None` leaves `_up` as the identity, so the default
+    # path is untouched -- bit-identical, per the design's "strict no-op".
+    precision = getattr(m, 'precision', None)
+    if precision is None:
+        def _up(tensor):
+            return tensor
+    else:
+        from koopman_lm.precision import dtype_of
+        _raised = dtype_of(precision)
+
+        def _up(tensor):
+            return tensor.to(_raised)
+
     if mode == 'angle':
-        return torch.cos(m.theta), torch.sin(m.theta)
+        theta = _up(m.theta)
+        return torch.cos(theta), torch.sin(theta)
     if mode == 'logrho_theta':
-        rho = torch.exp(-F.softplus(m.s))
-        return rho * torch.cos(m.theta), rho * torch.sin(m.theta)
-    gamma, omega = m.gamma, m.omega
+        theta, s = _up(m.theta), _up(m.s)
+        rho = torch.exp(-F.softplus(s))
+        return rho * torch.cos(theta), rho * torch.sin(theta)
+    gamma, omega = _up(m.gamma), _up(m.omega)
     if m.spectral_norm_gamma:
         gamma, omega = _disk_clamp(gamma, omega)
     return gamma, omega
@@ -270,8 +289,21 @@ class SpectralKoopmanMLP(nn.Module):
                  norm_preserving=False, rotation_param=None, row_norm_lift=False,
                  pair_mixer=None, mixer_block=64, depth_grade=False,
                  layer_idx=None, n_layers=None, norm_type='layernorm',
-                 norm_eps=1e-5):
+                 norm_eps=1e-5, precision=None):
         super().__init__()
+        # None (the default) is a strict no-op: the rotation runs exactly as
+        # before. fp32/fp64 raise the width its coefficients are computed at.
+        # Validated here so a bad value fails at construction rather than
+        # mid-forward.
+        if precision is not None:
+            from koopman_lm.precision import COMPONENT_PRECISIONS
+
+            if precision not in COMPONENT_PRECISIONS:
+                raise ValueError(
+                    f"mlp precision={precision!r}; expected None or one of "
+                    f"{sorted(COMPONENT_PRECISIONS)}. This field may only RAISE "
+                    f"precision.")
+        self.precision = precision
         self.d_k = ((int(d * expand) + 63) // 64) * 64
         self.spectral_norm_gamma = spectral_norm_gamma
         self.norm_preserving = norm_preserving
@@ -317,7 +349,13 @@ class SpectralKoopmanMLP(nn.Module):
         gamma, omega = _rotation_coeffs(self)
         z1 = gamma * g1 + omega * g2
         z2 = -omega * g1 + gamma * g2
-        return torch.stack([z1, z2], dim=-1).reshape_as(g_x)
+        rotated = torch.stack([z1, z2], dim=-1).reshape_as(g_x)
+        # Raising the rotation's internal width must not widen what the block
+        # returns: torch promotes fp32 activations against fp64 coefficients, and
+        # letting that escape would silently change the dtype of every layer
+        # downstream. The precision is raised for this computation, not for the
+        # residual stream.
+        return rotated if rotated.dtype == g_x.dtype else rotated.to(g_x.dtype)
 
     def _postrotate_gate(self, h, z):
         return z                                             # ungated

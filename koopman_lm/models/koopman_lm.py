@@ -83,6 +83,10 @@ class KoopmanLM(nn.Module):
             n_layers=cfg.n_layers,
             norm_type=cfg.norm_type,
             norm_eps=cfg.norm_eps,
+            # getattr for the same reason ska_block.py uses it: a checkpoint's
+            # embedded config predates this field and must still build. None is a
+            # strict no-op.
+            precision=getattr(cfg, 'mlp_precision', None),
         )
 
     def _init_weights(self, module):

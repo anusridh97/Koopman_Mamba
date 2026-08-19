@@ -1,0 +1,20 @@
+{
+  "koopman": {
+    "dtype": "torch.float32",
+    "sha256": "5f171be5b0755556a239884ad6f8f7d608b1bab3e41d34a90000ce43e0433528",
+    "shape": [
+      2,
+      8,
+      32
+    ]
+  },
+  "koopman_gated": {
+    "dtype": "torch.float32",
+    "sha256": "1686b2dcea3134d58b4f0f82a222391ac335b7069a17356e4b0b73b9d2e2f8cd",
+    "shape": [
+      2,
+      8,
+      32
+    ]
+  }
+}
