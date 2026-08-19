@@ -1,0 +1,20 @@
+{
+  "chunked": {
+    "dtype": "torch.float32",
+    "sha256": "32d861355dc2b944e0c4adf9c3968b0b64053c3411772afdf243e1494519c453",
+    "shape": [
+      2,
+      16,
+      32
+    ]
+  },
+  "prefix_scan": {
+    "dtype": "torch.float32",
+    "sha256": "75be386a551427cd8406ca86c05be3088c59b2f26a6002f4a3e2ad162c1ce68b",
+    "shape": [
+      2,
+      16,
+      32
+    ]
+  }
+}

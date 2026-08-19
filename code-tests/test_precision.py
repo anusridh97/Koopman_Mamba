@@ -181,7 +181,10 @@ def test_precision_does_not_import_experimentation():
 # implementation order. config.py arrived with step 2 (the three fields). The
 # model and training call sites are steps 3 onward and are NOT wired yet, so
 # this list is how "not yet wired" stays a checked claim rather than a memory.
-_EXPECTED_CONSUMERS = {"koopman_lm/config.py"}
+_EXPECTED_CONSUMERS = {
+    "koopman_lm/config.py",           # step 2: the three fields + validation
+    "koopman_lm/modules/seq/ska.py",  # step 3: the whitened core's dtype
+}
 
 
 def test_only_the_expected_modules_consume_precision():

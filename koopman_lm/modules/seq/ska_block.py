@@ -67,6 +67,9 @@ class SKABlock(nn.Module):
             # when the flag is on and no explicit threshold is given.
             norm_clip_c=((cfg.ska_norm_clip_c or (cfg.ska_rank ** 0.5))
                          if getattr(cfg, 'ska_norm_clip', False) else None),
+            # getattr for the same reason as the fields above it: a checkpoint's
+            # embedded config predates this field and must still build.
+            precision=getattr(cfg, 'ska_precision', 'fp32'),
         )
         # Parallel short-range causal depthwise conv (covers within-chunk band).
         self.short_conv = None

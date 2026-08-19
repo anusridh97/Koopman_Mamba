@@ -85,8 +85,23 @@ class SKAModule(nn.Module):
                  layerscale=True, layerscale_init=1e-4, out_proj_std=0.02,
                  exact_intrachunk=False, inverse_cholesky=False,
                  prefix_scan=False, prefix_scan_block_size=32,
-                 prefix_scan_jitter=0.0, norm_clip_c=None):
+                 prefix_scan_jitter=0.0, norm_clip_c=None,
+                 precision='fp32'):
         super().__init__()
+        # The dtype the whitened core computes in. Arg 29 of 29 scalars: this
+        # module deliberately never imports KoopmanLMConfig -- it is config-free
+        # numerics -- so ska_block.py threads cfg.ska_precision in, exactly as it
+        # threads the other 28. Validated here so a bad value fails at
+        # construction on a login node rather than mid-forward on a GPU.
+        from koopman_lm.precision import COMPONENT_PRECISIONS, dtype_of
+
+        if precision not in COMPONENT_PRECISIONS:
+            raise ValueError(
+                f"SKAModule precision={precision!r}; expected one of "
+                f"{sorted(COMPONENT_PRECISIONS)}. The core takes a cholesky of a "
+                f"Gram matrix, so this field may only RAISE precision.")
+        self.precision = precision
+        self._core_dtype = dtype_of(precision)
         self.rank = rank
         self.exact_intrachunk = exact_intrachunk
         self.prefix_scan = bool(prefix_scan)
@@ -279,10 +294,18 @@ class SKAModule(nn.Module):
               else nullcontext()
 
         with ctx:
-            z_f = z.float()
-            zq_f = zq.float()
-            v_f = v.float()
-            beta_f = beta.float()
+            # Was a hardcoded .float(). Identical at the default
+            # (precision='fp32' -> torch.float32), and now stated by config
+            # rather than implied -- which is also what makes an fp64 core
+            # reachable on the PyTorch path, where the exact prefix scan already
+            # accepts float64. Pinned bit-for-bit by
+            # code-tests/test_ska_precision_wiring.py against a golden captured
+            # before this change.
+            core = self._core_dtype
+            z_f = z.to(core)
+            zq_f = zq.to(core)
+            v_f = v.to(core)
+            beta_f = beta.to(core)
 
             # Causal normalization (matches echo_jax.py): per-token L2 on
             # key/query. NO non-causal sequence-max.
