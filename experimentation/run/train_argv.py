@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from experimentation.atomic_io import atomic_write_json
 from experimentation.run.spec import RunSpec, ShardDataSpec
 
-__all__ = ["ddp_grad_accum", "write_model_config", "build_train_argv"]
+__all__ = ["ddp_grad_accum", "batch_plans", "write_model_config",
+           "build_train_argv"]
 
 
 def ddp_grad_accum(effective_batch: int, per_device_batch_size: int,
@@ -35,6 +36,49 @@ def ddp_grad_accum(effective_batch: int, per_device_batch_size: int,
             f"effective_batch={effective_batch} is not a multiple of "
             f"per_device_batch_size*world_size={per_step}")
     return max(1, effective_batch // per_step)
+
+
+def batch_plans(effective_batch: int, initial_pdbs: int,
+                minimum_pdbs: int = 1) -> List[Tuple[int, int]]:
+    """Microbatch/accumulation splits to try, largest microbatch first.
+
+    The other half of ddp_grad_accum. That function validates one chosen split
+    and raises when it does not divide exactly; this one lists the legal splits
+    in the order to attempt them, so a config that OOMs can halve its microbatch
+    and double accumulation instead of failing outright.
+
+    Every rung preserves `effective_batch` exactly, which is the point --
+    effective batch is the quantity that affects the result, and a "retry" that
+    quietly changed it would be measuring something else. Splits that do not
+    divide evenly are skipped rather than rounded, for the same reason.
+
+    A caveat that belongs with the caller, not here: `per_device_batch_size`
+    lives in OptimSpec, which is hashed whole into run_id, so descending a rung
+    changes a run's identity even though its science does not. Arguably it
+    belongs in RuntimeSpec ("the same experiment run differently"), but moving it
+    would move every existing run's identity -- a deliberate, separately-recorded
+    change, not a side effect of adding a retry.
+    """
+    if effective_batch < 1 or initial_pdbs < 1 or minimum_pdbs < 1:
+        raise ValueError(
+            f"batch sizes must be positive; got effective_batch={effective_batch}, "
+            f"initial_pdbs={initial_pdbs}, minimum_pdbs={minimum_pdbs}")
+
+    plans: List[Tuple[int, int]] = []
+    pdbs = min(initial_pdbs, effective_batch)
+    while pdbs >= minimum_pdbs:
+        if effective_batch % pdbs == 0:
+            plans.append((pdbs, effective_batch // pdbs))
+        next_pdbs = pdbs // 2
+        if next_pdbs == pdbs:            # pdbs == 0 guard; loop must terminate
+            break
+        pdbs = next_pdbs
+    if not plans:
+        # One sample per device with full accumulation always divides, so there
+        # is always a last resort even when the requested microbatch shares no
+        # factor with the effective batch.
+        plans = [(1, effective_batch)]
+    return plans
 
 
 def write_model_config(spec: RunSpec, run_dir) -> Path:

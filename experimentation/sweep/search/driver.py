@@ -46,6 +46,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 import optuna
 
 from koopman_lm.config import KoopmanLMConfig
+from experimentation.run.train_argv import batch_plans
 from experimentation.sweep.launch import materialize_cell
 from experimentation.sweep.search.space import params_to_overrides
 from experimentation.sweep.search.study import ANCHOR_ATTR, to_distributions
@@ -65,6 +66,11 @@ class TrialOutcome:
     run_dir: Path
     objective: Optional[float]
     anchor: Optional[str]
+    # Which rung of the OOM ladder actually ran. Recorded because
+    # per_device_batch_size is hashed into run_id, so a descent changes the run's
+    # identity -- the number here is how you find the directory that holds the
+    # result.
+    per_device_batch_size: Optional[int] = None
 
 
 def objective_from_metrics(metrics: Mapping[str, Any], *,
@@ -120,17 +126,19 @@ def run_trial(study: optuna.study.Study, trial, *,
               seq_len: Optional[int] = None,
               dry_run: bool = False,
               force: bool = False,
-              dirty: bool = False) -> TrialOutcome:
+              dirty: bool = False,
+              batch_ladder: bool = False) -> TrialOutcome:
     """Turn one asked-for trial into a launched run, and report the result back.
 
     `base_lr` is accepted and unused here -- the sampler has already produced a
     concrete learning rate by the time a trial exists. It stays in the signature
     so `drive` can pass one context dict to both this and `enqueue_anchors`.
     """
+    from experimentation.sweep.search.metrics import looks_like_oom
+
     anchor = trial.user_attrs.get(ANCHOR_ATTR)
     overrides = params_to_overrides(trial.params, base_model, max_steps=max_steps,
                                    seq_len=seq_len, backend_policy=backend_policy)
-    spec = build_cell_run_spec(study_name, base_sections, overrides)
 
     # Reuse sweep's stamp keys so results.py's existing sweep_name column stays
     # meaningful, and add the study-specific pair beside them.
@@ -142,20 +150,42 @@ def run_trial(study: optuna.study.Study, trial, *,
     if anchor:
         stamp["anchor_name"] = anchor
 
-    run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
-                               force=force, dry_run=dry_run)
-    identity = dict(trial_number=trial.number, run_id=run_id(spec),
-                    group_id=group_id(spec), run_dir=run_dir, anchor=anchor)
+    rungs = _ladder(base_sections, enabled=batch_ladder)
+    identity: Dict[str, Any] = {}
+    last_failure = "no attempt was made"
 
-    try:
-        launcher.submit(spec, run_dir, dry_run=dry_run)
-    except Exception as exc:                       # noqa: BLE001 -- see docstring
-        # One bad config must not end the study. Record why on the trial so the
-        # reason survives in the journal rather than only in a log.
-        trial.set_user_attr("failure", f"{type(exc).__name__}: {exc}")
+    for position, pdbs in enumerate(rungs):
+        attempt_overrides = dict(overrides)
+        if pdbs is not None:
+            attempt_overrides["optim.per_device_batch_size"] = pdbs
+        spec = build_cell_run_spec(study_name, base_sections, attempt_overrides)
+        # A fresh run_dir per rung, necessarily: per_device_batch_size is hashed
+        # into run_id, so the retry IS a different run and must not overwrite the
+        # first one's directory.
+        run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
+                                   force=force, dry_run=dry_run)
+        identity = dict(trial_number=trial.number, run_id=run_id(spec),
+                        group_id=group_id(spec), run_dir=run_dir, anchor=anchor,
+                        per_device_batch_size=spec.optim.per_device_batch_size)
+        try:
+            launcher.submit(spec, run_dir, dry_run=dry_run)
+            break
+        except Exception as exc:                   # noqa: BLE001 -- see docstring
+            last_failure = f"{type(exc).__name__}: {exc}"
+            has_next_rung = position + 1 < len(rungs)
+            if has_next_rung and looks_like_oom(run_dir):
+                # Descending helps only for memory. Retrying a shape error at a
+                # smaller microbatch burns another queue slot to fail identically.
+                continue
+            trial.set_user_attr("failure", last_failure)
+            study.tell(trial, state=optuna.trial.TrialState.FAIL)
+            return TrialOutcome(state="failed", objective=None, **identity)
+    else:
+        trial.set_user_attr("failure", f"every microbatch rung failed: {last_failure}")
         study.tell(trial, state=optuna.trial.TrialState.FAIL)
         return TrialOutcome(state="failed", objective=None, **identity)
 
+    run_dir = identity["run_dir"]
     objective = read_objective(run_dir)
     if objective is None:
         # Training can exit cleanly and still leave no metric -- a missing
@@ -169,6 +199,23 @@ def run_trial(study: optuna.study.Study, trial, *,
     trial.set_user_attr("run_dir", str(run_dir))
     study.tell(trial, float(objective))
     return TrialOutcome(state="complete", objective=float(objective), **identity)
+
+
+def _ladder(base_sections: Mapping[str, Mapping[str, Any]], *,
+            enabled: bool) -> list:
+    """The microbatch rungs to attempt, or a single no-override attempt.
+
+    Opt-in: a lone hand-launched run should fail loudly on an OOM rather than
+    quietly consume four more queue slots discovering the same thing.
+    """
+    if not enabled:
+        return [None]
+    optim = base_sections.get("optim", {})
+    effective = int(optim.get("effective_batch", 0) or 0)
+    initial = int(optim.get("per_device_batch_size", 0) or 0)
+    if effective < 1 or initial < 1:
+        return [None]
+    return [pdbs for pdbs, _ in batch_plans(effective, initial)]
 
 
 def _finished(study: optuna.study.Study) -> int:
