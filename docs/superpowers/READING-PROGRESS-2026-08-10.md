@@ -1,5 +1,33 @@
 # Codebase reading progress — handoff, 2026-08-10
 
+> **Corrections as of 2026-08-19 — read this box before §6.**
+>
+> This document is a dated snapshot and is left intact deliberately: its value
+> is the record of what was known and verified on 2026-08-10, and rewriting the
+> body would destroy that. But `main` moved on 2026-08-12 (PRs #21–#23), and six
+> entries below are now wrong in ways that will waste your time — §6's reading
+> list in particular sends you to two files that no longer exist.
+>
+> | this document says | reality on `main` |
+> |---|---|
+> | §6 read-next #1 `run/eval_result.py` | moved → `experimentation/evaluation/result.py` (`5a9a038`) |
+> | §6 read-next #2 `run/slurm.py` (198) | **deleted**, absorbed into `run/launchers.py` (`839b704`) |
+> | §3 "covered: `run/artifacts.py`" | **split** → `run/write_policy.py` + `experimentation/atomic_io.py` (`f0e3dbd`) — the §7.2 rename happened |
+> | §4.3 ~170 lines of dead SKA numerics | **deleted** (`2b3d392`) |
+> | §4.4 `modules/seq/fast.py` is live and has two bugs | **file is gone**, absorbed into `ska.py::forward` (`c34fd46`) |
+> | §7.1 `ska_block.py` docstring; `koopman_diag.py` in the wrong place | both fixed; there is now a `koopman_lm/diagnostics/` package (`97eb190`) |
+>
+> Also stale by construction: §2's `_CONFIGS_ROOT is at line 345` (it is at 355).
+> Line numbers in prose rot; `CODEBASE_GUIDE.md` now names that symbol without a
+> line number for this reason.
+>
+> Still accurate and still worth trusting: §1's central finding (docstrings hold,
+> prose drifts), §2's environment facts, §4's numbered findings other than 4.3 and
+> 4.4, and §7.6 — the PR B / salvage item, which remains the highest-stakes open
+> thread and has not moved.
+>
+> The live inventory of pending work is `docs/superpowers/BACKLOG-2026-08-18.md`.
+
 Jack is reading the codebase end to end in order to refactor it. This records
 what is already understood, what was **verified false** in the existing docs, and
 what remains. Everything below was checked by reading or running the code — where

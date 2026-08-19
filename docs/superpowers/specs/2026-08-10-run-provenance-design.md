@@ -310,7 +310,10 @@ site-packages is out of scope.
 
 Each step is independently landable and independently verifiable.
 
-1. **`atomic_write_bytes`** in `run/artifacts.py` + its tests. Nothing consumes it.
+1. **`atomic_write_bytes`** in `experimentation/atomic_io.py` + its tests. Nothing
+   consumes it. (This doc said `run/artifacts.py`; `f0e3dbd` split that file into
+   `run/write_policy.py` and `experimentation/atomic_io.py`, and the atomic writers
+   went to the latter.)
 2. **`code_id`/`dirty` in the three `checkpoint_meta` writers** + the
    `harness.py` comparison fix. No identity change; smallest useful increment.
 3. **`source.tar.gz`** in `materialize()`, with the reproducibility test. Gate:

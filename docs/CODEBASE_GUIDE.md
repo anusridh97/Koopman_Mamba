@@ -29,25 +29,36 @@ koopman_lm/
     baselines.py         ablation arms (mamba_only, mamba_attn, transformer, ...)
   modules/               layer components; see its __init__.py docstring
     seq/                 mix across SEQUENCE  -> KoopmanLM.seq_layers
-                         mamba.py, ska.py, ska_block.py, attention.py, fast.py
+                         mamba.py, ska.py, ska_block.py, attention.py
     mlp/                 mix across FEATURES  -> KoopmanLM.mlp_layers
-                         swiglu.py, koopman.py, koopman_diag.py
+                         swiglu.py, koopman.py
     norm.py              make_norm() — shared by seq/, mlp/ AND models/
     wip/                 not wired into training: memory.py (LastLayerRidgeMemory)
   kernels/               numerics, a SIBLING of modules/ (see its README)
                          lin_alg.py, prefix_scan.py, cuda_prefix_scan.py,
                          cholesky_update*.py, chunk_stats*.py, ska_operator.py,
                          factor_scan.py, inverse_cholesky.py, csrc/*.cu
+  diagnostics/           measurement of a built model, moved out of the model
+                         in 97eb190: koopman_mlp.py, ska.py
+experimentation/         everything that RUNS the model. koopman_lm/ imports
+                         nothing from here; the dependency is one-way.
+  run/                   one run: spec.py, resolve.py, provenance.py,
+                         write_policy.py, data_verify.py, train_argv.py,
+                         launchers.py, __main__.py
+  sweep/                 many runs: spec.py (the grid, declared once), __main__.py
   training/
     train.py             the training loop (entry point)
     repro.py             seeding / determinism
+    optim.py, resume.py, diagnostics.py
     data/                pretokenize.py, dataset.py, mix.py
   evaluation/            evaluate.py, lm_harness_eval.py, niah_quick.py, ruler.py,
-                         babilong.py, harness.py, mqar/
+                         babilong.py, harness.py, result.py, mqar/
   experiments/           table2.py, mqar_finetune.py, curricula.py
   retrieval/             adapt.py, data.py, encoder.py
-configs/                 50m.yaml, 180m.yaml (+ _prefix_scan aliases)
-scripts/                 pretrain.sh, train_50m.sh, train_180m.sh, build_*, benchmark_*
+  atomic_io.py           atomic writes; results.py aggregates run dirs
+configs/                 11 model YAMLs (50m .. 3b), plus runs/ and sweeps/
+scripts/                 pretrain.sh, train_50m.sh, train_180m.sh, build_*,
+                         benchmark_*, check_imports.py, gen_inventory.py
 code-tests/              the test suite
 ```
 
@@ -57,11 +68,12 @@ goes in `KoopmanLM.seq_layers`, `mlp/` holds what goes in `.mlp_layers`. One
 vocabulary, not two. If it needs neighbouring tokens it is a seq mixer; if it
 works on one position independently it is an mlp mixer.
 
-`kernels/` is a **sibling** of `modules/`, not a child: 14 files of autograd
-Functions and numerical routines, none of which define an `nn.Module` (the
-one that used to, `fast.py`, moved to `modules/seq/fast.py`). A new attention
-variant goes in `seq/`; a new MLP goes in `mlp/`; a new Cholesky routine goes
-in `kernels/`.
+`kernels/` is a **sibling** of `modules/`, not a child: 17 files of autograd
+Functions and numerical routines, none of which define an `nn.Module`. The one
+that used to, `fast.py`, was a second drifted copy of the SKA forward path; it
+was absorbed into `modules/seq/ska.py`'s own `forward()` and deleted in
+`c34fd46`. A new attention variant goes in `seq/`; a new MLP goes in `mlp/`; a
+new Cholesky routine goes in `kernels/`.
 
 `wip/` is a real signal, not a dumping ground: nothing in it is on the training
 path. `memory.py` is reachable only through `forward_with_memory`.
@@ -126,9 +138,12 @@ python -m experimentation.evaluation.lm_harness_eval --model koopman \
 "50m" -> CONFIG_REGISTRY -> configs/50m.yaml -> KoopmanLMConfig -> KoopmanLM(cfg)
 ```
 
-The registry has exactly 4 entries and `configs/` ships exactly 4 files — they
-match. (They did not always: before the reorg the registry advertised 24 names,
-20 of which pointed at YAML that was never shipped.)
+The registry has exactly 11 entries and `configs/` ships exactly 11 YAML files
+— they match. (They did not always: before the reorg the registry advertised 24
+names, 20 of which pointed at YAML that was never shipped. The figure here was
+also wrong for a while in the other direction, reading 4 long after the
+registry had grown to 11 — `code-tests/test_docs_are_not_stale.py` now pins it,
+so keep the sentence's shape if you reword it.)
 
 ### What the 50M actually builds
 
@@ -169,10 +184,12 @@ ablation results.
 
 ```bash
 # tests (CPU box, no GPU needed)
-PYTHONPATH=. pytest code-tests -q          # -> 17 passed, 10 skipped
+PYTHONPATH=. pytest code-tests -q
 
-# the 10 skips are GPU-marked and auto-skip when torch.cuda.is_available() is False.
-# To actually run them you need a GPU node.
+# No count is quoted here on purpose: every previously-written figure in this
+# file had rotted by the time someone read it. The suite runs in well under a
+# minute on a login node. The skips are GPU-marked and auto-skip when
+# torch.cuda.is_available() is False; to run them you need a GPU node.
 
 # install (GPU box; install a CUDA-matched torch FIRST)
 pip install -e '.[cuda,dev]'
@@ -214,8 +231,10 @@ commit).
   `except Exception`, so a wrong path fails **silently** and permanently
   disables the Triton kernel. No test can catch this class of bug. Verify by
   inspection.
-- `config.py:306` — `_CONFIGS_ROOT` lost one `.parent` because `config.py` moved
-  up a directory. Off-by-one here means every config load fails.
+- `_CONFIGS_ROOT` in `config.py` — lost one `.parent` because `config.py` moved
+  up a directory. Off-by-one here means every config load fails. (Named by
+  symbol rather than line: the line number in this bullet was already stale
+  twice, reading 306 and then 345 against an actual 355.)
 
 **c) The `lin_alg.py` consolidation.** Five primitives previously existed in
 four places under three names, including a `try/except` in `factor_scan.py`
@@ -278,7 +297,7 @@ Be skeptical of anything in this category — no GPU was available.
 Before merging, the honest gate is a GPU node running:
 
 ```bash
-PYTHONPATH=. pytest code-tests -q          # expect 27 passed, 0 skipped
+PYTHONPATH=. pytest code-tests -q          # expect ZERO skips on a GPU node
 STEPS=100 PDBS=2 GA=1 RUN_NAME=smoke bash scripts/train_50m.sh
 ```
 

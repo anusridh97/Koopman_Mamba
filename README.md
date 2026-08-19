@@ -47,19 +47,24 @@ x + Mamba(norm_m(x)) + SKA(norm_s(x))
 ## Layout
 
 ```
-koopman_lm/
+koopman_lm/       the model package -- imports nothing from experimentation/
   config.py       KoopmanLMConfig, the YAML loader, CONFIG_REGISTRY
   models/         KoopmanLM, RecurrentKoopmanLM (decode), ablation baselines
   modules/        layer components -- seq/ and mlp/ mixers, shared norm
   kernels/        numerics: solves, Cholesky, prefix scans, CUDA   [README]
+  diagnostics/    measurement of a built model, kept out of the model itself
+experimentation/  everything that runs the model
+  run/            one run: resolve a spec, guard it, materialize it, launch it
+  sweep/          many runs: the grid is declared exactly once
   training/       the training loop and data pipeline
   evaluation/     perplexity, lm-eval-harness, NIAH, RULER, BABILong, MQAR
   experiments/    Table 2, MQAR fine-tuning, curricula
   retrieval/      contrastive retrieval adaptation
-configs/          the 4 shipped model configs
-scripts/          launchers and CUDA build/benchmark
+  results.py      walk run dirs, emit one table
+configs/          the 11 shipped model configs, plus runs/ and sweeps/
+scripts/          launchers, CUDA build/benchmark, dev utilities
 code-tests/       test suite
-docs/             codebase guide, plans
+docs/             codebase guide, specs, plans
 ```
 
 `koopman_lm/modules/__init__.py` explains the seq/mlp split.
