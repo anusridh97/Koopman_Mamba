@@ -12,7 +12,11 @@ is what the module docstring already called it.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import shutil
+import socket
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -22,6 +26,10 @@ from experimentation.atomic_io import atomic_write_text
 
 class RunDirConflictError(RuntimeError):
     """Raised when a run directory already holds a completed run (`final/`)."""
+
+
+class RunDirClaimedError(RuntimeError):
+    """Raised when another launcher already holds this run directory's claim."""
 
 
 def _existing_code_id(run_dir: Path) -> Optional[str]:
@@ -110,3 +118,68 @@ def make_attempt_record(*, host: str, job_id: Optional[str], git_commit: str,
     if extra:
         record.update(extra)
     return record
+
+
+CLAIM_SENTINEL = ".running"
+
+
+@contextlib.contextmanager
+def claim_run_dir(run_dir, *, force: bool = False):
+    """Mutual exclusion over one run directory's *materialization*.
+
+    `create_run_dir`'s guard keys on `final/` -- on runs that have already
+    finished -- and its `mkdir(exist_ok=True)` is a check-then-act. Neither
+    stops two launchers that resolve the same spec at the same moment from
+    both proceeding into one directory and interleaving their `spec.yaml`,
+    `model_config.json` and `attempts.jsonl` writes. A parallel searcher makes
+    that collision ordinary rather than exotic, since it materializes many
+    cells in a burst.
+
+    Scope is deliberately the materialization critical section, not the run
+    lifetime. Holding a claim for the duration of training would mean a
+    launcher process outliving its own Slurm submission (it does not -- the job
+    starts later, elsewhere), and would make every sequential relaunch of a
+    failed run require `--force`. The window this closes is the launcher's own
+    few hundred milliseconds of writing, which is exactly where the race is.
+
+    `os.mkdir` is the primitive because it is atomic even on NFS, where
+    `open(..., 'x')`'s O_EXCL is not reliably so. A claim record naming the
+    holder goes inside, because a sentinel left behind by a launcher killed
+    mid-materialize is only actionable if it says who left it.
+
+    `force=True` steals an existing claim, matching what `--force` already
+    means elsewhere: proceed anyway, and let the caller record that it did.
+    """
+    run_dir = Path(run_dir)
+    sentinel = run_dir / CLAIM_SENTINEL
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.mkdir(sentinel)
+    except FileExistsError:
+        if not force:
+            raise RunDirClaimedError(
+                f"{run_dir} is already claimed by another launcher "
+                f"({_describe_claim(sentinel)}). Two launchers materializing "
+                f"one spec would interleave their writes. Wait for it to "
+                f"finish, or pass --force to steal the claim if you believe "
+                f"the holder is dead.")
+    atomic_write_text(sentinel / "claim.json", json.dumps({
+        "host": socket.gethostname(),
+        "pid": os.getpid(),
+        "job_id": os.environ.get("SLURM_JOB_ID"),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }, indent=2, sort_keys=True) + "\n")
+    try:
+        yield run_dir
+    finally:
+        shutil.rmtree(sentinel, ignore_errors=True)
+
+
+def _describe_claim(sentinel: Path) -> str:
+    """Best-effort rendering of an existing claim, for the error message."""
+    try:
+        claim = json.loads((sentinel / "claim.json").read_text())
+    except Exception:
+        return "no readable claim record"
+    return (f"host={claim.get('host')} pid={claim.get('pid')} "
+            f"job_id={claim.get('job_id')} at {claim.get('timestamp')}")

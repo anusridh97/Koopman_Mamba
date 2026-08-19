@@ -154,3 +154,78 @@ def test_atomic_torch_save_failure_does_not_corrupt_existing_file(tmp_path, monk
     loaded = torch.load(target, map_location="cpu", weights_only=False)
     assert loaded["step"] == 1
     assert list(tmp_path.rglob("*.tmp*")) == []
+
+
+# ---- concurrent-launch claim (§3.7 / reading-progress finding 4.11) ----
+
+def test_claim_run_dir_refuses_a_second_concurrent_claim(tmp_path):
+    """create_run_dir's guard keys on `final/`, i.e. on *completed* runs, so two
+    launchers materializing the same spec at the same moment both proceed into
+    one directory and interleave their spec.yaml / attempts.jsonl writes. The
+    claim is the mutual exclusion that guard cannot provide."""
+    from experimentation.run.write_policy import RunDirClaimedError, claim_run_dir
+
+    run_dir = tmp_path / "run"
+    with claim_run_dir(run_dir):
+        with pytest.raises(RunDirClaimedError):
+            with claim_run_dir(run_dir):
+                pass
+
+
+def test_claim_run_dir_releases_so_sequential_relaunch_is_unblocked(tmp_path):
+    """A held claim must not outlive the launcher that took it -- a run that
+    failed early has to be relaunchable without --force."""
+    from experimentation.run.write_policy import claim_run_dir
+
+    run_dir = tmp_path / "run"
+    with claim_run_dir(run_dir):
+        pass
+    with claim_run_dir(run_dir):
+        pass
+
+
+def test_claim_run_dir_releases_when_the_body_raises(tmp_path):
+    from experimentation.run.write_policy import claim_run_dir
+
+    run_dir = tmp_path / "run"
+    with pytest.raises(RuntimeError):
+        with claim_run_dir(run_dir):
+            raise RuntimeError("materialization blew up")
+    # the claim is gone, so the next launcher is not blocked by a corpse
+    with claim_run_dir(run_dir):
+        pass
+
+
+def test_claim_run_dir_records_who_holds_it(tmp_path):
+    """A stale claim is only actionable if it says who left it."""
+    import os
+
+    from experimentation.run.write_policy import claim_run_dir
+
+    run_dir = tmp_path / "run"
+    with claim_run_dir(run_dir):
+        claim = json.loads((run_dir / ".running" / "claim.json").read_text())
+    assert claim["pid"] == os.getpid()
+    assert claim["host"]
+    assert claim["timestamp"]
+
+
+def test_claim_run_dir_force_steals_a_stale_claim(tmp_path):
+    """--force already means "proceed anyway, and it is recorded"; a claim left
+    by a launcher that died mid-materialize must not be harder to clear than a
+    completed run's final/."""
+    from experimentation.run.write_policy import claim_run_dir
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".running").mkdir(parents=True)     # a corpse from a killed launcher
+    with claim_run_dir(run_dir, force=True):
+        pass
+
+
+def test_claim_run_dir_leaves_no_sentinel_behind(tmp_path):
+    from experimentation.run.write_policy import claim_run_dir
+
+    run_dir = tmp_path / "run"
+    with claim_run_dir(run_dir):
+        pass
+    assert not (run_dir / ".running").exists()

@@ -15,7 +15,8 @@ import os
 import socket
 from pathlib import Path
 
-from experimentation.run.write_policy import append_attempt, create_run_dir, make_attempt_record
+from experimentation.run.write_policy import (
+    append_attempt, claim_run_dir, create_run_dir, make_attempt_record)
 from experimentation.run.data_verify import verify_data
 from experimentation.run.launchers import LocalLauncher, SlurmLauncher
 from experimentation.run.provenance import check_git_clean, git_commit
@@ -51,15 +52,20 @@ def main(argv=None):
     verify_data(spec.data, dry_run=args.dry_run)
 
     run_dir = run_dir_path(args.run_root, spec)
-    create_run_dir(run_dir, resume=args.resume, force=args.force, code_id=git_commit())
+    # The claim spans only the writes -- create, materialize, record -- and is
+    # released before hand-off. LocalLauncher.submit() blocks for the whole
+    # training run, so holding the claim across it would keep a run directory
+    # locked for hours and make every relaunch need --force.
+    with claim_run_dir(run_dir, force=args.force):
+        create_run_dir(run_dir, resume=args.resume, force=args.force, code_id=git_commit())
 
-    materialize(spec, run_dir, dirty=dirty)
-    append_attempt(run_dir, make_attempt_record(
-        host=socket.gethostname(),
-        job_id=os.environ.get("SLURM_JOB_ID"),
-        git_commit=git_commit(),
-        forced=args.force,
-    ))
+        materialize(spec, run_dir, dirty=dirty)
+        append_attempt(run_dir, make_attempt_record(
+            host=socket.gethostname(),
+            job_id=os.environ.get("SLURM_JOB_ID"),
+            git_commit=git_commit(),
+            forced=args.force,
+        ))
 
     launcher = LAUNCHERS[args.launcher]()
     result = launcher.submit(spec, run_dir, dry_run=args.dry_run, resume=args.resume)

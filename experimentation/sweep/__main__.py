@@ -33,7 +33,8 @@ import socket
 from pathlib import Path
 from typing import List, Tuple
 
-from experimentation.run.write_policy import append_attempt, create_run_dir, make_attempt_record
+from experimentation.run.write_policy import (
+    append_attempt, claim_run_dir, create_run_dir, make_attempt_record)
 from experimentation.run.data_verify import verify_data
 from experimentation.run.launchers import LocalLauncher, SlurmLauncher
 from experimentation.run.provenance import check_git_clean, git_commit
@@ -94,12 +95,16 @@ def _materialize_cell(cell: SweepCell, run_root, sweep: SweepSpec, *,
     # exists, so a sweep over an unlaunchable spec writes nothing.
     verify_data(spec.data, dry_run=dry_run)
     run_dir = run_dir_path(run_root, spec)
-    create_run_dir(run_dir, force=force, code_id=git_commit())
-    materialize(spec, run_dir, dirty=dirty,
-                extra={"sweep_id": compute_sweep_id(sweep), "sweep_name": sweep.name})
-    append_attempt(run_dir, make_attempt_record(
-        host=socket.gethostname(), job_id=os.environ.get("SLURM_JOB_ID"),
-        git_commit=git_commit(), forced=force))
+    # Same claim as run/__main__.py. A sweep materializes cells in a burst, so
+    # two overlapping sweeps sharing a base spec collide here far more readily
+    # than two hand-launched runs would.
+    with claim_run_dir(run_dir, force=force):
+        create_run_dir(run_dir, force=force, code_id=git_commit())
+        materialize(spec, run_dir, dirty=dirty,
+                    extra={"sweep_id": compute_sweep_id(sweep), "sweep_name": sweep.name})
+        append_attempt(run_dir, make_attempt_record(
+            host=socket.gethostname(), job_id=os.environ.get("SLURM_JOB_ID"),
+            git_commit=git_commit(), forced=force))
     return run_dir
 
 

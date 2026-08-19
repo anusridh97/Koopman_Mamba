@@ -233,3 +233,60 @@ def test_main_allow_dirty_records_dirty_true_in_spec_yaml(tmp_path, monkeypatch)
     run_dir = run_dir_path(run_root, spec)
     raw = yaml.safe_load((run_dir / "spec.yaml").read_text())
     assert raw["dirty"] is True
+
+
+def test_main_refuses_a_run_dir_another_launcher_is_materializing(tmp_path):
+    """The claim has to be taken by the orchestration path to be worth
+    anything. Same leave-nothing-behind invariant as the synthetic guard: a
+    launch that is rejected must not leave a spec.yaml or an attempts.jsonl
+    entry describing an attempt that never happened."""
+    from experimentation.run.__main__ import main
+    from experimentation.run.resolve import resolve_run_spec
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.write_policy import CLAIM_SENTINEL, RunDirClaimedError
+
+    spec_path = _write_shard_run_spec(tmp_path)
+    run_root = tmp_path / "runs"
+    run_dir = run_dir_path(run_root, resolve_run_spec(spec_path))
+    (run_dir / CLAIM_SENTINEL).mkdir(parents=True)      # another launcher holds it
+
+    with pytest.raises(RunDirClaimedError):
+        main([str(spec_path), "--run_root", str(run_root), "--dry_run"])
+
+    assert not (run_dir / "spec.yaml").exists()
+    assert not (run_dir / "attempts.jsonl").exists()
+
+
+def test_main_force_steals_a_stale_claim(tmp_path):
+    from experimentation.run.__main__ import main
+    from experimentation.run.resolve import resolve_run_spec
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.write_policy import CLAIM_SENTINEL
+
+    spec_path = _write_shard_run_spec(tmp_path)
+    run_root = tmp_path / "runs"
+    run_dir = run_dir_path(run_root, resolve_run_spec(spec_path))
+    (run_dir / CLAIM_SENTINEL).mkdir(parents=True)      # corpse of a killed launcher
+
+    main([str(spec_path), "--run_root", str(run_root), "--dry_run", "--force"])
+    assert (run_dir / "spec.yaml").exists()
+    assert not (run_dir / CLAIM_SENTINEL).exists()      # released on the way out
+
+
+def test_main_releases_its_claim_so_a_relaunch_is_unblocked(tmp_path):
+    """Guards against wiring the claim without releasing it, which would make
+    every second launch of a spec require --force."""
+    from experimentation.run.__main__ import main
+    from experimentation.run.resolve import resolve_run_spec
+    from experimentation.run.spec import run_dir_path
+    from experimentation.run.write_policy import CLAIM_SENTINEL
+
+    spec_path = _write_shard_run_spec(tmp_path)
+    run_root = tmp_path / "runs"
+    args = [str(spec_path), "--run_root", str(run_root), "--dry_run"]
+    main(args)
+    main(args)
+    run_dir = run_dir_path(run_root, resolve_run_spec(spec_path))
+    assert not (run_dir / CLAIM_SENTINEL).exists()
+    lines = (run_dir / "attempts.jsonl").read_text().strip().splitlines()
+    assert len(lines) == 2          # both attempts recorded, neither blocked
