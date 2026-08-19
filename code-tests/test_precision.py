@@ -185,6 +185,7 @@ _EXPECTED_CONSUMERS = {
     "koopman_lm/config.py",           # step 2: the three fields + validation
     "koopman_lm/modules/seq/ska.py",  # step 3: the whitened core's dtype
     "koopman_lm/modules/mlp/koopman.py",  # step 3: the rotation coefficients
+    "experimentation/run/spec.py",         # step 4: the runtime/model cross-check
 }
 
 

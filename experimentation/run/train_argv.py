@@ -131,7 +131,22 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
         "--seed", str(spec.runtime.seed),
         "--phase_tag", spec.name,
     ]
-    argv.append("--bf16" if spec.runtime.precision == "bf16" else "--no_bf16")
+    # Derived from model.compute_precision, not runtime.precision (design 6):
+    # the model config is what is hashed into run identity, so it is the field
+    # that can answer "what precision did this run use?" after the fact.
+    compute = spec.model.compute_precision
+    if compute == "fp16":
+        # train.py's CLI has only --bf16/--no_bf16, so fp16 would map onto
+        # --no_bf16 and train in fp32 while the config claimed fp16. Refusing
+        # beats silently training at the wrong precision; the fp16 path arrives
+        # with the training-side wiring (design step 5, which also derives the
+        # GradScaler).
+        raise ValueError(
+            "model.compute_precision='fp16' is not yet launchable: "
+            "experimentation.training.train's CLI exposes only --bf16/--no_bf16, "
+            "so fp16 would silently train in fp32. The fp16 path needs the "
+            "training-side autocast wiring (precision design step 5).")
+    argv.append("--bf16" if compute == "bf16" else "--no_bf16")
     # train.py's CLI defaults --compile=True and --gradient_checkpointing=True,
     # but the fused-prefix-scan architecture (ska_prefix_scan=True, any
     # backend) does not tolerate that combination: torch.compile's

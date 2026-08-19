@@ -131,7 +131,14 @@ class RuntimeSpec:
     # OOM ladder renamed the experiment. See
     # specs/2026-08-19-microbatch-identity-mapping.md.
     per_device_batch_size: int = 8
-    precision: str = "bf16"
+    # None means "follow model.compute_precision". DEPRECATED (design 6) -- see
+    # __post_init__. The sentinel default is load-bearing rather than tidy: with a
+    # concrete default, overriding model.compute_precision in a sweep would
+    # disagree with an untouched runtime.precision and every such cell would fail
+    # to construct -- which would contradict design 2's own reason for making
+    # these flat fields ("sweepable for free"). None cannot disagree. It is the
+    # same pattern mlp_precision uses in the same design.
+    precision: Optional[str] = None
     ddp: bool = False
     gpus: int = 1
     nodes: int = 1
@@ -145,8 +152,20 @@ class RuntimeSpec:
     gpu_arch: str = "9.0"
 
     def __post_init__(self):
-        if self.precision not in {"bf16", "fp32"}:
-            raise ValueError(f"precision={self.precision!r}; expected 'bf16' or 'fp32'")
+        # DEPRECATED, not deleted (precision design 6): model.compute_precision
+        # supersedes this. It stays because RuntimeSpec(**d) raises on unknown
+        # keys, and every materialized spec.yaml on scratch sets it -- which
+        # load_materialized_spec reads when a run RESUMES. Deleting it would break
+        # resume for runs already on disk. The domain matches
+        # precision.COMPUTE_PRECISIONS so this field can still mirror the new one;
+        # a disagreement between them is caught in RunSpec.__post_init__, which is
+        # the only place that can see both.
+        from koopman_lm.precision import COMPUTE_PRECISIONS
+
+        if self.precision is not None and self.precision not in COMPUTE_PRECISIONS:
+            raise ValueError(
+                f"precision={self.precision!r}; expected None (follow "
+                f"model.compute_precision) or one of {sorted(COMPUTE_PRECISIONS)}")
         if self.partition not in _KNOWN_PARTITIONS:
             raise ValueError(
                 f"partition={self.partition!r}; expected one of {sorted(_KNOWN_PARTITIONS)}")
@@ -200,6 +219,20 @@ class RunSpec:
                 f"optim.effective_batch={self.optim.effective_batch} must be a "
                 f"multiple of runtime.per_device_batch_size="
                 f"{self.runtime.per_device_batch_size}")
+        # Two fields describe the compute precision for one release (design 6).
+        # Refuse a disagreement rather than preferring one: "which of these wins"
+        # is not a question a reader should have to answer from source, and the
+        # whole point of the policy is that a run's precision is legible from its
+        # config. Only RunSpec can check this -- RuntimeSpec cannot see the model.
+        if (self.runtime.precision is not None
+                and self.runtime.precision != self.model.compute_precision):
+            raise ValueError(
+                f"runtime.precision={self.runtime.precision!r} disagrees with "
+                f"model.compute_precision={self.model.compute_precision!r}. "
+                f"runtime.precision is deprecated and will be removed once no "
+                f"spec.yaml on scratch carries it; until then the two must "
+                f"match. Set them the same, or drop runtime.precision from an "
+                f"authored spec and let it default.")
 
 
 def _json_stable(payload: Dict[str, Any]) -> str:
