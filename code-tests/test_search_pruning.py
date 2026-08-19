@@ -174,10 +174,13 @@ def test_a_hopeless_trial_is_cancelled_and_pruned(tmp_path):
     from experimentation.sweep.search.study import to_distributions
 
     distributions = to_distributions(_space())
-    study = _study(tmp_path, prune_after_step=1, prune_startup_trials=2)
+    # THREE completed trials, and logging_steps=1: the pruner carries
+    # n_min_trials=3 and an interval matched to the trainer's logging cadence, so
+    # a median over two reports is deliberately not actionable.
+    study = _study(tmp_path, prune_after_step=1, prune_startup_trials=3,
+                   logging_steps=1)
 
-    # Two good completed trials give the median pruner a reference set.
-    for good in (1.0, 1.1):
+    for good in (1.0, 1.1, 1.05):
         reference = study.ask(distributions)
         for step in (10, 20, 30):
             reference.report(good, step)
@@ -191,7 +194,12 @@ def test_a_hopeless_trial_is_cancelled_and_pruned(tmp_path):
     cancelled = []
     trial = study.ask(distributions)
     with pytest.raises(optuna.TrialPruned):
+        # timeout_seconds is a safety net, not part of the assertion: without it a
+        # pruner that declines to fire turns this into an infinite poll loop that
+        # hangs the suite instead of failing it. That is exactly what happened
+        # when n_min_trials arrived.
         wait_for_objective(study, trial, run_dir, sleep=lambda s: None,
+                           timeout_seconds=0.0, clock=lambda: 1.0,
                            cancel=cancelled.append)
     assert cancelled == [run_dir], "a pruned job must actually be stopped"
 
@@ -203,11 +211,13 @@ def test_an_anchor_is_not_pruned_by_default(tmp_path):
     from experimentation.sweep.search.study import to_distributions
 
     distributions = to_distributions(_space())
-    study = _study(tmp_path, prune_after_step=1, prune_startup_trials=1)
-    reference = study.ask(distributions)
-    for step in (10, 20):
-        reference.report(1.0, step)
-    study.tell(reference, 1.0)
+    study = _study(tmp_path, prune_after_step=1, prune_startup_trials=3,
+                   logging_steps=1)
+    for good in (1.0, 1.1, 1.05):
+        reference = study.ask(distributions)
+        for step in (10, 20):
+            reference.report(good, step)
+        study.tell(reference, good)
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -226,11 +236,13 @@ def test_an_anchor_can_be_pruned_when_explicitly_allowed(tmp_path):
     from experimentation.sweep.search.study import to_distributions
 
     distributions = to_distributions(_space())
-    study = _study(tmp_path, prune_after_step=1, prune_startup_trials=1)
-    reference = study.ask(distributions)
-    for step in (10, 20):
-        reference.report(1.0, step)
-    study.tell(reference, 1.0)
+    study = _study(tmp_path, prune_after_step=1, prune_startup_trials=3,
+                   logging_steps=1)
+    for good in (1.0, 1.1, 1.05):
+        reference = study.ask(distributions)
+        for step in (10, 20):
+            reference.report(good, step)
+        study.tell(reference, good)
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -241,7 +253,8 @@ def test_an_anchor_can_be_pruned_when_explicitly_allowed(tmp_path):
     trial.set_user_attr("anchor_name", "baseline")
     with pytest.raises(optuna.TrialPruned):
         wait_for_objective(study, trial, run_dir, sleep=lambda s: None,
-                           prune_anchors=True)
+                           prune_anchors=True,
+                           timeout_seconds=0.0, clock=lambda: 1.0)
 
 
 def test_waiting_gives_up_after_the_timeout(tmp_path):

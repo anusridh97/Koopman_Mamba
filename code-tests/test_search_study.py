@@ -205,9 +205,13 @@ def test_a_clearly_worse_trial_is_pruned_once_a_reference_set_exists(tmp_path):
     from experimentation.sweep.search.study import create_study, to_distributions
 
     space = to_distributions(_space())
+    # Three reference trials, not two: the pruner now carries n_min_trials=3,
+    # matching the original harness, so a median over two reports is deliberately
+    # not actionable.
     study = create_study(study_name="warm", study_dir=tmp_path, seed=1,
-                         prune_after_step=1, prune_startup_trials=2)
-    for good in (1.0, 1.1):
+                         prune_after_step=1, prune_startup_trials=3,
+                         logging_steps=1)
+    for good in (1.0, 1.1, 1.05):
         trial = study.ask(space)
         for step in range(5):
             trial.report(good, step)
@@ -233,3 +237,57 @@ def test_prune_after_step_defers_pruning_through_the_warmup(tmp_path):
     bad = study.ask(space)
     bad.report(999.0, 3)
     assert bool(bad.should_prune()) is False, "step 3 is inside a 100-step warmup"
+
+
+# ---- pruner parameters, reconciled against the original harness ----------
+# The original's create_study was in the part of the file that was truncated when
+# it was first shared, so make_pruner was written from the one visible signal
+# (--prune-after-step). The full file later showed two more parameters that
+# materially change when pruning fires, and a different startup formula:
+#
+#     MedianPruner(n_startup_trials=min(6, max(3, n_trials // 3)),
+#                  n_warmup_steps=args.prune_after_step,
+#                  interval_steps=max(1, args.logging_steps),
+#                  n_min_trials=3)
+
+def test_the_pruner_is_consulted_only_at_logging_intervals():
+    """interval_steps must match the trainer's logging cadence. train.py only
+    prints every logging_steps steps, so reports arrive at 10, 20, 30...;
+    consulting the pruner at every integer step in between compares a trial
+    against steps no other trial ever reported."""
+    from experimentation.sweep.search.study import make_pruner
+
+    pruner = make_pruner(prune_after_step=180, logging_steps=10)
+    assert pruner._interval_steps == 10
+
+
+def test_the_pruner_requires_several_trials_before_it_will_prune():
+    """n_min_trials guards against killing a trial on a single comparison -- one
+    unlucky reference run would otherwise decide the median."""
+    from experimentation.sweep.search.study import make_pruner
+
+    assert make_pruner(prune_after_step=180)._n_min_trials == 3
+
+
+def test_the_startup_count_scales_with_the_study_size():
+    """min(6, max(3, n_trials // 3)): a 15-trial study waits for 5 completions, a
+    60-trial study caps at 6, and a tiny study still waits for 3 rather than
+    pruning off a single datapoint."""
+    from experimentation.sweep.search.study import make_pruner
+
+    assert make_pruner(prune_after_step=1, n_trials=15)._n_startup_trials == 5
+    assert make_pruner(prune_after_step=1, n_trials=60)._n_startup_trials == 6
+    assert make_pruner(prune_after_step=1, n_trials=3)._n_startup_trials == 3
+
+
+def test_create_study_passes_the_study_size_through_to_the_pruner():
+    """Otherwise the scaling formula never sees the real n_trials and every study
+    gets the default."""
+    from experimentation.sweep.search.study import create_study
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        study = create_study(study_name="sized", study_dir=tmp, seed=1,
+                             n_trials=60, logging_steps=10)
+        assert study.pruner._n_startup_trials == 6
+        assert study.pruner._interval_steps == 10

@@ -21,11 +21,23 @@ by optuna; we take it knowingly, because the failure it prevents is worse than
 the risk of an interface change, and the warning is silenced only at the one
 construction site that opts in.
 
-**MedianPruner, and its cold-start behaviour.** The original harness exposed
-`--prune-after-step 180` and called `trial.should_prune()`, but the code that
-built its pruner was in the part of the file that never arrived, so
-`MedianPruner(n_warmup_steps=...)` is an inference from that flag rather than a
-transcription. Worth re-checking against the original when it turns up.
+**MedianPruner, reconciled against the original.** This was first written from
+the one visible signal (`--prune-after-step 180`) because the original's
+`create_study` sat in a truncated part of the file. The full file since confirmed
+the class and `n_warmup_steps`, and supplied three details the inference missed:
+
+    MedianPruner(n_startup_trials=min(6, max(3, n_trials // 3)),
+                 n_warmup_steps=args.prune_after_step,
+                 interval_steps=max(1, args.logging_steps),
+                 n_min_trials=3)
+
+`interval_steps` matters more than it looks. `train.py` prints only every
+`logging_steps` steps, so reports arrive at 10, 20, 30...; consulting the pruner
+at every integer step between them compares a trial against steps no other trial
+ever reported. `n_min_trials=3` stops one unlucky reference run from deciding the
+median alone. And the startup count scales with study size rather than being
+fixed, so a 15-trial study waits for 5 completions while a small study still waits
+for 3.
 
 The cold start is not a bug and is pinned by test: MedianPruner prunes nothing
 until `n_startup_trials` trials have COMPLETED, because before that there is no
@@ -47,6 +59,7 @@ from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.anchors import resolve_design
 
 __all__ = ["to_distribution", "to_distributions", "make_sampler", "make_pruner",
+           "prune_startup_trials_for",
            "make_storage", "create_study", "enqueue_anchors", "is_anchor",
            "ANCHOR_ATTR"]
 
@@ -56,6 +69,14 @@ ANCHOR_ATTR = "anchor_name"
 # anchor set the anchors themselves fill the startup window, so TPE begins
 # modelling from hand-chosen points rather than from noise.
 DEFAULT_STARTUP_TRIALS = 4
+
+# The trainer's default logging cadence (train.py --logging_steps). The pruner is
+# consulted on this interval because that is when progress reports actually exist.
+DEFAULT_LOGGING_STEPS = 10
+
+# At least this many trials must have reported at a step before the median there
+# is worth acting on.
+PRUNE_MIN_TRIALS = 3
 
 # Loss curves cross constantly in the first stretch of training; pruning inside
 # that window kills configs for being slow to warm up rather than bad.
@@ -97,11 +118,37 @@ def make_sampler(*, seed: int, n_jobs: int = 1) -> optuna.samplers.BaseSampler:
                                           constant_liar=True)
 
 
+def prune_startup_trials_for(n_trials: Optional[int]) -> int:
+    """How many completions to wait for before pruning anything.
+
+    `min(6, max(3, n_trials // 3))`, matching the original harness: scales with
+    the study so a long study does not spend a third of itself unprunable, and
+    floors at 3 so a short one never prunes off a single datapoint.
+    """
+    if not n_trials or n_trials < 1:
+        return DEFAULT_STARTUP_TRIALS
+    return min(6, max(3, n_trials // 3))
+
+
 def make_pruner(*, prune_after_step: int = DEFAULT_PRUNE_AFTER_STEP,
-                prune_startup_trials: int = DEFAULT_STARTUP_TRIALS
+                prune_startup_trials: Optional[int] = None,
+                n_trials: Optional[int] = None,
+                logging_steps: int = DEFAULT_LOGGING_STEPS
                 ) -> optuna.pruners.BasePruner:
-    return optuna.pruners.MedianPruner(n_startup_trials=prune_startup_trials,
-                                       n_warmup_steps=prune_after_step)
+    """A median pruner matched to the trainer's actual reporting cadence.
+
+    `prune_startup_trials` overrides the size-derived default when a caller wants
+    to pin it (the tests do).
+    """
+    startup = (prune_startup_trials if prune_startup_trials is not None
+               else prune_startup_trials_for(n_trials))
+    return optuna.pruners.MedianPruner(
+        n_startup_trials=startup,
+        n_warmup_steps=prune_after_step,
+        # Only when a report can exist -- see the module docstring.
+        interval_steps=max(1, int(logging_steps)),
+        n_min_trials=PRUNE_MIN_TRIALS,
+    )
 
 
 def make_storage(study_dir, storage_url: Optional[str] = None):
@@ -124,7 +171,9 @@ def make_storage(study_dir, storage_url: Optional[str] = None):
 def create_study(*, study_name: str, study_dir, seed: int = 2026,
                  n_jobs: int = 1,
                  prune_after_step: int = DEFAULT_PRUNE_AFTER_STEP,
-                 prune_startup_trials: int = DEFAULT_STARTUP_TRIALS,
+                 prune_startup_trials: Optional[int] = None,
+                 n_trials: Optional[int] = None,
+                 logging_steps: int = DEFAULT_LOGGING_STEPS,
                  storage_url: Optional[str] = None) -> optuna.study.Study:
     """Create or reattach to the study named `study_name` under `study_dir`.
 
@@ -137,7 +186,9 @@ def create_study(*, study_name: str, study_dir, seed: int = 2026,
         storage=make_storage(study_dir, storage_url),
         sampler=make_sampler(seed=seed, n_jobs=n_jobs),
         pruner=make_pruner(prune_after_step=prune_after_step,
-                           prune_startup_trials=prune_startup_trials),
+                           prune_startup_trials=prune_startup_trials,
+                           n_trials=n_trials,
+                           logging_steps=logging_steps),
         direction="minimize",
         load_if_exists=True,
     )
