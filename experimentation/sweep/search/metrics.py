@@ -15,17 +15,47 @@ Retrying a shape error at a smaller microbatch burns a queue slot to fail the
 same way. The markers are broad on purpose -- an allocation failure surfaces
 differently from PyTorch, from cuBLAS and from the caching allocator, and all
 three mean the same thing to a searcher.
+
+**Pruning, asynchronously.** The original harness pruned by holding a
+`subprocess.PIPE` open and regex-matching the child's stdout as it arrived. That
+works, and it is also the one thing that forced the whole design into a single
+long-lived process and off Slurm. The observation that unlocks the async version
+is that `run/launchers.py`'s sbatch template *already* routes training stdout to
+`run_dir/slurm-%j.out` -- so the same regex works against a durable file,
+readable at any time by a process that has never met the training job.
+
+`wait_for_objective` is deliberately shaped to be the `read_objective` the driver
+already accepts, which is why pruning needed no driver change beyond honouring
+`TrialPruned`. It polls the log, reports each newly-seen step, asks the pruner,
+cancels and raises when told to, and otherwise returns the objective once the
+eval result lands.
+
+`TRAIN_RE` is coupled to a `print` statement (`training/train.py:415-416`). That
+coupling is real and worth naming: reformat that f-string and pruning silently
+stops working, because a non-matching line is indistinguishable from no progress.
+The alternative -- a structured metric stream from the trainer -- is the cleaner
+fix and is recorded in the backlog as A2(c); it modifies a file the run-system
+design calls frozen, so it is a decision rather than a detail.
 """
 from __future__ import annotations
 
 import json
+import re
+import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+import optuna
 
 from experimentation.sweep.search.driver import objective_from_metrics
+from experimentation.sweep.search.study import is_anchor
 
-__all__ = ["OOM_MARKERS", "looks_like_oom", "read_quick_eval_metrics",
-           "read_quick_eval_objective"]
+__all__ = ["OOM_MARKERS", "TRAIN_RE", "Progress", "looks_like_oom",
+           "parse_progress", "read_progress", "ema_losses",
+           "read_quick_eval_metrics", "read_quick_eval_objective",
+           "wait_for_objective"]
 
 # Lowercase substrings. Broad by design: the same condition is reported by the
 # allocator, by cuBLAS, and by torch's own error type.
@@ -104,3 +134,152 @@ def read_quick_eval_objective(run_dir, **weights) -> Optional[float]:
     if metrics is None or "full" not in metrics:
         return None
     return objective_from_metrics(metrics, **weights)
+
+
+# training/train.py:415-416 prints, with a right-aligned 6-wide step:
+#   step     10/600 | loss 7.1234 | ppl 1234.5 | lr 4.00e-04 | 12.3K tok/s
+# The numeric class excludes "nan" on purpose: a diverged run prints nan, and a
+# nan is not a datapoint to hand a pruner.
+TRAIN_RE = re.compile(
+    r"step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*\|\s*"
+    r"loss\s+(?P<loss>[0-9.eE+\-]+)\s*\|\s*"
+    r"ppl\s+(?P<ppl>[0-9.eE+\-]+)\s*\|\s*"
+    r"lr\s+(?P<lr>[0-9.eE+\-]+)\s*\|\s*"
+    r"(?P<ktps>[0-9.eE+\-]+)K\s+tok/s")
+
+# The original harness's smoothing. Raw step loss is noisy enough that one bad
+# step could prune a good config.
+DEFAULT_EMA_ALPHA = 0.45
+DEFAULT_POLL_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class Progress:
+    """One logged training step."""
+    step: int
+    loss: float
+    ppl: float
+    lr: float
+    tokens_per_sec: float
+
+
+def parse_progress(text: str) -> List[Progress]:
+    """Every training-progress line in `text`, in the order it appears."""
+    found: List[Progress] = []
+    for match in TRAIN_RE.finditer(text):
+        try:
+            found.append(Progress(
+                step=int(match.group("step")),
+                loss=float(match.group("loss")),
+                ppl=float(match.group("ppl")),
+                lr=float(match.group("lr")),
+                tokens_per_sec=float(match.group("ktps")) * 1000.0,
+            ))
+        except ValueError:                 # pragma: no cover -- regex guards this
+            continue
+    return found
+
+
+def read_progress(run_dir) -> List[Progress]:
+    """Progress from every log in `run_dir`, ordered by step.
+
+    Ordered rather than concatenated because a requeued job (`--requeue` is in the
+    sbatch template) writes a second slurm-<jobid>.out, and interleaved steps
+    would show the pruner a jagged curve that never happened.
+    """
+    run_dir = Path(run_dir)
+    found: List[Progress] = []
+    for pattern in _LOG_GLOBS:
+        for log in sorted(run_dir.glob(pattern)):
+            try:
+                found.extend(parse_progress(log.read_text(errors="replace")))
+            except OSError:
+                continue
+    return sorted(found, key=lambda p: p.step)
+
+
+def ema_losses(values, alpha: float = DEFAULT_EMA_ALPHA) -> List[float]:
+    """Exponential moving average, seeded with the first value."""
+    smoothed: List[float] = []
+    current: Optional[float] = None
+    for value in values:
+        current = float(value) if current is None else alpha * float(value) + (1 - alpha) * current
+        smoothed.append(current)
+    return smoothed
+
+
+def _slurm_job_ids(run_dir: Path) -> List[str]:
+    ids = []
+    for log in sorted(run_dir.glob("slurm-*.out")):
+        stem = log.stem[len("slurm-"):]
+        job = stem.split("_")[0]
+        if job.isdigit():
+            ids.append(job)
+    return ids
+
+
+def _default_cancel(run_dir) -> None:
+    """scancel every Slurm job that wrote a log into this run directory.
+
+    Pruning that does not actually stop the job saves nothing -- the point is the
+    GPU-hours, not the bookkeeping.
+    """
+    run_dir = Path(run_dir)
+    for job_id in _slurm_job_ids(run_dir):
+        try:
+            subprocess.run(["scancel", job_id], check=False,
+                           capture_output=True, text=True)
+        except FileNotFoundError:
+            # No scancel here (a local run, or a login node without Slurm).
+            return
+
+
+def wait_for_objective(study: optuna.study.Study, trial, run_dir, *,
+                       poll_seconds: float = DEFAULT_POLL_SECONDS,
+                       timeout_seconds: Optional[float] = None,
+                       prune_anchors: bool = False,
+                       ema_alpha: float = DEFAULT_EMA_ALPHA,
+                       sleep: Callable[[float], Any] = time.sleep,
+                       clock: Callable[[], float] = time.monotonic,
+                       cancel: Optional[Callable[[Any], Any]] = None,
+                       **weights) -> Optional[float]:
+    """Poll a run to completion, reporting progress and pruning if hopeless.
+
+    Returns the objective, or None on timeout -- the driver turns None into a
+    FAIL, and a stand-in number would steer every later proposal off a fiction.
+    Raises `optuna.TrialPruned` when the pruner says stop, after cancelling the
+    job.
+
+    Anchors are exempt by default: they *are* the reference set a median pruner
+    compares against, so pruning them removes the thing later trials are judged
+    by.
+    """
+    run_dir = Path(run_dir)
+    cancel = cancel if cancel is not None else _default_cancel
+    prunable = prune_anchors or not is_anchor(trial)
+    reported: set[int] = set()
+    started = clock()
+
+    while True:
+        progress = read_progress(run_dir)
+        if progress:
+            smoothed = ema_losses([p.loss for p in progress], alpha=ema_alpha)
+            for point, value in zip(progress, smoothed):
+                # A poll loop re-reads the whole log every pass, and optuna
+                # raises on a duplicate report step.
+                if point.step not in reported:
+                    trial.report(value, point.step)
+                    reported.add(point.step)
+
+        if prunable and reported and trial.should_prune():
+            cancel(run_dir)
+            raise optuna.TrialPruned(
+                f"pruned at step {max(reported)} (run_dir={run_dir})")
+
+        objective = read_quick_eval_objective(run_dir, **weights)
+        if objective is not None:
+            return objective
+
+        if timeout_seconds is not None and clock() - started >= timeout_seconds:
+            return None
+        sleep(poll_seconds)

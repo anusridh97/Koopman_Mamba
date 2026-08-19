@@ -36,6 +36,12 @@ rather than on architecture, which is not a claim a paper can make.
 **A failed trial is told, not raised.** One OOM must not end a study, and a
 missing metric must never be replaced with a plausible number -- a fabricated
 objective would steer every later proposal.
+
+**Pruning arrives through `read_objective`.** A reader that polls a running job
+raises `optuna.TrialPruned` when the pruner says stop; this records the trial as
+PRUNED and moves on. Nothing else here changes, which is the payoff of having made
+the reader injectable in the first place -- see
+`experimentation.sweep.search.metrics.wait_for_objective`.
 """
 from __future__ import annotations
 
@@ -60,7 +66,7 @@ __all__ = ["TrialOutcome", "objective_from_metrics", "run_trial", "drive"]
 class TrialOutcome:
     """What happened to one trial, in terms a human can act on."""
     trial_number: int
-    state: str                      # "complete" | "failed"
+    state: str                      # "complete" | "pruned" | "failed"
     run_id: str
     group_id: str
     run_dir: Path
@@ -186,7 +192,15 @@ def run_trial(study: optuna.study.Study, trial, *,
         return TrialOutcome(state="failed", objective=None, **identity)
 
     run_dir = identity["run_dir"]
-    objective = read_objective(run_dir)
+    try:
+        objective = read_objective(run_dir)
+    except optuna.TrialPruned as pruned:
+        # metrics.wait_for_objective raises this after cancelling the job. It
+        # arrives through the read_objective seam rather than through a driver
+        # flag, which is why pruning needed no structural change here.
+        trial.set_user_attr("pruned", str(pruned))
+        study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+        return TrialOutcome(state="pruned", objective=None, **identity)
     if objective is None:
         # Training can exit cleanly and still leave no metric -- a missing
         # checkpoint, a preemption between the save and the eval. Telling optuna
