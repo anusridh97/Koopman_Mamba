@@ -70,6 +70,20 @@ def test_the_disable_flag_is_honoured_so_no_bf16_keeps_working():
         assert (a @ a).dtype is torch.float32
 
 
+def test_the_context_survives_being_entered_once_per_step():
+    """The shape every trainer uses: build once, enter per step. This is the test
+    that was missing when a generator-based autocast shipped and killed real
+    training at step 2 on an H100 (job 435898) with all 843 CPU tests green --
+    every one of them entered the context exactly once."""
+    from experimentation.training.amp import amp_for
+
+    for compute in ("bf16", "fp32", "fp16"):
+        context, _ = amp_for(_cfg(compute), device_type="cpu")
+        for _ in range(4):
+            with context:
+                pass
+
+
 # -------------------------------------------------------- grad scaler ----
 
 def test_fp16_derives_an_enabled_grad_scaler():

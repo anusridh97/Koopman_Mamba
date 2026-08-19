@@ -149,6 +149,42 @@ def test_autocast_can_be_disabled_explicitly():
         assert (a @ a).dtype is torch.float32
 
 
+def test_the_autocast_context_can_be_entered_more_than_once():
+    """Every trainer builds this ONCE before the loop and enters it per step:
+
+        autocast_ctx = amp_for(cfg, 'cuda', ...)      # once
+        for step in ...:
+            with autocast_ctx:                        # every step
+
+    torch.amp.autocast supports that; a @contextlib.contextmanager generator does
+    not -- _GeneratorContextManager.__enter__ deletes self.args, so the second
+    entry raises `AttributeError: args`. The first version of this helper was a
+    generator, and every test entered it exactly once, so 843 CPU tests passed
+    over a bug that killed real training at step 2 (job 435898). Enter it three
+    times.
+    """
+    from koopman_lm.precision import autocast
+
+    context = autocast("cpu", "bf16")
+    a = torch.ones(4, 4)
+    for _ in range(3):
+        with context:
+            assert (a @ a).dtype is torch.bfloat16
+
+
+def test_the_disabled_context_can_also_be_entered_more_than_once():
+    """The fp32/disabled branch has to be reusable too, or `compute_precision:
+    fp32` breaks on step 2 instead of bf16 doing so."""
+    from koopman_lm.precision import autocast
+
+    for precision, enabled in (("fp32", True), ("bf16", False)):
+        context = autocast("cpu", precision, enabled=enabled)
+        a = torch.ones(4, 4)
+        for _ in range(3):
+            with context:
+                assert (a @ a).dtype is torch.float32
+
+
 def test_autocast_rejects_an_unknown_precision():
     from koopman_lm.precision import autocast
 

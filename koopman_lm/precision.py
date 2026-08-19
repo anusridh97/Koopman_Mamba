@@ -36,7 +36,7 @@ accepts float64, and fp64 is already used for numerical validation across
 from __future__ import annotations
 
 import contextlib
-from typing import Any, Dict, Iterator, Tuple
+from typing import Any, Dict, Tuple
 
 import torch
 
@@ -114,21 +114,33 @@ def needs_grad_scaler(compute_precision: str) -> bool:
     return _validate(compute_precision) == "fp16"
 
 
-@contextlib.contextmanager
-def autocast(device_type: str, precision: str, *,
-             enabled: bool = True) -> Iterator[None]:
+def autocast(device_type: str, precision: str, *, enabled: bool = True):
     """Autocast to `precision`, or do nothing when that would be meaningless.
 
     fp32 disables rather than configures: autocasting *to* fp32 changes nothing
     and costs the dispatcher work, so "compute_precision: fp32" must mean "no
     autocast" and not "autocast to the default dtype".
 
-    `enabled` exists so the call sites that currently read a `--bf16` CLI flag can
-    keep that behaviour while taking the dtype from config.
+    `enabled` exists so the call sites that read a `--bf16` CLI flag can keep that
+    behaviour while taking the dtype from config.
+
+    **Returns a REUSABLE context manager, and that is load-bearing.** Every
+    trainer builds one of these once before the loop and enters it on every step:
+
+        autocast_ctx, scaler = amp_for(cfg, 'cuda', ...)   # once
+        for step in ...:
+            with autocast_ctx:                             # every step
+
+    `torch.amp.autocast` supports that. A `@contextlib.contextmanager` generator
+    does not -- `_GeneratorContextManager.__enter__` deletes `self.args`, so the
+    second entry raises `AttributeError: args`. This function was a generator
+    first, and it killed real training at step 2 on an H100 (job 435898) while all
+    843 CPU tests passed, because every one of them entered the context exactly
+    once. Both branches now return objects that are reusable by construction --
+    `torch.autocast` and `nullcontext` -- and two tests enter each of them three
+    times.
     """
     dtype = dtype_of(precision)
     if not enabled or precision == "fp32":
-        yield
-        return
-    with torch.autocast(device_type=device_type, dtype=dtype):
-        yield
+        return contextlib.nullcontext()
+    return torch.autocast(device_type=device_type, dtype=dtype)
