@@ -36,7 +36,7 @@ import yaml
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.geometry import clamp, nearest
 
-__all__ = ["Design", "load_designs", "resolve_design"]
+__all__ = ["Design", "load_designs", "resolve_design", "designs_to_cells"]
 
 _BASELINE = "baseline"
 
@@ -156,3 +156,31 @@ def resolve_design(design: Design, base_model: KoopmanLMConfig,
         "warmup_ratio": nearest(design.warmup_ratio, space["warmup_ratio"]["choices"]),
         "grad_clip": nearest(design.grad_clip, space["grad_clip"]["choices"]),
     }
+
+
+def designs_to_cells(designs, base_model: KoopmanLMConfig,
+                     space: Mapping[str, Mapping[str, Any]], *,
+                     base_lr: float,
+                     max_steps: int,
+                     backend_policy: str = "exact_auto",
+                     seq_len: int | None = None) -> List[Dict[str, Any]]:
+    """A design set -> a `cells:` list for configs/sweeps/<name>.yaml.
+
+    Composes resolve_design with space.params_to_overrides, which is the whole
+    trick: a curated design set becomes an ordinary static sweep, and therefore
+    launchable through the unmodified run system, with no sampler and no optuna
+    anywhere in the path.
+
+    Order is preserved so a generated sweep's Nth cell is the Nth design, which
+    is what lets a companion name->run_id mapping be built positionally against
+    the same expand_cells output the launcher will use.
+    """
+    from experimentation.sweep.search.space import params_to_overrides
+
+    return [
+        params_to_overrides(
+            resolve_design(design, base_model, space, base_lr=base_lr),
+            base_model, max_steps=max_steps, seq_len=seq_len,
+            backend_policy=backend_policy)
+        for design in designs
+    ]
