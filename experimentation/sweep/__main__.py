@@ -14,10 +14,11 @@ Orchestration order, per invocation:
       --dry_run is a complete, GPU-free view of what the sweep would do
     drop cells already done (--skip_done: run_dir/final/ exists)
     refuse to launch from a dirty working tree (unless --allow-dirty)
-    for each surviving cell: verify data, create_run_dir, materialize
-      spec.yaml (stamped with this sweep's sweep_id/sweep_name), append an
-      attempt record -- byte-for-byte what experimentation.run.__main__ does for
-      a single run
+    for each surviving cell: experimentation.sweep.launch.materialize_cell --
+      verify data, claim, create_run_dir, materialize spec.yaml (stamped with
+      this sweep's sweep_id/sweep_name via extra=), append an attempt record.
+      Byte-for-byte what experimentation.run.__main__ does for a single run,
+      and shared with experimentation.sweep.search for that reason.
     hand off every surviving cell to a Launcher:
       --launcher local  one LocalLauncher.submit() per cell
       --launcher slurm  one SlurmLauncher.submit_array() for the whole
@@ -29,20 +30,16 @@ from __future__ import annotations
 
 import argparse
 import os
-import socket
 from pathlib import Path
 from typing import List, Tuple
 
-from experimentation.run.write_policy import (
-    append_attempt, claim_run_dir, create_run_dir, make_attempt_record)
-from experimentation.run.data_verify import verify_data
 from experimentation.run.launchers import LocalLauncher, SlurmLauncher
-from experimentation.run.provenance import check_git_clean, git_commit
-from experimentation.run.resolve import materialize
+from experimentation.run.provenance import check_git_clean
 from experimentation.run.spec import (
     RunSpec, group_id as compute_group_id, run_dir_path,
     run_id as compute_run_id,
 )
+from experimentation.sweep.launch import materialize_cell
 from experimentation.sweep.spec import SweepCell, SweepSpec, expand_cells, load_sweep_spec
 from experimentation.sweep.spec import sweep_id as compute_sweep_id
 
@@ -88,26 +85,6 @@ def _print_plan(sweep: SweepSpec, cells: List[SweepCell], run_root) -> None:
               f"[{status}] {overrides}  -> {run_dir}")
 
 
-def _materialize_cell(cell: SweepCell, run_root, sweep: SweepSpec, *,
-                       dirty: bool, force: bool, dry_run: bool) -> Path:
-    spec = cell.spec
-    # Same single gate as run/__main__.py -- reject before any cell directory
-    # exists, so a sweep over an unlaunchable spec writes nothing.
-    verify_data(spec.data, dry_run=dry_run)
-    run_dir = run_dir_path(run_root, spec)
-    # Same claim as run/__main__.py. A sweep materializes cells in a burst, so
-    # two overlapping sweeps sharing a base spec collide here far more readily
-    # than two hand-launched runs would.
-    with claim_run_dir(run_dir, force=force):
-        create_run_dir(run_dir, force=force, code_id=git_commit())
-        materialize(spec, run_dir, dirty=dirty,
-                    extra={"sweep_id": compute_sweep_id(sweep), "sweep_name": sweep.name})
-        append_attempt(run_dir, make_attempt_record(
-            host=socket.gethostname(), job_id=os.environ.get("SLURM_JOB_ID"),
-            git_commit=git_commit(), forced=force))
-    return run_dir
-
-
 def main(argv=None):
     args = parse_args(argv)
     sweep = load_sweep_spec(args.sweep)
@@ -131,10 +108,11 @@ def main(argv=None):
 
     dirty = check_git_clean(allow_dirty=args.allow_dirty)
 
+    sweep_stamp = {"sweep_id": compute_sweep_id(sweep), "sweep_name": sweep.name}
     materialized: List[Tuple[RunSpec, Path]] = [
-        (cell.spec, _materialize_cell(cell, args.run_root, sweep,
-                                       dirty=dirty, force=args.force,
-                                       dry_run=args.dry_run))
+        (cell.spec, materialize_cell(cell.spec, args.run_root, extra=sweep_stamp,
+                                      dirty=dirty, force=args.force,
+                                      dry_run=args.dry_run))
         for cell in pending
     ]
 
