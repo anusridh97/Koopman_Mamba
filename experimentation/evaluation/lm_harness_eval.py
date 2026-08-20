@@ -67,12 +67,36 @@ class KoopmanEvalWrapper(HFLM):
         max_length=2048,
         batch_size=None,
         device="cuda",
-        # Serving precision: a per-invocation caller choice, not a config field
-        # (precision design 5). It casts WEIGHTS -- the checkpoint declares
-        # compute, the caller chooses storage, and naming this `dtype` invited
-        # exactly the confusion between the two that the design dissolves. The
-        # bf16 default is preserved deliberately: changing it would silently move
-        # every lm-eval-harness number this repo has reported.
+        # The dtype every parameter is truncated to (line ~146). Named
+        # weight_dtype rather than `dtype` because it is storage, not an autocast
+        # policy -- but do NOT read that as "storage and compute are separate
+        # here". THIS FILE INSTALLS NO AUTOCAST, so with bf16 weights the
+        # arithmetic is bf16 too, and this argument is in effect the compute
+        # precision. An earlier version of this comment claimed the two never
+        # contend; that is true of the precision design in general and false of
+        # this file in particular.
+        #
+        # Which makes the bf16 default wrong on the merits, in a way worth
+        # spelling out because it is not obvious:
+        #
+        #   * The checkpoint declares its own precision. `cfg` is in scope ~15
+        #     lines below (dataclasses.replace) and cfg.compute_precision goes
+        #     unread.
+        #   * compute_precision='bf16' does NOT mean bf16 weights. It means fp32
+        #     weights with a bf16 autocast, and autocast has an op list: matmuls
+        #     and convs run bf16 while layer_norm, softmax and reductions stay
+        #     fp32. `.to(bfloat16)` has no op list and truncates everything, so
+        #     normalization runs in bf16 here and did not during training.
+        #   * It therefore partly defeats ska_precision='fp32': the whitened core
+        #     still casts up to fp32, but from already-truncated bf16 inputs.
+        #
+        # So this reproduces neither training nor a clean fp32 measurement. The
+        # fix is fp32 storage plus autocast at cfg.compute_precision, with an
+        # explicit weight_dtype still honoured for genuine serving experiments.
+        # NOT taken here only because it moves every lm-eval-harness number this
+        # repo has reported, and those should be re-measured in the same commit
+        # that changes them. Tracked in
+        # docs/superpowers/specs/2026-08-20-eval-at-training-precision.md.
         weight_dtype="bf16",
     ):
         # Skip HFLM.__init__ (it tries to load a HF model), but we need
