@@ -1,7 +1,16 @@
 # Evaluate at training precision
 
-**Status:** proposed. `quick_eval` is safe to do immediately; the two reporting
-paths move published numbers and must re-measure in the same commit.
+**Status:** `lm_harness_eval.py` **done**. `quick_eval` is safe to do immediately.
+`evaluate.py` moves published numbers and must re-measure in the same commit.
+
+> `lm_harness_eval.py` was done ahead of the others not because its numbers matter
+> less, but because it turned out to be **broken outright**: commit e2dc98a renamed
+> its `dtype` parameter and left `self._dtype = dtype` behind, so `__init__` raised
+> `NameError` on every call. Nothing could catch it — `lm_eval` is not installed,
+> so no test can import the module. Fixing the crash meant touching the parameter
+> anyway, and reinstating a default that was demonstrably wrong would have been
+> perverse. Its lm-eval numbers therefore need re-measuring, but there were no
+> valid numbers being produced in the interim.
 
 **Origin:** a manual review of `jack/search-and-provenance`. The reviewer's
 observation was simply that training and eval precision should agree by default.
@@ -10,13 +19,14 @@ that one of them truncates weights instead — which is a different thing.
 
 ## 1. Current state
 
-| site | what it measures | precision today | correct? |
+| site | what it measures | precision | status |
 |---|---|---|:--|
-| `evaluation/quick_eval.py` | the **search objective** | no autocast → fp32 | no |
-| `evaluation/lm_harness_eval.py` | benchmark suites | `.to(bf16)` **weights**, no autocast | no, and differently |
-| `evaluation/evaluate.py` | held-out ppl, NIAH, MQAR | no autocast → fp32 | defensible, but unchosen |
+| `evaluation/quick_eval.py` | the **search objective** | no autocast → fp32 | **wrong**, fix now |
+| `evaluation/lm_harness_eval.py` | benchmark suites | fp32 weights + autocast at `cfg.compute_precision` | **done** |
+| `evaluation/evaluate.py` | held-out ppl, NIAH, MQAR | no autocast → fp32 | defensible but unchosen |
 
-None of the three reads `cfg.compute_precision`, which every checkpoint records.
+Before this spec, none of the three read `cfg.compute_precision`, which every
+checkpoint records. `lm_harness_eval.py` now does.
 
 ## 2. Casting weights is not autocasting
 
@@ -73,22 +83,23 @@ The `koopman_lm.precision.autocast` helper already returns a reusable context
 manager for exactly this shape, and returns `nullcontext()` for fp32, so the
 default argument keeps current behaviour until a caller opts in.
 
-**`lm_harness_eval.py`** — stop truncating weights; autocast instead:
+**`lm_harness_eval.py`** — done. The `weight_dtype` parameter is **gone**, not
+defaulted: weights stay fp32 and `self._autocast = autocast(device,
+cfg.compute_precision)` is built once and entered at each of the three model-call
+sites (`_model_call`, and the prefill and decode loop in `_model_generate`).
 
-```python
-weight_dtype=None,      # None -> fp32 storage, serve as trained
-...
-self._model = self._model.to(device=self._device,
-                             dtype=as_dtype(weight_dtype) if weight_dtype
-                             else torch.float32)
-# and wrap both no_grad blocks (lines ~181, ~214) in
-#   autocast(self._device.type, cfg.compute_precision)
-```
+No knob was reintroduced. A parameter whose only correct value is derivable from
+the checkpoint is not configuration, it is an invitation to disagree with the
+file. If a genuine serving-precision experiment is ever wanted, it should arrive
+as an explicit argument *then*, with a warning when it contradicts
+`cfg.compute_precision` — not as a default sitting there in the meantime.
 
-An explicit `weight_dtype` stays honoured for genuine serving experiments
-(`--model_args weight_dtype=fp16`), and **should warn** when it disagrees with
-`cfg.compute_precision` — that is the one case here where being loud is right,
-because the caller is deliberately serving differently than trained.
+Note the prefill was previously **outside** the `no_grad` block and so outside any
+precision control; it now shares the decode loop's autocast, because otherwise the
+first generated token comes from different arithmetic than the rest.
+
+This is also the first real consumer of the reusability fix in `3be37b7`: one
+autocast object is entered three-plus times per generation call.
 
 **`evaluate.py`** — autocast at `cfg.compute_precision` by default, with
 `--eval-precision fp32` to force the arithmetic-independent measurement. Record

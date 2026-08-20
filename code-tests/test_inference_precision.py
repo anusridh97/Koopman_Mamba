@@ -92,32 +92,81 @@ def test_the_retrieval_finetune_uses_the_shared_amp_helper():
 
 # ------------------------------------------------------------ lm-harness ----
 
-def test_the_harness_names_its_weight_cast_weight_dtype():
-    """It casts weights, not compute. Calling that parameter `dtype` invited
-    exactly the confusion design 5 exists to dissolve."""
-    source = (_ROOT / "experimentation/evaluation/lm_harness_eval.py").read_text()
-    tree = ast.parse(source)
-    init = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "__init__")
-    names = {arg.arg for arg in init.args.args + init.args.kwonlyargs}
-    assert "weight_dtype" in names, "the serving cast must be named weight_dtype"
+_HARNESS = "experimentation/evaluation/lm_harness_eval.py"
 
 
-def test_the_harness_default_still_serves_in_bf16():
-    """Preserved on purpose: changing the default would silently change every
-    lm-eval-harness number this repo has reported."""
-    source = (_ROOT / "experimentation/evaluation/lm_harness_eval.py").read_text()
-    tree = ast.parse(source)
-    init = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "__init__")
-    args = init.args.args + init.args.kwonlyargs
-    defaults = ([None] * (len(init.args.args) - len(init.args.defaults))
-                + list(init.args.defaults) + list(init.args.kw_defaults))
-    by_name = {arg.arg: default for arg, default in zip(args, defaults)}
-    rendered = ast.unparse(by_name["weight_dtype"])
-    assert "bf16" in rendered or "bfloat16" in rendered, rendered
+def _harness_init():
+    tree = ast.parse((_ROOT / _HARNESS).read_text())
+    return next(node for node in ast.walk(tree)
+                if isinstance(node, ast.FunctionDef) and node.name == "__init__")
+
+
+def test_the_harness_takes_no_precision_parameter():
+    """The checkpoint declares its precision, so there is nothing for a caller to
+    choose. This used to be a `weight_dtype='bf16'` parameter, which was wrong
+    twice over: it was the only value the code could ever have (no caller passed
+    it), and truncating weights is not what compute_precision='bf16' means --
+    that means fp32 weights with a bf16 autocast, which keeps layer_norm and
+    softmax in fp32. A parameter whose only correct value is derivable from the
+    file is not configuration."""
+    names = {arg.arg for arg in _harness_init().args.args
+             + _harness_init().args.kwonlyargs}
+    offenders = {n for n in names if "dtype" in n or "precision" in n}
+    assert not offenders, f"precision must come from the checkpoint, not: {offenders}"
+
+
+def test_the_harness_does_not_truncate_the_weights():
+    """`.to(device)` and never `.to(device, dtype=...)`. Casting parameters has no
+    op list -- it would take layer_norm and softmax to bf16 as well, which
+    autocast deliberately does not, and would feed the SKA core already-truncated
+    inputs despite ska_precision='fp32'."""
+    casts = [node for node in ast.walk(_harness_init())
+             if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "to"]
+    assert casts, "expected a .to(...) call moving the model to its device"
+    for call in casts:
+        assert not any(kw.arg == "dtype" for kw in call.keywords), \
+            f"weights must stay fp32: {ast.unparse(call)}"
+
+
+def test_the_harness_autocasts_at_the_checkpoints_declared_precision():
+    calls = [node for node in ast.walk(_harness_init())
+             if isinstance(node, ast.Call)
+             and getattr(node.func, "id", None) == "autocast"]
+    assert len(calls) == 1, "expected exactly one autocast built in __init__"
+    args = [ast.unparse(a) for a in calls[0].args]
+    assert any("compute_precision" in a for a in args), args
+
+
+def test_the_harness_reuses_one_autocast_across_every_model_call():
+    """Three call sites -- _model_call, and the prefill and decode loop in
+    _model_generate -- share one context object, so it is entered many times per
+    evaluation. That is only safe because 3be37b7 made precision.autocast return
+    torch.autocast/nullcontext instead of a single-use @contextmanager
+    generator, whose second __enter__ raises AttributeError: args."""
+    tree = ast.parse((_ROOT / _HARNESS).read_text())
+    entries = [item for node in ast.walk(tree) if isinstance(node, ast.With)
+               for item in node.items
+               if ast.unparse(item.context_expr) == "self._autocast"]
+    assert len(entries) >= 3, f"only {len(entries)} site(s) enter self._autocast"
+
+
+def test_the_harness_autocasts_its_generation_prefill():
+    """The prefill used to sit outside the no_grad block entirely, so it had no
+    precision control at all -- the first generated token came from different
+    arithmetic than every token after it."""
+    tree = ast.parse((_ROOT / _HARNESS).read_text())
+    gen = next(node for node in ast.walk(tree)
+               if isinstance(node, ast.FunctionDef) and node.name == "_model_generate")
+    prefills = [node for node in ast.walk(gen) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr == "prefill"]
+    assert prefills, "expected a recurrent prefill in _model_generate"
+    guarded = [node for node in ast.walk(gen) if isinstance(node, ast.With)
+               and any(ast.unparse(i.context_expr) == "self._autocast"
+                       for i in node.items)
+               and any(call is p for p in prefills
+                       for call in ast.walk(node))]
+    assert guarded, "the prefill must run under the same autocast as the decode loop"
 
 
 # ------------------------------------------------- the deliberate non-changes ----

@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import dataclasses
 from koopman_lm.config import build_config
-from koopman_lm.precision import as_dtype
+from koopman_lm.precision import autocast
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.baselines import (
     build_mamba_only,
@@ -67,37 +67,6 @@ class KoopmanEvalWrapper(HFLM):
         max_length=2048,
         batch_size=None,
         device="cuda",
-        # The dtype every parameter is truncated to (line ~146). Named
-        # weight_dtype rather than `dtype` because it is storage, not an autocast
-        # policy -- but do NOT read that as "storage and compute are separate
-        # here". THIS FILE INSTALLS NO AUTOCAST, so with bf16 weights the
-        # arithmetic is bf16 too, and this argument is in effect the compute
-        # precision. An earlier version of this comment claimed the two never
-        # contend; that is true of the precision design in general and false of
-        # this file in particular.
-        #
-        # Which makes the bf16 default wrong on the merits, in a way worth
-        # spelling out because it is not obvious:
-        #
-        #   * The checkpoint declares its own precision. `cfg` is in scope ~15
-        #     lines below (dataclasses.replace) and cfg.compute_precision goes
-        #     unread.
-        #   * compute_precision='bf16' does NOT mean bf16 weights. It means fp32
-        #     weights with a bf16 autocast, and autocast has an op list: matmuls
-        #     and convs run bf16 while layer_norm, softmax and reductions stay
-        #     fp32. `.to(bfloat16)` has no op list and truncates everything, so
-        #     normalization runs in bf16 here and did not during training.
-        #   * It therefore partly defeats ska_precision='fp32': the whitened core
-        #     still casts up to fp32, but from already-truncated bf16 inputs.
-        #
-        # So this reproduces neither training nor a clean fp32 measurement. The
-        # fix is fp32 storage plus autocast at cfg.compute_precision, with an
-        # explicit weight_dtype still honoured for genuine serving experiments.
-        # NOT taken here only because it moves every lm-eval-harness number this
-        # repo has reported, and those should be re-measured in the same commit
-        # that changes them. Tracked in
-        # docs/superpowers/specs/2026-08-20-eval-at-training-precision.md.
-        weight_dtype="bf16",
     ):
         # Skip HFLM.__init__ (it tries to load a HF model), but we need
         # LM.__init__ for the base harness plumbing.
@@ -163,12 +132,13 @@ class KoopmanEvalWrapper(HFLM):
         self._model.load_state_dict(state)
 
         self._device = torch.device(device)
-        # as_dtype rather than getattr(torch, ...): the old form silently accepted
-        # any torch attribute name, so a typo became an AttributeError deep in
-        # .to() rather than a named rejection here.
-        self._model = self._model.to(device=self._device,
-                                     dtype=as_dtype(weight_dtype))
+        # Weights stay fp32 and the arithmetic is autocast to the precision the
+        # checkpoint declares, which is what training did. Truncating the weights
+        # instead would also cast layer_norm and softmax, which autocast keeps in
+        # fp32 on purpose.
+        self._model = self._model.to(device=self._device)
         self._model.eval()
+        self._autocast = autocast(self._device.type, cfg.compute_precision)
 
         # Mamba/SKA variants have an O(1)-state recurrent implementation.
         # Attention blocks do not, so they use a correct full-prefix fallback.
@@ -179,7 +149,9 @@ class KoopmanEvalWrapper(HFLM):
         self.vocab_size = len(self.tokenizer)
         self._batch_size = int(batch_size) if batch_size is not None else 64
         self._max_length = int(max_length)
-        self._dtype = dtype
+        # Read off the model rather than from an argument: lm-eval internals may
+        # consult it, and the true answer is whatever the parameters actually are.
+        self._dtype = next(self._model.parameters()).dtype
 
         self._model.param_summary()
 
@@ -202,7 +174,7 @@ class KoopmanEvalWrapper(HFLM):
     def _model_call(self, inps, attn_mask=None, labels=None):
         """Override HFLM._model_call: KoopmanLM.forward returns a dict, not a
         namedtuple with .logits."""
-        with torch.no_grad():
+        with torch.no_grad(), self._autocast:
             out = self._model(inps)
             return out["logits"]
 
@@ -229,13 +201,17 @@ class KoopmanEvalWrapper(HFLM):
         generated = context.clone()
         B = generated.shape[0]
         active = torch.ones(B, dtype=torch.bool, device=generated.device)
-        if self._recurrent is not None:
-            self._recurrent.reset()
-            next_logits = self._recurrent.prefill(generated)[:, -1, :]
-        else:
-            next_logits = self._model(generated)["logits"][:, -1, :]
+        # The prefill is a model call too, so it belongs under the same autocast
+        # as the decode loop below -- otherwise the first token is produced at a
+        # different precision than the rest.
+        with torch.no_grad(), self._autocast:
+            if self._recurrent is not None:
+                self._recurrent.reset()
+                next_logits = self._recurrent.prefill(generated)[:, -1, :]
+            else:
+                next_logits = self._model(generated)["logits"][:, -1, :]
 
-        with torch.no_grad():
+        with torch.no_grad(), self._autocast:
             for _ in range(max_new):
                 next_token = next_logits.argmax(dim=-1, keepdim=True)
                 pad_id = self.tokenizer.pad_token_id
