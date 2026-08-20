@@ -45,7 +45,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 __all__ = ["OOM_MARKERS", "TRAIN_RE", "Progress", "looks_like_oom",
            "objective_from_metrics",

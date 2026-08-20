@@ -11,7 +11,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 from koopman_lm.config import KoopmanLMConfig, build_config
 

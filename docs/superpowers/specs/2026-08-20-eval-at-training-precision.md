@@ -94,9 +94,15 @@ file. If a genuine serving-precision experiment is ever wanted, it should arrive
 as an explicit argument *then*, with a warning when it contradicts
 `cfg.compute_precision` — not as a default sitting there in the meantime.
 
-Note the prefill was previously **outside** the `no_grad` block and so outside any
-precision control; it now shares the decode loop's autocast, because otherwise the
-first generated token comes from different arithmetic than the rest.
+The prefill also moved **inside** `no_grad`, where it belongs — it was building a
+graph during generation, wasting memory and compute for gradients nobody uses.
+
+> Stated carelessly the first time, and worth being precise about: `no_grad` does
+> **not** affect arithmetic, only gradient tracking, so the prefill sitting
+> outside it was never a precision bug. The precision hazard is created by
+> introducing autocast — wrap the decode loop and not the prefill, and the first
+> token comes from different arithmetic than the rest. Both blocks are wrapped,
+> so it does not arise; it is a trap avoided, not a defect repaired.
 
 This is also the first real consumer of the reusability fix in `3be37b7`: one
 autocast object is entered three-plus times per generation call.
