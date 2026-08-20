@@ -46,38 +46,48 @@ def load_meta(checkpoint):
 def detect_scale(meta):
     """Identify the model scale from checkpoint metadata.
 
-    Prefers the stored cfg (hashes it to confirm the recorded cfg_hash and to
-    match it against a known factory). Returns a provenance dict.
+    Prefers the stored cfg (hashes it to match against a known factory).
+    Returns a provenance dict.
 
-    `cfg_hash` is the value the checkpoint recorded -- a provenance fact, kept
-    verbatim. `cfg_hash_recomputed` is this code's hash of the stored cfg, and
-    `cfg_hash_mismatch` is the verdict: True when the two disagree, False when
-    they agree, None when the checkpoint recorded no hash to confirm.
+    `cfg_hash` is whatever the checkpoint recorded, kept **verbatim**. This
+    function used to overwrite it with its own recomputation, which is the one
+    thing it must not do: the recorded value is a fact about the code that wrote
+    the checkpoint, and replacing it with a fact about the code reading it
+    silently relabels the run. A real example -- a checkpoint written 2026-08-07
+    records cfg_hash 8807a902, and today's schema (three precision fields
+    longer) hashes its stored cfg to c267087f, which is the identity of a
+    *different*, current config. Overwriting filed that old model's eval numbers
+    under a configuration it was never trained on.
 
-    The disagreement case is real and used to be invisible: this function
-    overwrote the recorded value with the recomputed one, so a checkpoint whose
-    config schema drifted after it was written was silently accepted as
-    self-consistent. Confirming a claim means reporting when it fails, not
-    replacing the claim with the evidence.
+    Only when nothing was recorded does the recomputed hash stand in, because
+    then it is the sole identity available.
+
+    Detecting that a checkpoint was written under an older schema is deliberately
+    NOT done here. The comparison this function could make is weak -- adding a
+    defaulted field moves the hash without changing the model, so a mismatch
+    means "named in an older vocabulary", not "wrong" -- and the run system
+    already solves it properly at the load boundary: resolve.py's
+    _check_model_key_set rejects a materialized spec whose key set does not match
+    dataclasses.fields(KoopmanLMConfig) exactly, naming the missing and unknown
+    fields. meta.pt cannot use that guard because it stores a pickled cfg
+    *object* rather than resolved data, and pickle restores __dict__ without
+    consulting the class. Closing that asymmetry is the fix; a boolean flag here
+    was a weaker substitute for it. See
+    docs/superpowers/specs/2026-08-20-checkpoint-meta-resolved-config.md.
     """
     recorded = meta.get("cfg_hash")
     info = {"model_size": meta.get("model_size"),
             "model_type": meta.get("model_type", "koopman"),
             "cfg_hash": recorded,
-            "cfg_hash_recomputed": None,
-            "cfg_hash_mismatch": None,
             "param_count": None,
             "matched_factory": None}
     cfg = meta.get("cfg")
     if cfg is not None:
         h = config_hash(cfg)
-        info["cfg_hash_recomputed"] = h
         if recorded is None:
-            # Nothing was claimed, so there is nothing to contradict; the
+            # Nothing was claimed, so there is nothing to preserve; the
             # recomputed hash is the only identity available.
             info["cfg_hash"] = h
-        else:
-            info["cfg_hash_mismatch"] = recorded != h
         info["param_count"] = int(cfg.param_count_estimate())
         # match against a known scale by hash (auto-detect scale)
         for name, factory in CONFIG_FACTORIES.items():

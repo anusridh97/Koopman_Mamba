@@ -142,9 +142,20 @@ git_dirty_paths`. `training/` already imports across the package this way
 `experimentation/atomic_io.py`), so this introduces no new layering edge, and it
 does not touch the `koopman_lm` ← `experimentation` boundary at all.
 
-Also fix 3.4: `harness.py` **compares** rather than overwrites, and surfaces a
-mismatch as an explicit `cfg_hash_mismatch` field in the provenance dict rather
-than discarding it. Nothing should silently prefer one hash over the other.
+Also fix 3.4: `harness.py` must stop **overwriting** the recorded `cfg_hash`
+with its own recomputation. The recorded value describes the code that wrote the
+checkpoint; substituting a hash computed by the code reading it relabels the run.
+
+> **Revised 2026-08-20.** This section originally also called for surfacing a
+> `cfg_hash_mismatch` field. That was implemented and then removed, because the
+> comparison is a weak detector: adding a *defaulted* config field moves the hash
+> without changing the model, so a mismatch means "named under an older schema",
+> not "wrong". Schema drift belongs at the load boundary, where `resolve.py`'s
+> `_check_model_key_set` already rejects a materialized spec whose key set does
+> not match `dataclasses.fields(KoopmanLMConfig)` exactly. Extending that guard
+> to `meta.pt` is tracked in
+> `2026-08-20-checkpoint-meta-resolved-config.md`. The non-overwrite fix above
+> stands on its own and is unaffected.
 
 ### 4.2 Archive the source into the run directory (closes 3.1)
 
@@ -251,8 +262,10 @@ All CPU-runnable, all in the `correctness` gate suite.
 
 1. `checkpoint_meta` includes `code_id` and `dirty`; `dirty` is `True` when the
    tree has uncommitted paths.
-2. `harness.py` reports `cfg_hash_mismatch` when a `meta.pt`'s recorded hash
-   disagrees with the recomputed one, instead of overwriting it.
+2. `harness.py` leaves a `meta.pt`'s recorded `cfg_hash` untouched even when the
+   stored cfg now hashes to something else, and only falls back to the
+   recomputed hash when nothing was recorded. (Revised: no `cfg_hash_mismatch`
+   field -- see the note in 4.1.)
 3. `source.tar.gz` is **byte-reproducible**: archiving the same tree twice gives
    identical bytes (this is what makes the hash a usable `behavior_id`).
 4. The archive excludes `__pycache__` and `*.pyc`, and contains every `.py` under

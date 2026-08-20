@@ -74,42 +74,44 @@ def test_detect_scale_matches_factory():
     assert info["param_count"] == int(cfg.param_count_estimate())
 
 
-def test_detect_scale_reports_a_recorded_cfg_hash_mismatch():
-    """A checkpoint whose recorded cfg_hash disagrees with its stored cfg has
-    drifted -- the config schema changed after the checkpoint was written.
-    detect_scale's docstring says it hashes the cfg "to confirm the recorded
-    cfg_hash"; confirming means the recorded value survives and the
-    disagreement is reported, not that the recorded value is overwritten by
-    the recomputed one (which makes the drift invisible)."""
+def test_detect_scale_never_overwrites_a_recorded_cfg_hash():
+    """A recorded cfg_hash is a fact about the code that WROTE the checkpoint.
+    detect_scale hashes the stored cfg for factory matching, and must not let
+    that recomputation displace the recorded value -- doing so relabels an old
+    run with a current config's identity, filing its eval numbers under a
+    configuration it was never trained on.
+
+    The stale value here stands for a checkpoint written before a config field
+    was added: its stored cfg now hashes to something else entirely, because
+    asdict() reads the field list off the class and supplies class defaults for
+    fields the pickle never stored."""
     cfg = build_config("50m")
     stale = "0" * 64                       # what an older schema recorded
     meta = {"cfg": cfg, "model_type": "koopman", "model_size": "50m",
             "cfg_hash": stale}
     info = H.detect_scale(meta)
     assert info["cfg_hash"] == stale, "the recorded provenance fact must survive"
-    assert info["cfg_hash_recomputed"] == config_hash(cfg)
-    assert info["cfg_hash_mismatch"] is True
+    assert info["cfg_hash"] != config_hash(cfg), \
+        "the recomputed hash must not have displaced the recorded one"
+    # Still usable for everything that does not depend on the recorded value.
+    assert info["param_count"] == int(cfg.param_count_estimate())
 
 
-def test_detect_scale_confirms_a_matching_cfg_hash():
+def test_detect_scale_keeps_a_matching_cfg_hash():
     cfg = build_config("50m")
     meta = {"cfg": cfg, "model_type": "koopman", "model_size": "50m",
             "cfg_hash": config_hash(cfg)}
     info = H.detect_scale(meta)
     assert info["cfg_hash"] == config_hash(cfg)
-    assert info["cfg_hash_recomputed"] == config_hash(cfg)
-    assert info["cfg_hash_mismatch"] is False
 
 
-def test_detect_scale_has_nothing_to_confirm_without_a_recorded_hash():
-    """Older checkpoints stored a cfg but no cfg_hash. There is no recorded
-    value to contradict, so cfg_hash falls back to the recomputed one and the
-    mismatch verdict stays None -- absence of a claim is not a failed claim."""
+def test_detect_scale_falls_back_when_no_hash_was_recorded():
+    """Older checkpoints stored a cfg but no cfg_hash. With nothing recorded
+    there is nothing to preserve, so the recomputed hash is the only identity
+    available and standing it in is not an overwrite."""
     cfg = build_config("50m")
     info = H.detect_scale({"cfg": cfg, "model_type": "koopman"})
     assert info["cfg_hash"] == config_hash(cfg)
-    assert info["cfg_hash_recomputed"] == config_hash(cfg)
-    assert info["cfg_hash_mismatch"] is None
 
 
 def test_default_eval_plan_caps_context_and_scales_batch():
