@@ -111,12 +111,44 @@ class LocalLauncher(Launcher):
                      "-m", "experimentation.training.train", *train_args]
         return [sys.executable, "-m", "experimentation.training.train", *train_args]
 
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
+    #: Written next to the run's artifacts when a run is launched with
+    #: ``wait=False``, so a later poller can cancel it without having been handed
+    #: the process object. Mirrors how the Slurm path is cancellable from the
+    #: run directory alone (via its ``slurm-*.out`` filenames).
+    PID_FILE = ".local_pid"
+
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *,
+               resume: bool = False, wait: bool = True):
+        """Run training here. Blocking by default, and that default is load-bearing.
+
+        ``run/__main__.py`` documents relying on it (its claim is released before
+        hand-off precisely *because* this blocks for the whole run), and
+        ``sweep/__main__.py`` submits one cell at a time expecting each to finish
+        before the next starts. Flipping the default would launch every cell of a
+        sweep simultaneously.
+
+        ``wait=False`` returns a live ``Popen`` instead, for the one caller that
+        needs to watch a run rather than await it: the adaptive search prunes by
+        tailing a running job's log, and with a blocking submit the objective
+        reader only ever starts *after* training finished, so there was nothing
+        left to prune. That made pruning silently dead for any locally-launched
+        trial -- which is the mode a held GPU allocation uses to avoid paying a
+        queue wait per trial.
+
+        ``start_new_session=True`` puts the child in its own process group so the
+        whole tree can be signalled. A ``torchrun`` launch spawns one worker per
+        GPU, and killing only the parent would orphan them still holding the GPUs
+        -- pruning that does not release the hardware saves nothing.
+        """
         write_model_config(spec, run_dir)
         cmd = self.build_command(spec, run_dir, resume=resume)
         if dry_run:
             return cmd
-        return subprocess.run(cmd, check=True)
+        if wait:
+            return subprocess.run(cmd, check=True)
+        proc = subprocess.Popen(cmd, start_new_session=True)
+        atomic_write_text(Path(run_dir) / self.PID_FILE, f"{proc.pid}\n")
+        return proc
 
 
 def _require_uniform_array_runtime(cells: List[Tuple[RunSpec, "Path"]]) -> RuntimeSpec:

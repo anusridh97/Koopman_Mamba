@@ -40,7 +40,9 @@ design calls frozen, so it is a decision rather than a detail.
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -252,13 +254,58 @@ def _slurm_job_ids(run_dir: Path) -> List[str]:
     return ids
 
 
+def _local_pid(run_dir) -> Optional[int]:
+    """The PID of a non-blocking local run, if one was launched here.
+
+    LocalLauncher writes this when submitted with wait=False. Reading it back
+    from the run directory keeps cancellation uniform: a canceller needs only the
+    run_dir, never the process object, exactly as the Slurm path needs only the
+    run_dir to find its job ids.
+    """
+    path = Path(run_dir) / ".local_pid"
+    try:
+        return int(path.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def _default_cancel(run_dir) -> None:
-    """scancel every Slurm job that wrote a log into this run directory.
+    """Stop whatever is running in this run directory, however it was launched.
 
     Pruning that does not actually stop the job saves nothing -- the point is the
-    GPU-hours, not the bookkeeping.
+    GPU-hours, not the bookkeeping. Which means this has to cover BOTH launchers:
+    a Slurm trial is one job per trial, while a locally-launched trial is a child
+    process, and the latter is the mode a held GPU allocation uses to avoid paying
+    a queue wait per trial. Handling only Slurm made pruning silently ineffective
+    there -- no error, the trial simply ran to max_steps.
     """
     run_dir = Path(run_dir)
+
+    pid = _local_pid(run_dir)
+    if pid is not None:
+        # Signal the GROUP, not the process. LocalLauncher starts a new session
+        # for this reason: a torchrun launch has one worker per GPU, and killing
+        # only the parent leaves them holding the hardware.
+        #
+        # Both signals are sent unconditionally, with no liveness check between
+        # them. Checking is what an earlier version did, and it does not work:
+        # the training process is a CHILD of whoever is pruning, so between dying
+        # and being waited on it is a zombie -- and os.kill(pid, 0) succeeds on a
+        # zombie. So the check could never observe death and always escalated
+        # anyway. SIGKILL to an already-dead group is a harmless
+        # ProcessLookupError, which is cheaper than getting the check right.
+        try:
+            pgid = os.getpgid(pid)
+        except (ProcessLookupError, PermissionError):
+            pgid = None
+        if pgid is not None:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(pgid, sig)
+                except (ProcessLookupError, PermissionError):
+                    break
+                time.sleep(0.5)
+
     for job_id in _slurm_job_ids(run_dir):
         try:
             subprocess.run(["scancel", job_id], check=False,
