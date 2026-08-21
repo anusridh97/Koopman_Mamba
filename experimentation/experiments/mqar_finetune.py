@@ -279,6 +279,10 @@ def train(args):
     step     = start_step
     epoch    = 0
     t0       = time.time()
+    # Counted so the progress line can report tok/s in the same shape train.py
+    # uses. Not a vanity metric: sweep.search.metrics.TRAIN_RE requires that
+    # field, and without it nothing downstream can read this trainer's log.
+    tokens_seen = 0
     last_acc = None
 
     while step < args.max_steps:
@@ -307,14 +311,25 @@ def train(args):
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             step += 1
+            tokens_seen += inputs.numel()
 
             if step % args.log_every == 0:
                 ppl     = math.exp(min(loss.item(), 20))
                 lr      = optimizer.param_groups[0]["lr"]
-                elapsed = time.time() - t0
-                print(f"step {step:>6d}/{args.max_steps}  "
-                      f"loss {loss.item():.4f}  ppl {ppl:.1f}  "
-                      f"lr {lr:.2e}  {elapsed:.0f}s")
+                elapsed = max(time.time() - t0, 1e-9)
+                # Pipe-separated, with K tok/s, MATCHING train.py:419 exactly.
+                # This was `  loss X  ppl Y  lr Z  Ns` -- double-spaced, no
+                # pipes, elapsed seconds instead of throughput -- which
+                # sweep.search.metrics.TRAIN_RE cannot parse. parse_progress
+                # returned [] on it, so wait_for_objective saw zero progress
+                # points and a synthetic optuna trial would have been
+                # UNPRUNABLE, silently: no error, just a trial that always ran
+                # to max_steps. Only the loss values are on record here and
+                # they are unchanged; this alters the line's shape, not any
+                # number in it.
+                print(f"step {step:>6d}/{args.max_steps} | "
+                      f"loss {loss.item():.4f} | ppl {ppl:.1f} | "
+                      f"lr {lr:.2e} | {tokens_seen/elapsed/1e3:.1f}K tok/s")
                 if use_wandb:
                     wandb.log({"loss": loss.item(), "ppl": ppl,
                                "lr": lr, "step": step})
