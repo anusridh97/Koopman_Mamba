@@ -30,32 +30,41 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from experimentation.sweep.search.metrics import parse_progress  # noqa: E402
 
-GOLDEN = pathlib.Path(__file__).resolve().parents[1] / "code-tests" / "golden_4m_curve.json"
+GOLDENS = pathlib.Path(__file__).resolve().parents[1] / "code-tests"
+DEFAULT_GOLDEN = GOLDENS / "golden_4m_curve.json"
 # 5x the observed noise floor. Generous enough that log-precision rounding and
 # any genuine nondeterminism cannot trip it, tight enough that a changed
 # optimizer, schedule, accumulation count or batch order cannot hide under it --
 # those move the curve by 1e-2 or more, two orders of magnitude clear.
 TOLERANCE_MULTIPLE = 5.0
+# ...but a floor on the floor. golden_mqar_curve.json was captured with
+# --deterministic and its measured spread is EXACTLY 0.0, so 5x it is 0.0 and the
+# last digit of the log format would read as a regression. The log prints
+# `loss %.4f`, so 1e-4 is the smallest difference that is even representable;
+# anything at or below it is indistinguishable from equality.
+MIN_TOLERANCE = 1e-4
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("log", type=pathlib.Path, help="a training log to check")
-    ap.add_argument("--golden", type=pathlib.Path, default=GOLDEN)
+    ap.add_argument("--golden", type=pathlib.Path, default=DEFAULT_GOLDEN,
+                    help="which baseline; see code-tests/golden_*_curve.json")
     ap.add_argument("--replicate", default="A", choices=("A", "B"))
     args = ap.parse_args()
 
     golden = json.loads(args.golden.read_text())
     baseline = {int(k): v for k, v in golden["replicates"][args.replicate].items()}
     floor = golden["noise_floor"]["max_abs_delta"]
-    tol = floor * TOLERANCE_MULTIPLE
+    tol = max(floor * TOLERANCE_MULTIPLE, MIN_TOLERANCE)
 
     observed = {p.step: p.loss for p in parse_progress(args.log.read_text())}
     if not observed:
         print(f"no progress lines parsed from {args.log} -- did the run get anywhere?")
         return 1
 
-    print(f"golden captured at commit {golden['commit'][:9]} from {golden['spec']}")
+    what = golden.get("spec") or golden.get("trainer", "<unknown>")
+    print(f"golden captured at commit {golden['commit'][:9]} from {what}")
     print(f"noise floor {floor:.6f}  ->  tolerance {tol:.6f} ({TOLERANCE_MULTIPLE:g}x)")
 
     shared = sorted(set(baseline) & set(observed))
