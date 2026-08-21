@@ -224,26 +224,64 @@ and `exact_stats` add a `1e-4*I` jitter on top of `ska_ridge` and
 `ska_prefix_scan` does not, so switching route between trials perturbs a *sampled*
 parameter by 0.3%-10%. See `space.py`'s docstring.
 
-**The three-loop unification is NOT done.** What is done is the seam: `train.py`
-and `mqar_finetune.py` each get their loss from a `TrainTask` instead of inlining
-it, verified bit-identical on GPU. What remains, from
-`specs/2026-08-21-traintask-design.md` §10:
+**The three-loop unification is NOT done.** What is done is the seam: all three
+trainers now get their loss from `TrainTask` instead of inlining it, each verified
+bit-identical on GPU. `table2` and `mqar` were re-run at **worst |delta| =
+0.000000 over 40 steps** in job **440203** against their committed goldens (both
+have a 0.000000 noise floor, so that is exact and not a tolerance). What remains,
+from `docs/superpowers/specs/2026-08-21-traintask-design.md` §10:
 
-- **`table2.py` is untouched.** It has no dataset -- `make_train_batch(step, args)`
-  returns a whole batch keyed on the step counter -- so wrapping it needs
-  `batch_size=None` or a custom collate. Wrapping it naively yields `[B, B, T]`
-  *and silently consumes B steps of curriculum per iteration*. It is also the only
-  trainer running fp16 with a `GradScaler`. And its numbers would need
-  regenerating, which is a human's call.
-- **One loop still does not exist.** Both trainers delegate their loss; neither
-  shares a loop body. The duplication the design is about is still there.
+- **One loop still does not exist.** All three trainers delegate their loss;
+  none shares a loop body. The duplication the design is about is still there.
+- **`table2`'s numbers would need regenerating** if its architecture changed --
+  it did not, but that call is a human's either way.
+- **THE CENSUS WAS WRONG: there are FIVE training loops, not three.**
+  `experimentation/retrieval/adapt.py` and
+  `experimentation/evaluation/evaluate_retrieval.py` each build an AdamW and call
+  `loss.backward()` / `opt.step()`. The design doc is written about three loops
+  and its §9 out-of-scope list never mentions retrieval. Neither has a golden, so
+  neither can be refactored safely yet; both are recorded in
+  `code-tests/test_golden_coverage.py::NO_CURVE_EXPECTED` with the reason written
+  next to them. **Whether they belong in the unification is an open decision.**
+
+**No run launched through the production path is reproducible.** `RuntimeSpec`
+has `seed` but no `deterministic` field, and `run/train_argv.py` never passes
+`--deterministic`. Consequences worth knowing before trusting any comparison:
+
+- `golden_4m_curve.json`'s "noise floor" of **2.0e-4 is run-to-run
+  nondeterminism**, not a precision limit. The two synthetic goldens reach
+  0.000000 only because their capture scripts invoke `train.py`/`mqar_finetune.py`
+  directly with `--deterministic`. So one of three instruments is ~2000x blunter
+  than the others, and the gap is a missing field.
+- **No SKA route can be run reproducibly at all.** The route is selectable only
+  from a spec (the run system, which has no determinism), and determinism only
+  from a trainer's CLI (which has no route flag). Nothing bridges them.
+- No search trial is reproducible.
 - **`SyntheticDataSpec` still cannot launch.** `run/train_argv.py:101` and
   `run/data_verify.py:53` still refuse `kind: synthetic` by name, so MQAR is not
   yet an ordinary run with a run directory and a result envelope.
 
 **Never exercised:** multi-GPU / DDP. Which SKA backend a run actually selected
-(nothing asserts it). `ska_precision='fp64'` on GPU. An optuna study driving real
-training.
+(nothing asserts it). `ska_precision='fp64'` on GPU.
+
+**An optuna study CAN now drive real training** -- jobs 440183 (wiring) and
+440184 (pruning) both pass on the `exact_invchol` default: 4 trials COMPLETE with
+real objectives, `quick_eval.json` written and read back, 20 reported intermediate
+steps, and 440184 additionally shows **2 PRUNED**. What has *not* run is a study
+large enough to be a search rather than a wiring test; `configs/search/4m-adaptive.yaml`
+is the first one and is unrun.
+
+**The objective may not be sensitive to SKA at short horizons.** Comparing job
+439883 (chunked, ~100% wrong operator) against 440183 (exact) on the same four
+anchors, every objective moved by at most **2.3e-4** while the spread ACROSS
+anchors was **0.458**. Both runs were nondeterministic and the 4m instrument's
+noise floor is 2.0e-4, so the honest reading is that the route effect is *not
+resolvable here* -- not that it equals 2.3e-4. Either way it means a screen scored
+on 200-step loss cannot distinguish an exact SKA from a broken one, so it is
+unclear how much of that 0.458 is SKA at all. SKA's output is gated by
+`ska_layerscale_init` (0.01) into a Mamba residual, which is the mechanism.
+**Unresolved, and it bears directly on whether a short-horizon study ranks what
+you want ranked.**
 
 **Eval precision.** `quick_eval` and `evaluate.py` measure in fp32 while trials
 train in bf16. Measured spread (job 438232) is ~0.005 loss and **inconclusive** —
@@ -277,6 +315,27 @@ Long commit messages are deliberate — they carry the *why*, and the deviations
 | `specs/2026-08-19-*-identity-mapping.md` | the two deliberate identity breaks, with old → new hashes |
 
 ## 8. Corrections I made to my own earlier claims
+
+**"The route effect is 2.3e-4."** I wrote that as though it were a measurement of
+how much the SKA route matters. It is an upper bound at the instrument's own noise
+floor: both runs compared were nondeterministic and `golden_4m_curve.json`'s floor
+is 2.0e-4, so the correct statement is that the effect is *not resolvable* by that
+comparison. The conclusion that matters -- a 200-step screen cannot tell an exact
+SKA from a ~100%-wrong one -- survives either reading, but the number does not
+support the precision I gave it.
+
+**Two golden `args` records could not reproduce their own curves,** and I wrote
+both. The step grid is set by `--log_every`, whose defaults are 100
+(`mqar_finetune`) and 200 (`table2`), while both goldens log every 10 -- and
+neither recorded it. Driving a re-capture from the recorded args would have logged
+4 points, compared them against 40, and reported 36 missing steps as a run
+failure. Fixed and guarded; replicate values verified byte-equal.
+
+**I swept another agent's unstaged work into a commit of mine.** `git add -A` in a
+worktree shared with a concurrent agent put its `token_trace.py` /
+`inspect_html.py` fixes into `709c474`, whose subject is about the search space.
+Documented in `9f99315` rather than rebased, because the branch was already pushed.
+
 **"`proxy_chunked` is the cheap approximate screen."** I wrote that, switched
 `configs/search/smoke-4m.yaml` to it, and quoted `space.py`'s own docstring as the
 authority -- without checking what *approximate* meant. Job 440122 measured it:
