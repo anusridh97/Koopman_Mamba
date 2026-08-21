@@ -164,12 +164,19 @@ Read this section before trusting anything above it.
 steps per trial**, `trials.csv` / `top_trials.md` / `best_trial.json` written, and
 each trial's `spec.yaml` stamped with study/trial/anchor.
 
-What that proves is the *prerequisite* for pruning — that progress is parsed and
-reported to optuna. It does **not** prove `should_prune()` ever returned True.
-Nothing was pruned in that study and nothing could have been: all four trials were
-anchors, which the driver exempts, and `n_startup_trials = min(6, max(3, 4//3)) = 3`
-means nothing prunes until three trials COMPLETE. A study with non-anchor trials
-and a clearly-losing config is still needed to see a prune actually fire.
+What that proves is the *integration*: progress is parsed from a real log and
+reported to a real journal. Job 439891 then ran 6 **non-anchor** trials to ask
+whether a prune fires, and **none did** — legitimately. The objectives went 7.337,
+7.461, 7.388 then 6.954, 6.965, 6.942, so every trial after the first two beat the
+running median. Nothing was ever hopeless enough to cut. That is a fact about the
+space, not a gap in the machinery.
+
+The pruning *decision* is pinned at unit level instead, which is where it belongs:
+`test_search_pruning.py` covers a hopeless trial being cancelled and marked PRUNED,
+the anchor exemption in both directions, the timeout, and never reporting a step
+twice. So: decision logic unit-verified, integration GPU-verified, and a prune
+firing during a real study still unobserved — because the sampler kept finding
+better configs, which is the outcome you want.
 
 It took four attempts, and each failure was different and real: a trial-budget bug
 (25x overspend against a 15000-step base), an `exact_auto` stall, two bugs in my own
