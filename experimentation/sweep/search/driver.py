@@ -110,6 +110,30 @@ def run_trial(study: optuna.study.Study, trial, *,
     overrides = params_to_overrides(trial.params, base_model, max_steps=max_steps,
                                    seq_len=seq_len, backend_policy=backend_policy)
 
+    # The trial's BUDGET, applied here rather than in params_to_overrides.
+    #
+    # space.py deliberately does not own run length -- its docstring says so, and
+    # it is right: the space samples architecture and optimizer hyperparameters,
+    # not how long to train. It takes max_steps only because warmup_ratio is
+    # meaningless without a run length to be a ratio OF.
+    #
+    # But nothing then applied it, so a trial inherited the BASE spec's max_steps
+    # and the study's declared budget silently scaled warmup alone. Measured on a
+    # real study (job 439754): a spec asking for 200-step trials trained 400,
+    # because configs/runs/4m-golden.yaml says 400. Against
+    # configs/runs/50m-fineweb-3b.yaml, whose max_steps is 15000, a 12-trial study
+    # declaring 600 steps would have run 180,000 steps instead of 7,200 -- a 25x
+    # overspend, with nothing in the output saying so.
+    #
+    # It also broke the schedule twice over: warmup was computed against 200 while
+    # the run was 400, so the LR ramp was half the intended fraction, and
+    # StudySpec's prune_after_step < max_steps validation was checking against a
+    # number the run did not use.
+    #
+    # So the driver applies it: the driver is what knows the study's budget, while
+    # the space stays pure.
+    overrides["optim.max_steps"] = int(max_steps)
+
     # Reuse sweep's stamp keys so results.py's existing sweep_name column stays
     # meaningful, and add the study-specific pair beside them.
     stamp = {
