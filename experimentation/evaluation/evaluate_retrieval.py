@@ -64,69 +64,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
 
 import dataclasses
-from koopman_lm.config import build_config
 from experimentation.training.amp import amp_for
-from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.models.baselines import (
-    build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
-    build_mamba_ska_koopman,
-)
-
-
-# ============================================================================
-# Model loading (same as evaluate.py, supports all 3 types)
-# ============================================================================
-
-def load_model(checkpoint, model_size="180m",
-               tokenizer_name="mistralai/Mistral-7B-v0.1",
-               model_type=None):
-    """Load model from checkpoint, auto-detecting model_type from meta.pt."""
-    meta_path = checkpoint.replace("model.pt", "meta.pt")
-    meta = {}
-    if os.path.exists(meta_path):
-        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
-
-    if model_type is None:
-        model_type = meta.get("model_type", "koopman")
-
-    if "cfg" in meta:
-        cfg = meta["cfg"]
-    else:
-        cfg = build_config(model_size)
-
-    ckpt_dir = os.path.dirname(checkpoint)
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
-    except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    cfg = dataclasses.replace(cfg, vocab_size=len(tokenizer))   # frozen: use replace
-
-    if model_type == "mamba_attn":
-        model = build_mamba_attention(cfg)
-    elif model_type == "mamba_only":
-        model = build_mamba_only(cfg)
-    elif model_type == "mamba_ska_swiglu":
-        model = build_mamba_ska_swiglu(cfg)
-    elif model_type == "mamba_ska_koopman":
-        model = build_mamba_ska_koopman(cfg)
-    elif model_type == "koopman":
-        model = KoopmanLM(cfg)
-    else:
-        raise ValueError(f"unknown checkpoint model_type={model_type!r}")
-
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-
-    print(f"Loaded {model_type} model from {checkpoint}")
-    total = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters: {total:,}")
-
-    return model, cfg, tokenizer, model_type
+from experimentation.evaluation.loader import load_model
 
 
 # ============================================================================

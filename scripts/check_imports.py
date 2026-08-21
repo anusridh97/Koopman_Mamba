@@ -76,9 +76,9 @@ def _exported_names(body: list[ast.stmt]) -> set[str]:
     Crucially this does NOT use ast.walk. A name imported inside a function body is
     local to that function and is *not* importable from the module -- counting it
     would make the checker report false-clean, which is exactly the failure it exists
-    to prevent. (Concretely: evaluate.py imports the baseline builders inside a
-    function, so a walk-based version wrongly considers
-    `from experimentation.evaluation.evaluate import build_mamba_attention` resolvable.)
+    to prevent. (Concretely: a module that imports a name inside a function body
+    does not re-export it, so a walk-based version would wrongly consider
+    `from that.module import that_name` resolvable.)
 
     Top-level `if` / `try` / `with` blocks ARE descended into, because the kernels use
     them for optional Triton paths and lazy imports and those bindings really are

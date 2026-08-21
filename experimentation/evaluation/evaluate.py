@@ -43,14 +43,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 from torch.utils.data import DataLoader, IterableDataset
-from transformers import AutoTokenizer
 import dataclasses
-from koopman_lm.config import build_config, config_hash
-from koopman_lm.models.koopman_lm import KoopmanLM
-from koopman_lm.models.baselines import (
-    build_mamba_attention, build_mamba_only, build_mamba_ska_swiglu,
-    build_mamba_ska_koopman,
-)
+from koopman_lm.config import config_hash
+# load_model moved to loader.py (it was duplicated here and in
+# evaluate_retrieval.py); re-imported at module level because
+# experimentation/evaluation/harness.py:164 imports it from here.
+from experimentation.evaluation.loader import load_model
 from experimentation.evaluation.result import write_result
 from experimentation.run.provenance import git_commit
 
@@ -95,69 +93,6 @@ def write_checkpoint_result(checkpoint_path, task, metrics):
     return write_result(
         run_dir, checkpoint=checkpoint_name, task=task, metrics=metrics,
         run_id=raw_spec["run_id"], git_commit=git_commit())
-
-
-# ============================================================================
-# Model loading (handles all model types)
-# ============================================================================
-
-def load_model(checkpoint, model_size="180m",
-               tokenizer_name="mistralai/Mistral-7B-v0.1",
-               model_type=None):
-    """
-    Load a model from checkpoint. Auto-detects model_type from meta.pt.
-    Returns (model, cfg, tokenizer, model_type).
-    """
-    meta_path = checkpoint.replace("model.pt", "meta.pt")
-    meta = {}
-    if os.path.exists(meta_path):
-        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
-
-    if model_type is None:
-        model_type = meta.get("model_type", "koopman")
-
-    # Prefer the checkpoint's embedded config (auto-detects scale at any size);
-    # fall back to the model_size string for legacy checkpoints with no cfg.
-    if "cfg" in meta:
-        cfg = meta["cfg"]
-    else:
-        cfg = build_config(model_size)
-
-    # The tokenizer that actually produced this checkpoint's vocab is saved
-    # alongside it by train.py's tokenizer.save_pretrained(ckpt_dir) -- load
-    # THAT rather than tokenizer_name, whose default differs from train.py's
-    # own CLI default. Both are 32k-vocab, so a mismatch would silently
-    # mismap every token id to the wrong embedding instead of erroring.
-    ckpt_dir = os.path.dirname(checkpoint)
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
-    except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    cfg = dataclasses.replace(cfg, vocab_size=len(tokenizer))   # frozen: use replace
-
-    if model_type == "mamba_attn":
-        model = build_mamba_attention(cfg)
-    elif model_type == "mamba_only":
-        model = build_mamba_only(cfg)
-    elif model_type == "mamba_ska_swiglu":
-        model = build_mamba_ska_swiglu(cfg)
-    elif model_type == "mamba_ska_koopman":
-        model = build_mamba_ska_koopman(cfg)
-    elif model_type == "koopman":
-        model = KoopmanLM(cfg)
-    else:
-        raise ValueError(f"unknown checkpoint model_type={model_type!r}")
-
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-
-    print(f"Loaded {model_type} model from {checkpoint}")
-    total = sum(p.numel() for p in model.parameters())
-    print(f"  Parameters: {total:,}")
-
-    return model, cfg, tokenizer, model_type
 
 
 # ============================================================================
