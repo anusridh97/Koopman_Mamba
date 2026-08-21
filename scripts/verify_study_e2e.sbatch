@@ -41,6 +41,11 @@ export SCRATCH=/scratch/m000151-pm06/jkli
 export VENV=$SCRATCH/venvs/koopman-cuda
 export OPTUNA_SITE=/users/jkli/.venvs/koopman-optuna/site
 export RUN_ROOT=$SCRATCH/study-smoke-${SLURM_JOB_ID:-manual}
+# Which study to run. Defaults to the wiring smoke test; set STUDY_CONFIG to
+# configs/search/smoke-prune.yaml to ask instead whether pruning fires.
+export STUDY_CONFIG="${STUDY_CONFIG:-configs/search/smoke-4m.yaml}"
+export STUDY_NAME="$(basename "$STUDY_CONFIG" .yaml)"
+echo "study config: $STUDY_CONFIG  (study_name $STUDY_NAME)"
 
 echo "=== job ${SLURM_JOB_ID:-<interactive>} on $(hostname) ==="
 date -Is
@@ -86,7 +91,7 @@ fi
 echo "############################################################"
 echo "### STEP 1: dry run -- the plan, with nothing spent"
 echo "############################################################"
-python -m experimentation.sweep.search configs/search/smoke-4m.yaml \
+python -m experimentation.sweep.search "$STUDY_CONFIG" \
     --dry_run --run_root "$RUN_ROOT"
 echo "STATUS dry_run=$?"
 
@@ -94,7 +99,7 @@ echo "STATUS dry_run=$?"
 echo "############################################################"
 echo "### STEP 2: the real study"
 echo "############################################################"
-python -m experimentation.sweep.search configs/search/smoke-4m.yaml \
+python -m experimentation.sweep.search "$STUDY_CONFIG" \
     --run_root "$RUN_ROOT" 2>&1 | tee "$SCRATCH/study-e2e-${SLURM_JOB_ID:-manual}.log"
 echo "STATUS study=${PIPESTATUS[0]}"
 
@@ -127,7 +132,7 @@ if not journal.exists():
     raise SystemExit(1)
 storage = optuna.storages.JournalStorage(
     optuna.storages.journal.JournalFileBackend(str(journal)))
-study = optuna.load_study(study_name="smoke-4m", storage=storage)
+study = optuna.load_study(study_name=os.environ["STUDY_NAME"], storage=storage)
 
 print(f"\ntrials: {len(study.trials)}")
 by_state = {}
@@ -171,6 +176,16 @@ for s in specs[:3]:
     raw = yaml.safe_load(s.read_text())
     print(f"      {s.parent.name}: study={raw.get('study_name')} "
           f"trial={raw.get('trial_number')} anchor={raw.get('anchor_name')}")
+
+pruned = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+print(f"[6] PRUNED trials: {len(pruned)}")
+for t in pruned:
+    print(f"      trial {t.number}: pruned at step "
+          f"{max(t.intermediate_values, default='?')} -- "
+          f"{t.user_attrs.get('pruned', '')}")
+if not pruned:
+    print("      none. Legitimate if no sampled config fell below the median at a")
+    print("      reported step, or if every trial was anchor-exempt.")
 
 ok = bool(completed) and bool(found) and bool(reported)
 print(f"\nVERDICT: {'PASS' if ok else 'FAIL'}")

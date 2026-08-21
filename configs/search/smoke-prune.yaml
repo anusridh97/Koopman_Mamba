@@ -1,0 +1,25 @@
+# Does pruning actually FIRE? Job 439883 proved the prerequisite -- 20 reported
+# steps per trial -- but never saw should_prune() return True, and could not have:
+# every trial there was an anchor (which the driver exempts) and
+# n_startup_trials = min(6, max(3, 4//3)) = 3 needs three COMPLETIONS first.
+#
+# So this study is built to let a prune happen:
+#   NO design_file    every trial is sampled, so none is anchor-exempt
+#   n_trials 6        n_startup_trials = min(6, max(3, 6//3)) = 2, so trials 0-1
+#                     establish a median and 2-5 are candidates
+#   prune_after_step 30 with logging_steps 10 gives reports at 40,50,...,200 --
+#                     many chances to be judged, rather than one late one
+#
+# A PASS here is at least one PRUNED trial. Not pruning is also a legitimate
+# outcome -- it means no sampled config was bad enough to fall below the median at
+# a reported step -- so the verifier reports which happened rather than asserting.
+name: smoke-prune
+base: configs/runs/4m-golden.yaml
+n_trials: 6
+max_steps: 200
+prune_after_step: 30
+logging_steps: 10
+launcher: local
+backend_policy: proxy_chunked
+run_root: /scratch/m000151-pm06/jkli/study-prune
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
