@@ -1,0 +1,97 @@
+# The first real adaptive study: 4m base, TPE, pruning on.
+#
+# Distinct from smoke-4m.yaml and smoke-prune.yaml, which are WIRING tests. In
+# smoke-4m all four trials are anchors, so nothing is ever sampled and it is not
+# a search at all. This is a search: 4 anchors seed it and the remaining 44
+# trials come from the sampler.
+#
+# ## Why 4m and not 50m
+#
+# Machinery first. This study's job is to find out whether the search RANKS
+# sensibly -- whether pruning fires on the right trials, whether the journal
+# survives 48 trials, whether the objective separates architectures -- at a cost
+# where discovering a wiring bug is cheap. A 50m study answers the question you
+# actually care about and costs ~20x more to discover the same bug in.
+#
+# The honest limitation: at 5.2M parameters a ranking may not transfer to 50M.
+# Treat the winner here as a hypothesis about the 50m study, not as a result.
+#
+# ## Where the sizing comes from
+#
+# MEASURED, job 439883: 4 trials x 200 steps completed in 5:07 of total job time
+# including the dry run, the venv check and the verification pass -- so roughly
+# 50 s per trial. Decomposed, that is ~25 s of fixed per-trial cost (build the
+# model, run the final quick_eval, write the results) plus ~0.12 s/step.
+#
+# So 1500 steps is ~3.5 min per trial and 48 trials is **~2.8 hours serial**,
+# less once pruning starts killing trials at step 400. That is the budget this
+# file is chosen to fit: long enough that the loss separates, short enough to
+# finish unattended without holding a GPU overnight.
+#
+# max_steps 1500 rather than the golden curve's 400: at 200 steps the smoke
+# study's four anchors already spread 7.18-7.64, so 400 would probably rank them
+# -- but ranking on a curve that has not yet left its warmup transient ranks
+# optimisation noise as much as architecture. 1500 is ~4x the golden and puts
+# every trial well past `warmup_steps` (warmup_ratio maxes at 0.06 -> 90 steps).
+#
+# ## Serial unless you say otherwise
+#
+# `n_jobs` is a HINT to the sampler, not a fleet: it only flips constant_liar on
+# so parallel workers stop proposing identical points. Launching the workers is
+# the operator's job. With `launcher: slurm` and one driver, trials are submitted
+# and awaited one at a time. To actually parallelise, run N copies of
+#
+#     python -m experimentation.sweep.search configs/search/4m-adaptive.yaml
+#
+# against this same `storage` journal, and raise n_jobs to N so the sampler knows.
+#
+# ## backend_policy
+#
+# Left at the default `exact_invchol` deliberately -- see space.py's docstring for
+# the measurement (jobs 440122 / 440135). It is exact to 5.1e-13 in fp64 and
+# measured 0.92x the chunked approximation at this exact geometry, so the sizing
+# above needs no speed/fidelity tradeoff. Do NOT set `exact_auto` here: the fused
+# kernel needs rank exactly 24 and this space samples {8,16,24,32}, so three of
+# four sampled ranks fall off a 167x-738x cliff and the wall-clock estimate above
+# becomes meaningless.
+name: 4m-adaptive
+base: configs/runs/4m-golden.yaml
+
+n_trials: 48
+max_steps: 1500
+
+# Pruning fires after step 400 -- past warmup, and early enough that killing a
+# trial saves the majority of its cost. MedianPruner still needs COMPLETED trials
+# to have a median at all (n_startup_trials), so the first several trials always
+# run to completion regardless.
+prune_after_step: 400
+logging_steps: 25
+
+launcher: slurm
+n_jobs: 1
+seed: 2026
+direction: minimize
+
+# Four labelled anchors, so the study starts from designs someone chose rather
+# than from 10 random TPE startup trials. This is example_anchors.yaml, not a
+# curated set -- swap in a curated design file when one exists.
+design_file: configs/search/example_anchors.yaml
+
+run_root: /scratch/m000151-pm06/jkli/study-4m-adaptive
+storage: /scratch/m000151-pm06/jkli/study-4m-adaptive/optuna_journal.log
+
+# HELD OUT, unlike the default. The default is the base spec's own training
+# shard, which is fine for a proxy but means the score you rank on is training
+# loss. A ranking you intend to act on should not be.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# A trial that takes 8x its measured cost is stuck, not slow. 3.5 min expected,
+# so 30 min is generous; the 2 h default would waste an hour of the 2.8 h budget
+# on one dead trial.
+trial_timeout_seconds: 1800
+
+# Empty: minimise the measured loss and nothing else. Weighted objectives are
+# available (metrics.objective_from_metrics) but a first study should rank on the
+# thing it measures directly, and multi-objective would disable pruning outright
+# (Trial.report raises NotImplementedError under multiple directions).
+objective: {}
