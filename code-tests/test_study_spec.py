@@ -2,11 +2,11 @@
 
 Measured what optuna 4.9's journal actually persists: params with distributions,
 values, per-step intermediate_values, state, user_attrs, timestamps, worker_id.
-So the space and every trajectory are already durable, and this spec must NOT
+So the space and every trajectory are already durable, and this study_spec must NOT
 re-declare the space -- space.py owns it once.
 
 What the journal cannot hold: anything optuna never sees (max_steps, the base
-spec, the shard -- constants of our objective, invisible to a black-box
+study_spec, the shard -- constants of our objective, invisible to a black-box
 optimiser), and one thing it does use but does not persist (the sampler and
 pruner, reconstructed by whoever opens the study, with a different pruner
 accepted silently).
@@ -67,11 +67,11 @@ def test_it_does_not_redeclare_the_search_space():
 # ------------------------------------------------------------------- loading ----
 
 def test_a_minimal_spec_loads(tmp_path):
-    spec = load_study_spec(_write(tmp_path))
-    assert spec.name == "ska-depth"
-    assert (spec.n_trials, spec.max_steps) == (12, 600)
-    assert spec.launcher == "slurm"          # the default worth having
-    assert spec.objective == {}             # loss only, until told otherwise
+    study_spec = load_study_spec(_write(tmp_path))
+    assert study_spec.name == "ska-depth"
+    assert (study_spec.n_trials, study_spec.max_steps) == (12, 600)
+    assert study_spec.launcher == "slurm"          # the default worth having
+    assert study_spec.objective == {}             # loss only, until told otherwise
 
 
 @pytest.mark.parametrize("missing", ["name", "base", "n_trials", "max_steps"])
@@ -93,9 +93,9 @@ def test_an_unknown_key_is_an_error_not_a_shrug(tmp_path):
 
 
 def test_it_is_frozen(tmp_path):
-    spec = load_study_spec(_write(tmp_path))
+    study_spec = load_study_spec(_write(tmp_path))
     with pytest.raises(Exception):
-        spec.n_trials = 99
+        study_spec.n_trials = 99
 
 
 # ---------------------------------------------------------------- validation ----
@@ -132,8 +132,8 @@ def test_a_pruner_that_could_never_fire_is_rejected(tmp_path):
 
 def test_prune_after_step_zero_is_allowed(tmp_path):
     """Saying 'never mind, prune from the start' explicitly must stay legal."""
-    spec = load_study_spec(_write(tmp_path, prune_after_step=0))
-    assert spec.prune_after_step == 0
+    study_spec = load_study_spec(_write(tmp_path, prune_after_step=0))
+    assert study_spec.prune_after_step == 0
 
 
 # ------------------------------------------------------------------ study_id ----
@@ -157,7 +157,7 @@ def test_study_id_is_not_a_run_identity():
     """Recorded as a test because it is the mistake sweep_id's docstring exists
     to prevent: two studies proposing the same config must produce the same
     run_id, or the content-addressed run directory stops being content-addressed."""
-    from experimentation.run import spec as run_spec
+    from experimentation.run import study_spec as run_spec
     src = (pathlib.Path(__file__).resolve().parents[1]
            / "experimentation/run/spec.py").read_text()
     assert "study_id" not in src, (

@@ -33,7 +33,8 @@ from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
 from experimentation.training.repro import seed_everything, enable_determinism
 from experimentation.training.optim import param_groups as _param_groups
 from experimentation.training.amp import amp_for
-from experimentation.training.task import IterContext, ShardTask
+from experimentation.training.loop import run_training_loop
+from experimentation.training.task import ShardTask
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.mamba import Mamba2Block
@@ -344,10 +345,15 @@ def train(args):
             print(f"  Resumed from {ckpt_dir} at step {start_step}, "
                   f"epoch {start_epoch}, samples_consumed {start_samples_consumed}")
 
-    def _save_all(step, epoch, samples_consumed, dirname=None):
+    def _save_all(step, epoch, samples_consumed, log_window=None, dirname=None):
         _save_checkpoint(raw_model, cfg, tokenizer, step, args, dirname=dirname)
         resume_path = os.path.join(args.output_dir, "resume.pt")
-        # The logging window travels with the resume state. Without it, the first
+        # The logging window travels with the resume state, and is PASSED IN
+        # because the loop owns those counters -- reading them from an enclosing
+        # scope here is what broke when the loop moved out (NameError on the
+        # preempt path, caught by test_module_import_health).
+        #
+        # Without it, the first
         # progress line after a resume averages over a SHORT window -- the run
         # that stopped at 266 reports steps 267..270 while an uninterrupted run
         # reports 261..270 -- so the two logs disagree at exactly one step even
@@ -360,161 +366,33 @@ def train(args):
         save_resume_state(resume_path, step=step, epoch=epoch,
                            samples_consumed=samples_consumed,
                            optimizer=optimizer, scheduler=scheduler,
-                           extra={"log_window": {
-                               "running_loss": float(running_loss.item()),
-                               "loss_count": int(loss_count)}})
+                           extra={"log_window": dict(log_window or {})})
 
     model.train()
-    step = start_step; micro_step = 0
-    # Resumed mid-window if the checkpoint carried one. `.get` with a zero
-    # default on both sides: every resume.pt written before this existed has no
-    # log_window, and such a run must still resume -- it just reports one short
-    # window, which is the old behaviour.
-    _win = (resume_state.get("log_window") or {}) if args.resume else {}
-    running_loss = torch.tensor(float(_win.get("running_loss", 0.0)), device=device)
-    loss_count = int(_win.get("loss_count", 0))
-    t_start = time.time(); tokens_seen = 0
+    # step/micro_step/running_loss/loss_count/tokens_seen are the LOOP's
+    # counters now and are initialised there; t_start stays because the
+    # post-training summary below prints against it.
+    t_start = time.time()
     # Which loss convention this loop is running. ShardTask means "the dataset
     # already offset input_ids/labels, so score positionally, inside the model,
     # carrying loss_weights" -- exactly what this file did inline. Naming it makes
     # the convention explicit at the top of the loop rather than implicit in the
     # forward call, and it is the seam SyntheticTask attaches to next.
     task = ShardTask()
-    if is_main:
-        eff = args.per_device_train_batch_size * args.gradient_accumulation_steps * world_size
-        # Flushed because this is the run's first sign of life. In job 439754 it
-        # was the only line that survived 21 minutes -- and only by accident, a
-        # DataLoader fork calling _flush_std_streams just after it.
-        print(f"\nTraining: {args.max_steps} steps, eff_batch={eff}, "
-              f"tok/step={eff*args.max_seq_len:,}", flush=True)
-    optimizer.zero_grad(set_to_none=True)
-
-    epoch = start_epoch
-    preempted = False
-    while step < args.max_steps:
-        if hasattr(train_ds, 'set_epoch'): train_ds.set_epoch(epoch)
-        # §5.2's explicit index arithmetic (no implicit shuffle=True) and the
-        # required `generator=` now live in TrainTask.iter_batches, unchanged --
-        # see its docstring for why each is load-bearing. Moved rather than
-        # rewritten so the one loop can serve table2, whose batches are a
-        # function of the step counter and have no epoch permutation at all.
-        samples_consumed = start_samples_consumed if epoch == start_epoch else 0
-        epoch_loader = task.iter_batches(train_ds, args, IterContext(
-            epoch=epoch, start_step=step, skip_samples=samples_consumed,
-            sampler=sampler if is_ddp else None,
-            is_ddp=is_ddp, local_rank=local_rank))
-        for batch in epoch_loader:
-            if step >= args.max_steps: break
-            ids = batch["input_ids"].to(device, non_blocking=True)
-            labels = batch["labels"].to(device, non_blocking=True)
-            lw = batch.get("loss_weights")
-            if lw is not None: lw = lw.to(device, non_blocking=True)
-            with autocast_ctx:
-                # §6.2 step one: the loss now comes from the TASK rather than
-                # being inlined here. Nothing else changes yet -- ShardTask's
-                # step_loss is `model(input_ids, labels, loss_weights)["loss"]`,
-                # pinned bit-identical to the two lines it replaces by
-                # code-tests/test_train_task.py.
-                #
-                # This is the seam the unification needs, and putting it in first
-                # while the loop is otherwise untouched means the risky part --
-                # collapsing three loops -- lands against a loop that already
-                # delegates, verified by the 4m golden curve rather than by
-                # inspection.
-                #
-                # The loop still enters autocast; a task never manages precision.
-                raw_loss = task.step_loss(model, {
-                    "input_ids": ids, "labels": labels, "loss_weights": lw})
-                scaled_loss = raw_loss / args.gradient_accumulation_steps
-            scaled_loss.backward()
-            running_loss += raw_loss.detach(); loss_count += 1
-            tokens_seen += ids.numel(); micro_step += 1
-            samples_consumed += ids.size(0)
-            if micro_step % args.gradient_accumulation_steps == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                optimizer.step(); scheduler.step()
-                optimizer.zero_grad(set_to_none=True); step += 1
-                if is_main and step % args.logging_steps == 0:
-                    avg = running_loss.item() / max(loss_count, 1)
-                    lr = optimizer.param_groups[0]["lr"]; el = time.time() - t_start
-                    tps = tokens_seen / el; ppl = math.exp(min(avg, 20))
-                    # flush=True is load-bearing, not tidiness. When stdout is
-                    # a FILE rather than a tty -- which it is for every
-                    # non-blocking local launch, and for sbatch -- CPython
-                    # block-buffers at 8 KB. A 200-step trial at logging_steps 10
-                    # emits ~1.4 KB, so without this the log stays EMPTY until the
-                    # process exits and then flushes everything at once.
-                    #
-                    # Two things break on that. A cancelled run loses its output
-                    # entirely (job 439754 showed 21 minutes of nothing, and was
-                    # not hung -- ~70 steps had run). And pruning becomes
-                    # decorative: wait_for_objective tails this log, so every
-                    # report lands after training already finished. Job 439883
-                    # recorded "20 reported steps" per trial and every one of them
-                    # arrived too late to prune anything.
-                    print(f"step {step:>6d}/{args.max_steps} | loss {avg:.4f} | "
-                          f"ppl {ppl:.1f} | lr {lr:.2e} | {tps/1e3:.1f}K tok/s",
-                          flush=True)
-                    if args.wandb_project:
-                        import wandb
-                        wandb.log({"loss": avg, "ppl": ppl, "lr": lr,
-                                   "tokens_per_sec": tps}, step=step)
-                    running_loss = torch.tensor(0.0, device=device); loss_count = 0
-
-                # ---- SKA health diagnostics (separate cheap fwd, amortized) ----
-                if monitor is not None and step % args.diag_every == 0:
-                    was_training = raw_model.training
-                    with torch.no_grad(), monitor.capture():
-                        raw_model(input_ids=ids)        # labels=None -> no loss
-                    if was_training:
-                        raw_model.train()
-                    health = monitor.collect()
-                    scal = {k: v for k, v in health.items()
-                            if isinstance(v, (int, float))}
-                    radii = [v for k, v in scal.items()
-                             if k.endswith("/spectral_radius_mean")]
-                    gates = [v for k, v in scal.items() if k.endswith("/gate_mag")]
-                    rad_avg = sum(radii) / len(radii) if radii else float("nan")
-                    gate_avg = sum(gates) / len(gates) if gates else float("nan")
-                    rr = scal.get("ska/residual_ratio", float("nan"))
-                    lmr = min((v for k, v in scal.items()
-                               if k.endswith("/lambda_min_over_ridge")), default=float("nan"))
-                    print(f"  [ska-health] step {step}: radius~{rad_avg:.3f} "
-                          f"gate~{gate_avg:.2e} resid_ratio~{rr:.2e} "
-                          f"lmin/ridge~{lmr:.2f}")
-                    if args.wandb_project:
-                        import wandb
-                        wandb.log(health, step=step)
-
-                # ---- SKA gradient-flow diagnostics (extra fwd+bwd, amortized) ----
-                if grad_monitor is not None and step % args.diag_every == 0:
-                    # dedicated fwd+bwd on the current micro-batch; grads are
-                    # cleared afterwards so the next accumulation window starts
-                    # clean (we are right after optimizer.zero_grad anyway).
-                    with grad_monitor.capture():
-                        gout = raw_model(input_ids=ids, labels=labels, loss_weights=lw)
-                        gout["loss"].backward()
-                    raw_model.zero_grad(set_to_none=True)
-                    gflow = grad_monitor.collect()
-                    if gflow:
-                        gr = gflow.get("ska/grad_norm_ratio", float("nan"))
-                        print(f"  [ska-grad] step {step}: grad_norm_ratio~{gr:.2e}")
-                        if args.wandb_project:
-                            import wandb
-                            wandb.log(gflow, step=step)
-
-                if is_main and step > 0 and step % args.save_steps == 0:
-                    _save_all(step, epoch, samples_consumed)
-                if is_main and preempt_flag.is_set():
-                    _save_all(step, epoch, samples_consumed)
-                    print(f"  SIGUSR1 received -- wrote resume.pt at step {step}, exiting cleanly")
-                    preempted = True
-                    break
-        if preempted:
-            break
-        epoch += 1
-
-    if preempted:
+    result = run_training_loop(
+        task=task, model=model, raw_model=raw_model, optimizer=optimizer,
+        scheduler=scheduler, args=args, device=device, train_ds=train_ds,
+        autocast_ctx=autocast_ctx, _save_all=_save_all,
+        start_step=start_step, start_epoch=start_epoch,
+        start_samples_consumed=start_samples_consumed,
+        log_window=(resume_state.get("log_window") if args.resume else None),
+        is_main=is_main, is_ddp=is_ddp, world_size=world_size,
+        local_rank=local_rank, sampler=sampler, monitor=monitor,
+        grad_monitor=grad_monitor, preempt_flag=preempt_flag, t_start=t_start)
+    step, tokens_seen = result.step, result.tokens_seen
+    if result.preempted:
+        # Teardown stays here because setup does. The loop reports; it does not
+        # dismantle a process group it did not create.
         if is_ddp:
             torch.distributed.destroy_process_group()
         return

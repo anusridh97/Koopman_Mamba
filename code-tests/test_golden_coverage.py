@@ -46,6 +46,12 @@ GOLDENS = sorted(REPO.glob("code-tests/golden_*_curve.json"))
 #
 # Recorded here rather than quietly excluded, and rather than halting step 4 over
 # it: table2 is fully specified and unaffected. See REVIEW.md.
+#: Discovery now also finds modules that DELEGATE to the shared loop, so the
+#: shared loop itself turns up. It is not a trainer -- nothing launches it and it
+#: has no config to capture a curve from -- so it is filtered rather than
+#: exempted.
+SHARED_LOOP = "experimentation/training/loop.py"
+
 NO_CURVE_EXPECTED = {
     "experimentation.retrieval.adapt": (
         "A fourth training loop (AdamW + backward + step, contrastive retrieval "
@@ -70,14 +76,15 @@ def _goldens_by_trainer():
 def test_the_discovery_finds_the_trainers_we_know_about():
     """Guards the guard. If discovery silently returns [] every parametrised test
     below is vacuously green, which is how the hardcoded-roster bug survived."""
-    found = _discover_trainers()
+    found = [p for p in _discover_trainers() if p != SHARED_LOOP]
     assert len(found) >= 3, f"expected at least 3 trainers, discovered {found}"
     joined = " ".join(found)
     for expected in ("training/train.py", "mqar_finetune.py", "table2.py"):
         assert expected in joined, f"{expected} not discovered; got {found}"
 
 
-@pytest.mark.parametrize("trainer_path", _discover_trainers())
+@pytest.mark.parametrize("trainer_path",
+                         [p for p in _discover_trainers() if p != SHARED_LOOP])
 def test_every_trainer_has_a_golden_curve(trainer_path):
     """A trainer with no golden cannot be refactored safely: "the loss still goes
     down" is not evidence the loop is unchanged. Both loop swaps done so far

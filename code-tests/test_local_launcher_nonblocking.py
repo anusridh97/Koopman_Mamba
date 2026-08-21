@@ -304,7 +304,11 @@ def test_every_trainer_flushes_its_progress_line():
     """Belt to PYTHONUNBUFFERED's braces. A trainer launched some other way --
     sbatch, by hand, by a future launcher -- still needs its own flush."""
     import ast
-    for rel in ("experimentation/training/train.py",
+    # training/loop.py rather than train.py: the loop was extracted, so that is
+    # where train.py's progress line lives now. Following the line rather than
+    # the file is the point -- a hardcoded list would have reported the flush as
+    # MISSING when it had merely moved, which reads as a regression.
+    for rel in ("experimentation/training/loop.py",
                 "experimentation/experiments/mqar_finetune.py",
                 "experimentation/experiments/table2.py"):
         tree = ast.parse((REPO / rel).read_text())

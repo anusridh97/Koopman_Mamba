@@ -174,7 +174,7 @@ def load_study_spec(path) -> StudySpec:
     return StudySpec(**raw)
 
 
-def study_id(spec: StudySpec) -> str:
+def study_id(study_spec: StudySpec) -> str:
     """A content hash of the study's own declaration.
 
     Stamped into each trial's materialized spec.yaml alongside `study_name`, so
@@ -184,5 +184,5 @@ def study_id(spec: StudySpec) -> str:
     Two studies that happen to propose the same config must produce the same
     run_id, or the content-addressed run directory stops being content-addressed.
     """
-    blob = json.dumps(asdict(spec), sort_keys=True, default=str)
+    blob = json.dumps(asdict(study_spec), sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]

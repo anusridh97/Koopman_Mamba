@@ -57,12 +57,24 @@ def _discover_trainers():
         for path in sorted((REPO / pkg).rglob("*.py")):
             if "__pycache__" in path.parts or "/data/" in str(path):
                 continue
+            rel = path.relative_to(REPO)
             try:
-                if _progress_skeletons(path.relative_to(REPO)):
-                    found.append(str(path.relative_to(REPO)))
+                # Prints its own line, OR delegates to the shared loop that does.
+                # Before the loop was extracted these were the same thing; now a
+                # trainer can conform by calling run_training_loop, and a
+                # discovery that only looked for prints would report train.py as
+                # having lost its progress line.
+                if _progress_skeletons(rel) or _delegates_to_shared_loop(rel):
+                    found.append(str(rel))
             except SyntaxError:
                 continue
     return found
+
+
+def _delegates_to_shared_loop(rel) -> bool:
+    """Does this module hand its loop to training/loop.py?"""
+    src = (REPO / rel).read_text()
+    return "run_training_loop(" in src and str(rel) != SHARED_LOOP
 
 
 def _render(node):
@@ -107,6 +119,12 @@ def _progress_skeletons(path):
 #: what the pruner tails. train.py today; the other two once SyntheticDataSpec
 #: is wired (§6.2), and getting the format right before that is cheaper than
 #: after.
+#: The one place a progress line is now printed. Not search-launchable itself --
+#: it is the loop, not a trainer -- but its line MUST conform, because after the
+#: extraction it is the only line train.py emits, and both the golden comparator
+#: and the search pruner parse it.
+SHARED_LOOP = "experimentation/training/loop.py"
+
 SEARCH_LAUNCHABLE = (
     "experimentation/training/train.py",
     "experimentation/experiments/mqar_finetune.py",
@@ -124,7 +142,12 @@ EXEMPT = {
 }
 
 DISCOVERED = _discover_trainers()
-TRAINERS = [p for p in DISCOVERED if p in SEARCH_LAUNCHABLE]
+#: Modules whose OWN printed line must be parseable. A search-launchable trainer
+#: that delegates satisfies the requirement through SHARED_LOOP instead, which
+#: test_a_delegating_trainer_actually_delegates checks it really does.
+TRAINERS = [p for p in DISCOVERED
+            if (p in SEARCH_LAUNCHABLE or p == SHARED_LOOP)
+            and _progress_skeletons(p)]
 
 
 def test_discovery_sees_every_search_launchable_trainer():
@@ -137,7 +160,8 @@ def test_discovery_sees_every_search_launchable_trainer():
 def test_no_undeclared_trainer_appeared():
     """A new module printing a progress line must be classified, not ignored.
     Silence here is how table2 stayed invisible while carrying the defect."""
-    unclassified = sorted(set(DISCOVERED) - set(SEARCH_LAUNCHABLE) - set(EXEMPT))
+    unclassified = sorted(set(DISCOVERED) - set(SEARCH_LAUNCHABLE)
+                          - set(EXEMPT) - {SHARED_LOOP})
     assert not unclassified, (
         f"{unclassified} print progress lines and are neither declared "
         "search-launchable nor exempted. Decide which, with a reason.")
@@ -213,3 +237,37 @@ def test_the_current_format_parses_to_real_values():
     (p,) = parse_progress(line)
     assert (p.step, p.loss, p.ppl) == (10, 3.1234, 22.7)
     assert p.tokens_per_sec == 50000.0
+
+
+def test_a_delegating_trainer_actually_delegates():
+    """The hole the delegation rule would otherwise open.
+
+    Once "prints a conforming line" is no longer required of every trainer, a
+    trainer could satisfy discovery by delegating to nothing at all -- or by
+    delegating and ALSO printing its own nonconforming line. So each
+    search-launchable trainer must do exactly one of the two, and be checked for
+    the one it claims.
+    """
+    for rel in SEARCH_LAUNCHABLE:
+        prints = bool(_progress_skeletons(rel))
+        delegates = _delegates_to_shared_loop(rel)
+        assert prints or delegates, (
+            f"{rel} neither prints a progress line nor calls run_training_loop, "
+            f"so it emits nothing the pruner or the golden comparator can read")
+        if delegates and not prints:
+            src = (REPO / SHARED_LOOP).read_text()
+            assert "loss {avg:.4f}" in src, (
+                f"{rel} delegates to {SHARED_LOOP}, which no longer prints the "
+                f"`loss %.4f` field both parsers depend on")
+
+
+def test_the_shared_loop_line_is_parseable():
+    """It is now the only progress line train.py emits, so it carries the whole
+    contract with the pruner and the golden comparator."""
+    skeletons = _progress_skeletons(SHARED_LOOP)
+    assert skeletons, f"{SHARED_LOOP} prints no progress line"
+    assert any(TRAIN_RE.search(sk) for sk in skeletons), (
+        f"{SHARED_LOOP}'s line does not match TRAIN_RE, so every delegating "
+        f"trainer is silently unprunable. Candidates:\n  "
+        + "\n  ".join(repr(sk) for sk in skeletons))
+

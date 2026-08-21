@@ -49,9 +49,9 @@ def test_there_is_at_least_one_committed_study():
 def test_it_parses_as_a_study_spec(path):
     from experimentation.sweep.search.studyspec import load_study_spec
 
-    spec = load_study_spec(path)
-    assert spec.name, f"{path.name} has no study name"
-    assert spec.n_trials > 0 and spec.max_steps > 0
+    study_spec = load_study_spec(path)
+    assert study_spec.name, f"{path.name} has no study name"
+    assert study_spec.n_trials > 0 and study_spec.max_steps > 0
 
 
 @pytest.mark.parametrize("path", _study_configs(), ids=lambda p: p.name)
@@ -79,9 +79,9 @@ def test_the_repo_relative_files_it_points_at_are_committed(path):
     that do not exist on a CPU box."""
     from experimentation.sweep.search.studyspec import load_study_spec
 
-    spec = load_study_spec(path)
+    study_spec = load_study_spec(path)
     for field in ("base", "design_file"):
-        value = getattr(spec, field)
+        value = getattr(study_spec, field)
         if not value:
             continue
         assert (REPO / value).is_file(), \
@@ -95,9 +95,9 @@ def test_pruning_and_a_multi_objective_are_not_both_requested(path):
     The failure surfaces mid-study, after trials have already been spent."""
     from experimentation.sweep.search.studyspec import load_study_spec
 
-    spec = load_study_spec(path)
-    weights = [k for k, v in (spec.objective or {}).items() if v]
+    study_spec = load_study_spec(path)
+    weights = [k for k, v in (study_spec.objective or {}).items() if v]
     if len(weights) > 1:
-        assert spec.prune_after_step <= 0, (
+        assert study_spec.prune_after_step <= 0, (
             f"{path.name} weights {weights} AND prunes after step "
-            f"{spec.prune_after_step}; optuna cannot do both")
+            f"{study_spec.prune_after_step}; optuna cannot do both")

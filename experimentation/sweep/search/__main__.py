@@ -59,16 +59,16 @@ def parse_args(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("study", help="path to configs/search/<name>.yaml")
     p.add_argument("--run_root", default=None,
-                   help="override the spec's run_root (default: $RUN_ROOT or ./runs)")
+                   help="override the study spec's run_root (default: $RUN_ROOT or ./runs)")
     p.add_argument("--launcher", choices=("local", "slurm"), default=None,
-                   help="override the spec's launcher. 'local' runs trials in "
+                   help="override the study spec's launcher. 'local' runs trials in "
                         "this process's allocation, which avoids a queue wait "
                         "per trial; 'slurm' submits one job per trial")
     p.add_argument("--dry_run", action="store_true",
                    help="print the plan and materialize nothing -- the GPU-free "
                         "surface, and the way to check a study before spending on it")
     p.add_argument("--n_trials", type=int, default=None,
-                   help="override the spec's target study size. This is a TARGET, "
+                   help="override the study spec's target study size. This is a TARGET, "
                         "not 'this many more': resuming a 15-trial study that "
                         "finished 10 runs 5")
     p.add_argument("--allow-dirty", dest="allow_dirty", action="store_true",
@@ -100,54 +100,54 @@ def _objective_producer_exists(repo_root: Path) -> bool:
     return False
 
 
-def _print_plan(spec, args, *, n_anchors, study_dir, run_root, launcher):
-    sid = compute_study_id(spec)
-    print(f"[search] study        {spec.name}  (study_id {sid})")
-    print(f"[search] base spec    {spec.base}")
-    print(f"[search] budget       {args.n_trials or spec.n_trials} trials "
-          f"x {spec.max_steps} steps")
+def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher):
+    sid = compute_study_id(study_spec)
+    print(f"[search] study        {study_spec.name}  (study_id {sid})")
+    print(f"[search] base spec    {study_spec.base}")
+    print(f"[search] budget       {args.n_trials or study_spec.n_trials} trials "
+          f"x {study_spec.max_steps} steps")
     print(f"[search] launcher     {launcher}  ->  run_root {run_root}")
     # study.py:160 writes optuna_journal.log. Printing a different name here sent
     # me looking for a file that was never going to exist -- and a second worker
     # told to "point at the journal in the plan output" would have opened an empty
     # one and believed it was collaborating.
     print(f"[search] journal      {study_dir / 'optuna_journal.log'}")
-    print(f"[search] pruning      after step {spec.prune_after_step}, "
-          f"reporting every {spec.logging_steps}")
-    if spec.design_file:
-        print(f"[search] anchors      {n_anchors} from {spec.design_file}")
+    print(f"[search] pruning      after step {study_spec.prune_after_step}, "
+          f"reporting every {study_spec.logging_steps}")
+    if study_spec.design_file:
+        print(f"[search] anchors      {n_anchors} from {study_spec.design_file}")
     else:
         print("[search] anchors      none -- the first trials are random AND "
               "unprunable (nothing prunes until trials COMPLETE)")
-    if spec.n_jobs > 1:
-        print(f"[search] n_jobs {spec.n_jobs}: constant_liar ON. This spawns "
-              f"nothing -- run this command {spec.n_jobs}x on one journal")
-    if spec.objective:
-        print(f"[search] objective    loss + {spec.objective}")
+    if study_spec.n_jobs > 1:
+        print(f"[search] n_jobs {study_spec.n_jobs}: constant_liar ON. This spawns "
+              f"nothing -- run this command {study_spec.n_jobs}x on one journal")
+    if study_spec.objective:
+        print(f"[search] objective    loss + {study_spec.objective}")
     else:
         print("[search] objective    measured loss, nothing else")
 
 
 def main(argv=None):
     args = parse_args(argv)
-    spec = load_study_spec(args.study)
+    study_spec = load_study_spec(args.study)
 
     repo_root = Path(__file__).resolve().parents[3]
-    run_root = args.run_root or os.environ.get("RUN_ROOT") or spec.run_root
-    launcher_name = args.launcher or spec.launcher
-    n_trials = args.n_trials or spec.n_trials
+    run_root = args.run_root or os.environ.get("RUN_ROOT") or study_spec.run_root
+    launcher_name = args.launcher or study_spec.launcher
+    n_trials = args.n_trials or study_spec.n_trials
 
-    study_dir = Path(run_root) / "_studies" / f"{spec.name}.{compute_study_id(spec)}"
+    study_dir = Path(run_root) / "_studies" / f"{study_spec.name}.{compute_study_id(study_spec)}"
 
-    base_sections = _base_sections(spec.base)
+    base_sections = _base_sections(study_spec.base)
     base_model = resolve_model_config(base_sections["model"])
-    space = search_space(base_model, base_name=spec.base)
+    space = search_space(base_model, base_name=study_spec.base)
 
     designs = []
-    if spec.design_file:
-        designs = load_designs(spec.design_file, minimum=1)
+    if study_spec.design_file:
+        designs = load_designs(study_spec.design_file, minimum=1)
 
-    _print_plan(spec, args, n_anchors=len(designs), study_dir=study_dir,
+    _print_plan(study_spec, args, n_anchors=len(designs), study_dir=study_dir,
                 run_root=run_root, launcher=launcher_name)
 
     no_objective = not _objective_producer_exists(repo_root)
@@ -190,10 +190,10 @@ def main(argv=None):
     from experimentation.sweep.search.study import create_study, enqueue_anchors
 
     study = create_study(
-        study_name=spec.name, study_dir=study_dir, seed=spec.seed,
-        n_jobs=spec.n_jobs, prune_after_step=spec.prune_after_step,
-        n_trials=n_trials, logging_steps=spec.logging_steps,
-        storage_url=spec.storage)
+        study_name=study_spec.name, study_dir=study_dir, seed=study_spec.seed,
+        n_jobs=study_spec.n_jobs, prune_after_step=study_spec.prune_after_step,
+        n_trials=n_trials, logging_steps=study_spec.logging_steps,
+        storage_url=study_spec.storage)
 
     if designs:
         added = enqueue_anchors(study, designs, base_model, space,
@@ -207,7 +207,7 @@ def main(argv=None):
     # finds something. Set on the LAUNCHER rather than the spec, since whether a
     # run scores itself is a property of who launched it -- anything on the spec
     # would be hashed into run_id, and a scored run is not a different experiment.
-    scoring = {"eval_on_final": True, "eval_data_dir": spec.eval_data_dir}
+    scoring = {"eval_on_final": True, "eval_data_dir": study_spec.eval_data_dir}
     launcher = (LocalLauncher(**scoring) if launcher_name == "local"
                 else SlurmLauncher(repo_root=str(repo_root), **scoring))
 
@@ -221,18 +221,18 @@ def main(argv=None):
             # only remaining symptom is an objective that never arrives.
             return wait_for_objective(
                 study_, trial, run_dir,
-                timeout_seconds=spec.trial_timeout_seconds,
-                **spec.objective)
+                timeout_seconds=study_spec.trial_timeout_seconds,
+                **study_spec.objective)
         return read
 
     outcomes = drive(
         study, n_trials=n_trials,
         base_sections=base_sections, base_model=base_model, space=space,
-        max_steps=spec.max_steps, run_root=run_root, study_name=spec.name,
+        max_steps=study_spec.max_steps, run_root=run_root, study_name=study_spec.name,
         launcher=launcher, read_objective_factory=objective_reader_for,
         base_lr=base_sections["optim"].get("lr", 4e-4),
-        backend_policy=spec.backend_policy, seq_len=spec.seq_len,
-        force=args.force, dirty=dirty, batch_ladder=spec.batch_ladder)
+        backend_policy=study_spec.backend_policy, seq_len=study_spec.seq_len,
+        force=args.force, dirty=dirty, batch_ladder=study_spec.batch_ladder)
 
     states = {}
     for outcome in outcomes:
@@ -240,7 +240,7 @@ def main(argv=None):
     print(f"[search] {len(outcomes)} trial(s): "
           + ", ".join(f"{n} {s}" for s, n in sorted(states.items())))
 
-    written = write_report(study, study_dir, base_spec=spec.base,
+    written = write_report(study, study_dir, base_spec=study_spec.base,
                            base_model=base_model)
     for name, path in sorted(written.items()):
         if path is not None:
