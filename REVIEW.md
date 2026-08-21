@@ -205,12 +205,24 @@ minutes without logging a single step** on a 5.2M model that trains in ~2 minute
 standalone. One trainer, one attempt, `--no_compile` -- so neither a collision nor
 compilation. Silent: no error, no warning, no slow-path notice.
 
-Overriding the backend is *correct* (trials must be comparable, so a search cannot
-inherit whichever kernel the base spec chose), so the fix is not to stop pinning
-it. But the default policy for a study is `exact_auto`, and a real study on it
-would appear to hang. `configs/search/smoke-4m.yaml` now uses `proxy_chunked` --
-space.py's own "cheap approximate screen" -- and the underlying slowness is
-**unexplained and untracked beyond this note.**
+**RESOLVED, and the slowness is now explained.** Jobs 440122 / 440135 measured
+all four routes on an H100 against `prefix_scan.dense_exact_oracle` in fp64. The
+21 minutes was the Python reference scan: at the 4m geometry (value width 32) the
+fused kernel does not apply, and the reference fallback measured **160x** the
+chunked cost per full-model micro-step. Worse than a constant tax, `exact_auto` is
+a **cliff** -- the fused kernel needs rank *exactly* 24 while the space samples
+{8,16,24,32}, so within one study it measured 0.0043 s at rank 24 and 0.72-3.19 s
+at the other three, a 167x-738x discontinuity correlated with a searched variable.
+
+The default is now `exact_invchol` (`ska_inverse_cholesky`), which agrees with the
+reference scan to 5.1e-13 in fp64 and measured **0.92x** chunked at 4m / 1.41x at
+50m. Exactness turned out to be free, so nothing is traded.
+
+Overriding the backend at all remains *correct* (trials must be comparable), and
+there is now a second reason it must resolve to ONE route per study: `chunk_stats`
+and `exact_stats` add a `1e-4*I` jitter on top of `ska_ridge` and
+`ska_prefix_scan` does not, so switching route between trials perturbs a *sampled*
+parameter by 0.3%-10%. See `space.py`'s docstring.
 
 **The three-loop unification is NOT done.** What is done is the seam: `train.py`
 and `mqar_finetune.py` each get their loss from a `TrainTask` instead of inlining
@@ -265,6 +277,24 @@ Long commit messages are deliberate — they carry the *why*, and the deviations
 | `specs/2026-08-19-*-identity-mapping.md` | the two deliberate identity breaks, with old → new hashes |
 
 ## 8. Corrections I made to my own earlier claims
+**"`proxy_chunked` is the cheap approximate screen."** I wrote that, switched
+`configs/search/smoke-4m.yaml` to it, and quoted `space.py`'s own docstring as the
+authority -- without checking what *approximate* meant. Job 440122 measured it:
+92%-152% wrong in the forward, 93%-101% wrong in the gradients, at both
+geometries, on random inputs and on a lag-3 recall task, with no dependence on
+sequence length, ridge or power_K. It is not an approximation of the exact
+operator; it is a different operator. And `ska_rank`, `ska_ridge` and
+`ska_norm_clip_c` reach the model *only* through it, so it could not have screened
+the parameters the search samples. My "fix" made the smoke study fast and its
+numbers meaningless. The policy is retired (`90d17cb`); the chunked forward path
+stays in `ska.py` only because `collect_diagnostics` deliberately reports it as a
+bounded-cost proxy and archived specs must stay loadable.
+
+**"~137x slower" understated it and mischaracterised its shape.** The figure is
+real (reproduced at 160x with a slightly faster chunked baseline) but it reads as
+a fixed cost. It is a discontinuity at rank 24, not a slope -- which matters far
+more for a sampler than the magnitude does.
+
 
 Recorded because a branch that hides its retractions is harder to trust:
 
