@@ -120,3 +120,85 @@ def test_local_launcher_submit_dry_run_does_not_call_subprocess(tmp_path, monkey
     cmd = LocalLauncher().submit(spec, tmp_path, dry_run=True)
     assert cmd[1:3] == ["-m", "experimentation.training.train"]
     assert (tmp_path / "model_config.json").is_file()
+
+
+# --------------------------------------------------- reproducible launches ----
+#
+# Until now nothing launched through experimentation.run could be reproduced.
+# RuntimeSpec carried `seed` but no way to ask for deterministic kernels, and
+# train_argv never passed --deterministic -- so every production run was
+# nondeterministic even at a fixed seed.
+#
+# Measured consequence (job 439605, mqar_finetune): two runs at the SAME seed
+# diverged 0.53 in loss by step 400 without --deterministic, and 0.000000 with
+# it. That is why golden_4m_curve.json carries a 2.0e-4 "noise floor" while the
+# two synthetic goldens reach 0.000000: the synthetic capture scripts invoke a
+# trainer CLI directly and could pass the flag; the shard golden goes through the
+# run system and could not. One of three instruments was ~2000x blunter than the
+# others, and the cause was a missing field.
+
+def test_runtime_can_request_determinism_and_does_not_by_default():
+    """Default False, because turning determinism on globally would silently slow
+    every existing run and change nothing about correctness."""
+    from experimentation.run.spec import RuntimeSpec
+
+    assert RuntimeSpec().deterministic is False
+    assert RuntimeSpec(deterministic=True).deterministic is True
+
+
+def test_the_flag_reaches_the_trainer_only_when_asked():
+    from experimentation.run.train_argv import build_train_argv
+
+    plain = build_train_argv(_shard_spec(), "/tmp/run")
+    assert "--deterministic" not in plain
+
+    repro = build_train_argv(_shard_spec(deterministic=True), "/tmp/run")
+    assert "--deterministic" in repro
+
+
+def test_determinism_does_not_move_run_id_or_group_id():
+    """THE constraint that makes this change safe to land on a branch with
+    committed goldens and archived run directories.
+
+    run_id is sha256(model + data + optim + seed) and group_id is
+    sha256(model + data + optim) -- runtime is deliberately excluded apart from
+    the seed, because a microbatch size or a worker count is a memory detail
+    rather than a scientific input. So a new runtime field cannot renumber
+    anything. If this test ever fails, the field was added to the wrong spec.
+    """
+    from experimentation.run.spec import group_id, run_id
+
+    a, b = _shard_spec(), _shard_spec(deterministic=True)
+    assert run_id(a) == run_id(b)
+    assert group_id(a) == group_id(b)
+
+
+def test_an_archived_spec_without_the_field_still_resolves(tmp_path):
+    """Every spec.yaml already on disk predates this field. resolve_run_spec
+    validates field-for-field, so a new REQUIRED field would strand every
+    archived run; a defaulted one must not."""
+    import yaml
+
+    from experimentation.run.resolve import resolve_run_spec
+
+    spec = _shard_spec()
+    raw = {
+        "name": spec.name,
+        # A bare preset name, exactly as configs/runs/50m-fineweb-3b.yaml
+        # writes it.
+        "model": "50m",
+        "data": {"kind": "shard", "shard_dir": spec.data.shard_dir,
+                 "tokenizer": spec.data.tokenizer, "mix": spec.data.mix,
+                 "n_tokens": spec.data.n_tokens},
+        "optim": {"lr": 4e-4, "warmup_steps": 300, "max_steps": 15000,
+                  "effective_batch": 96},
+        # NOTE: no `deterministic` key, exactly like every committed spec.
+        "runtime": {"per_device_batch_size": 16, "seed": 42},
+    }
+    path = tmp_path / "archived.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    resolved = resolve_run_spec(path)
+    assert resolved.runtime.deterministic is False, \
+        "an archived spec must resolve, and must keep its original behaviour"
+

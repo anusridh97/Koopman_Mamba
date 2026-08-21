@@ -177,6 +177,8 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
     # carries `--no_compile --no_gradient_checkpointing` as the known-safe
     # combination for every production 50m/180m run; the run system must not
     # regress behind that by omission.
+    if spec.runtime.deterministic:
+        argv.append("--deterministic")
     argv.append("--no_compile")
     argv.append("--no_gradient_checkpointing")
     if spec.runtime.ddp and world_size > 1:

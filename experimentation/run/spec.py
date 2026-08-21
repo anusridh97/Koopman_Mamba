@@ -124,6 +124,21 @@ class RuntimeSpec:
     partition/account/worker count/ddp setting is the same experiment run
     differently."""
     seed: int = 42
+    #: Ask the trainer for deterministic kernels (`--deterministic`).
+    #:
+    #: Belongs on `runtime` and nowhere else: `run_id` is
+    #: sha256(model + data + optim + seed), so this cannot renumber an existing
+    #: run -- which is what makes it safe to add to a branch that already has
+    #: committed goldens and archived run directories.
+    #:
+    #: Default False because enabling it globally would slow every run for no
+    #: change in correctness. Turn it on when a run's PURPOSE is to be compared:
+    #: measured on mqar_finetune (job 439605), two runs at the same seed diverged
+    #: 0.53 in loss by step 400 without it and 0.000000 with it. That is why
+    #: golden_4m_curve.json carries a 2.0e-4 floor while both synthetic goldens
+    #: reach zero -- their capture scripts call a trainer CLI directly and could
+    #: pass the flag, while a spec-driven run had no way to ask.
+    deterministic: bool = False
     # Moved here from OptimSpec on 2026-08-19. A microbatch is how a run is FITTED
     # INTO MEMORY, not what it computes: halving it while doubling gradient
     # accumulation preserves effective_batch exactly and changes no result. While

@@ -93,6 +93,14 @@ optim:
 runtime:
   per_device_batch_size: 8
   seed: 42
+  # This spec's whole purpose is to be re-run and compared, which makes
+  # determinism part of the recipe rather than a tuning choice. Without it two
+  # runs at this same seed disagree by ~2e-4 (that is exactly what
+  # golden_4m_curve.json's "noise floor" measured), and a 2e-4 floor cannot
+  # resolve a 2e-4 effect -- which is the position the SKA-route comparison
+  # ended up in. runtime is not hashed into run_id, so setting this renames
+  # nothing and every archived run directory stays valid.
+  deterministic: true
   precision: bf16
   ddp: false
   gpus: 1
