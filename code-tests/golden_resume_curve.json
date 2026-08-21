@@ -1,20 +1,21 @@
 {
   "args": {
     "deterministic": true,
+    "interrupt_at": 266,
     "log_every": 10,
     "max_steps": 400,
     "seed": 42
   },
   "capture_job": "440216",
   "commit": "eb5aec2632e4d7cb30a5845bb3f08164d58b25db",
-  "interpretation": "Re-captured with runtime.deterministic set, which is what took this instrument's floor from 2.0e-4 to 0.000000 -- the old floor was two nondeterministic runs disagreeing, not a precision limit, and it left the shard path ~2000x blunter than the two synthetic goldens. Superseded capture: commit b73a8532c, floor 0.000200. The two agree to a max of 0.000200 and a mean of 0.000067, i.e. within the OLD instrument's own noise -- consistent with the TrainTask loop swap having been identity, but NOT proof of it, because a 2e-4 instrument cannot resolve below 2e-4. Proving that would need a deterministic capture at the pre-swap commit; it has not been done.",
+  "interpretation": "The fourth instrument, and the first to exercise resume through train.py's OWN loop -- code-tests/test_resume_equivalence.py uses the real resume helpers and the real dataset but its own loop body, its own LR lambda and a toy model, so it cannot see a resume bug living in train.py. A is uninterrupted; B is the same run killed after the step-266 checkpoint and resumed to 400. Only meaningful because the shard floor is now 0.000000: against the previous 2e-4 floor a resume that re-shuffled its data could have passed. Its first run (job 440211) found a real defect -- 0.0011 at step 270, the first log after the resume, because the running-loss WINDOW was not carried across the checkpoint. Training was already bit-exact; the reporting was not. Fixed, and this capture is the re-run at 0.000000 throughout.",
   "noise_floor": {
     "max_abs_delta": 0.0,
     "max_at_step": 10,
     "mean_abs_delta": 0.0,
     "n_shared_steps": 40
   },
-  "path": "shard",
+  "path": "shard-resume",
   "replicates": {
     "A": {
       "10": 10.3896,
