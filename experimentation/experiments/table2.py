@@ -70,6 +70,7 @@ import torch.nn.functional as F
 from experimentation.experiments.curricula import eval_niah, make_sysprompt, make_toolcall
 from koopman_lm.config import build_config, config_hash
 from experimentation.training.optim import param_groups
+from experimentation.training.repro import enable_determinism
 from experimentation.training.amp import amp_for
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.baselines import (
@@ -273,12 +274,15 @@ def train(args) -> None:
     # session -- a naive single "loss" number would have hidden both).
     loss_sum = {"toolcall": 0.0, "sysprompt": 0.0}
     loss_count = {"toolcall": 0, "sysprompt": 0}
+    # For the canonical tok/s field; see the progress print below.
+    tokens_seen = 0
     half = args.batch_size // 2
 
     for step in range(start_step + 1, args.max_steps + 1):
         inputs, labels = make_train_batch(step, args)
         inputs = inputs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
+        tokens_seen += inputs.numel()
 
         with autocast:
             out = model(input_ids=inputs)
@@ -316,12 +320,28 @@ def train(args) -> None:
         if step % args.log_every == 0:
             lr = optimizer.param_groups[0]["lr"]
             elapsed = time.time() - t0
-            parts = []
-            for name in ("toolcall", "sysprompt"):
-                if loss_count[name] > 0:
-                    parts.append(f"{name}_loss {loss_sum[name] / loss_count[name]:.4f}")
-            print(f"step {step:>5d}/{args.max_steps}  " + "  ".join(parts) +
-                  f"  lr {lr:.2e}  {elapsed:.0f}s")
+            means = [loss_sum[n] / loss_count[n]
+                     for n in ("toolcall", "sysprompt") if loss_count[n] > 0]
+            parts = [f"{n}_loss {loss_sum[n] / loss_count[n]:.4f}"
+                     for n in ("toolcall", "sysprompt") if loss_count[n] > 0]
+            # A canonical `loss` field ADDED, not substituted. The per-task
+            # breakdown above stays because the comment on loss_sum says it
+            # caught two real bugs that a single number would have hidden.
+            #
+            # The canonical prefix exists because sweep/search/metrics.py's
+            # TRAIN_RE requires `step N/M | loss X | ppl Y | lr Z | W K tok/s`,
+            # and this line was `step N/M  <parts>  lr Z  Ns` -- double-spaced, no
+            # pipes, elapsed seconds. parse_progress returned [] on it, so a
+            # table2 trial would be UNPRUNABLE the moment SyntheticDataSpec can
+            # launch, exactly as mqar_finetune.py was. The per-task fields trail
+            # the canonical ones because TRAIN_RE uses .search, so a suffix is
+            # free.
+            combined = sum(means) / len(means) if means else float("nan")
+            ppl = math.exp(min(combined, 20)) if means else float("nan")
+            tail = ("  " + "  ".join(parts)) if parts else ""
+            print(f"step {step:>5d}/{args.max_steps} | loss {combined:.4f} | "
+                  f"ppl {ppl:.1f} | lr {lr:.2e} | "
+                  f"{tokens_seen / max(elapsed, 1e-9) / 1e3:.1f}K tok/s" + tail)
             loss_sum = {"toolcall": 0.0, "sysprompt": 0.0}
             loss_count = {"toolcall": 0, "sysprompt": 0}
 
@@ -342,6 +362,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Table 2: NIAH length generalization")
     p.add_argument("--model_type", type=str, default="mamba_ska_swiglu", choices=sorted(MODEL_BUILDERS))
     p.add_argument("--model_size", type=str, default="1m")
+    p.add_argument("--deterministic", action="store_true", default=False,
+                   help="enable torch deterministic algorithms (reproducible "
+                        "loss curves; lower throughput). Required for a golden "
+                        "curve to mean anything -- see main()")
     p.add_argument("--koopman_mlp_expand", type=float, default=5.0,
                     help="mamba_ska_koopman only: hidden-dim expansion for the Spectral Koopman "
                          "MLP, overriding the shared cfg.mlp_expand (2.667). SpectralKoopmanMLP has "
@@ -383,6 +407,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     torch.manual_seed(args.seed)
+    if args.deterministic:
+        # Required before a golden curve is worth capturing. Measured on
+        # mqar_finetune (job 439605): without this, two runs at the SAME seed
+        # diverged to 0.53 in loss by step 400, because GPU nondeterminism
+        # compounds through the optimizer. With it, 0.000000. This trainer had
+        # torch.manual_seed and nothing else, so its results were not
+        # reproducible run-to-run and nothing said so.
+        enable_determinism(warn_only=True)
+        print("  Determinism mode ON (cudnn.benchmark off; throughput will drop)")
     train(args)
 
 
