@@ -298,8 +298,23 @@ def train(args):
         sampler = torch.utils.data.distributed.DistributedSampler(
             train_ds, num_replicas=world_size, rank=local_rank, shuffle=True)
 
+    # §6/§7: both sections come off the materialized spec.yaml, which the run
+    # layer has already written into run_dir by the time this process starts.
+    # The applier is built BEFORE the optimizer for two reasons: a freeze
+    # schedule decides whether the optimizer must cover frozen parameters
+    # (§6.5), and binding against the live model is where an empty match becomes
+    # a startup error rather than a silent no-op (§6.4).
+    group_specs, schedule_specs = read_spec_extensions(args.spec)
+    applier = ScheduleApplier(raw_model, schedule_specs)
+    if is_main and schedule_specs:
+        print(f"  Schedules active: {sorted(schedule_specs)}", flush=True)
+    if is_main and group_specs:
+        print(f"  optim.groups: {[g.match for g in group_specs]}", flush=True)
+
     optimizer = torch.optim.AdamW(
-        _param_groups(raw_model, args.weight_decay),
+        _param_groups(raw_model, args.weight_decay, groups=group_specs,
+                      lr=args.learning_rate,
+                      include_frozen=applier.freezes_parameters),
         lr=args.learning_rate, betas=(0.9, 0.95),
         weight_decay=args.weight_decay, fused=True)
     scheduler = get_cosine_schedule_with_warmup(
@@ -327,6 +342,7 @@ def train(args):
     # (preempt_flag/install_sigusr1_handler moved to the top of this
     # function -- see the comment there.)
     start_step, start_epoch, start_samples_consumed = 0, 0, 0
+    start_epoch_start_step = 0
     if args.resume:
         resume_path = os.path.join(args.output_dir, "resume.pt")
         if not os.path.exists(resume_path):
@@ -343,11 +359,19 @@ def train(args):
             torch.load(model_path, map_location="cpu", weights_only=True))
         start_step, start_epoch, start_samples_consumed = apply_resume_state(
             resume_state, optimizer=optimizer, scheduler=scheduler)
+        # §6.5: the step the interrupted epoch BEGAN at, so a seq_len curriculum
+        # resumes the epoch at the length its uninterrupted twin was using.
+        # `.get` so a resume.pt written before this key existed still loads -- it
+        # falls back to the resumed step, which is exactly right for the only
+        # case that can produce such a file (no seq_len schedule, where the value
+        # is unused anyway).
+        start_epoch_start_step = resume_state.get("epoch_start_step", start_step)
         if is_main:
             print(f"  Resumed from {ckpt_dir} at step {start_step}, "
                   f"epoch {start_epoch}, samples_consumed {start_samples_consumed}")
 
-    def _save_all(step, epoch, samples_consumed, log_window=None, dirname=None):
+    def _save_all(step, epoch, samples_consumed, log_window=None,
+                  epoch_start_step=0, dirname=None):
         _save_checkpoint(raw_model, cfg, tokenizer, step, args, dirname=dirname)
         resume_path = os.path.join(args.output_dir, "resume.pt")
         # The logging window travels with the resume state, and is PASSED IN
@@ -368,7 +392,13 @@ def train(args):
         save_resume_state(resume_path, step=step, epoch=epoch,
                            samples_consumed=samples_consumed,
                            optimizer=optimizer, scheduler=scheduler,
-                           extra={"log_window": dict(log_window or {})})
+                           # Schedules themselves need nothing checkpointed --
+                           # they are pure functions of global step (§6.2). The
+                           # one exception is which step the current epoch began
+                           # at, which the seq_len curriculum needs and cannot
+                           # recompute after a mid-epoch restart.
+                           extra={"log_window": dict(log_window or {}),
+                                  "epoch_start_step": int(epoch_start_step)})
 
     model.train()
     # step/micro_step/running_loss/loss_count/tokens_seen are the LOOP's
@@ -388,6 +418,7 @@ def train(args):
         start_step=start_step, start_epoch=start_epoch,
         start_samples_consumed=start_samples_consumed,
         log_window=(resume_state.get("log_window") if args.resume else None),
+        applier=applier, start_epoch_start_step=start_epoch_start_step,
         is_main=is_main, is_ddp=is_ddp, world_size=world_size,
         local_rank=local_rank, sampler=sampler, monitor=monitor,
         grad_monitor=grad_monitor, preempt_flag=preempt_flag, t_start=t_start)

@@ -74,6 +74,8 @@ def run_training_loop(
     grad_monitor: Any = None,
     preempt_flag: Any = None,
     t_start: Optional[float] = None,
+    applier: Any = None,
+    start_epoch_start_step: int = 0,
 ) -> LoopResult:
     """Run to `args.max_steps`, or until preempted.
 
@@ -97,6 +99,14 @@ def run_training_loop(
     loss_count = int(_win.get("loss_count", 0))
     if t_start is None:
         t_start = time.time()
+    # §6.5: keyed on the step the EPOCH began, never the current step. An
+    # uninterrupted run holds one seq_len for a whole epoch, so a mid-epoch
+    # resume must not pick up a value from a breakpoint its epoch already
+    # crossed -- that rebuilds the dataset at a different length than its
+    # uninterrupted twin and desyncs the resume index arithmetic.
+    epoch_start_step = start_epoch_start_step
+    sched_values: dict = {}
+    effective_seq_len = getattr(train_ds, "max_seq_len", None)
 
     if is_main:
         eff = args.per_device_train_batch_size * args.gradient_accumulation_steps * world_size
@@ -116,6 +126,30 @@ def run_training_loop(
         # see its docstring for why each is load-bearing. Moved rather than
         # rewritten so the one loop can serve table2, whose batches are a
         # function of the step counter and have no epoch permutation at all.
+        # §6.5: a data.seq_len curriculum is consumed HERE, at the epoch
+        # boundary where the loader is rebuilt anyway -- seq_len lives on the
+        # DATASET, not on a module, so it cannot be a setattr target like every
+        # other schedule. Guarded on `seq_len_at`, so a run with no seq_len
+        # schedule never rebuilds and stays bit-identical; that guard is also
+        # what keeps this inert for the synthetic and step-keyed tasks, which
+        # have no data_dir to rebuild from.
+        if applier is not None and applier.seq_len_at(epoch_start_step) is not None:
+            from experimentation.training.data.dataset import MemmapPackedDataset
+            from experimentation.training.train import epoch_seq_len
+
+            want = epoch_seq_len(applier, epoch_start_step, args.max_seq_len)
+            if want != getattr(train_ds, "max_seq_len", want):
+                train_ds = MemmapPackedDataset(args.data_dir, want, seed=args.seed)
+                if is_ddp:
+                    # The old sampler still points at the old dataset length.
+                    sampler = torch.utils.data.distributed.DistributedSampler(
+                        train_ds, num_replicas=world_size, rank=local_rank,
+                        shuffle=True)
+                if is_main:
+                    print(f"  [schedule] epoch {epoch}: seq_len -> {want} "
+                          f"({len(train_ds):,} samples)", flush=True)
+            effective_seq_len = want
+
         samples_consumed = start_samples_consumed if epoch == start_epoch else 0
         epoch_loader = task.iter_batches(train_ds, args, IterContext(
             epoch=epoch, start_step=step, skip_samples=samples_consumed,
@@ -140,6 +174,11 @@ def run_training_loop(
                 # delegates, verified by the 4m golden curve rather than by
                 # inspection.
                 #
+                # §6.3: one line, before the forward. Every schedule is a pure
+                # function of global step, so this is also the whole of their
+                # resume support.
+                if applier is not None:
+                    sched_values = applier.apply(step)
                 # The loop still enters autocast; a task never manages precision.
                 raw_loss = task.step_loss(model, {
                     "input_ids": ids, "labels": labels, "loss_weights": lw})
@@ -170,13 +209,29 @@ def run_training_loop(
                     # report lands after training already finished. Job 439883
                     # recorded "20 reported steps" per trial and every one of them
                     # arrived too late to prune anything.
+                    # §6.4: log every scheduled value. Without it you cannot
+                    # distinguish "the schedule ran" from "the schedule was
+                    # silently a no-op". The seq_len reported is the one ACTUALLY
+                    # in force for this epoch, not the schedule's value at this
+                    # step -- those differ until the next epoch boundary rebuilds
+                    # the dataset.
+                    logged = dict(sched_values)
+                    if (applier is not None
+                            and applier.seq_len_at(epoch_start_step) is not None):
+                        logged["data.seq_len"] = effective_seq_len
+                    sched_txt = "".join(
+                        f" | {k.rsplit('.', 1)[-1]} {v:g}"
+                        for k, v in sorted(logged.items()))
                     print(f"step {step:>6d}/{args.max_steps} | loss {avg:.4f} | "
-                          f"ppl {ppl:.1f} | lr {lr:.2e} | {tps/1e3:.1f}K tok/s",
+                          f"ppl {ppl:.1f} | lr {lr:.2e} | {tps/1e3:.1f}K tok/s"
+                          f"{sched_txt}",
                           flush=True)
                     if args.wandb_project:
                         import wandb
                         wandb.log({"loss": avg, "ppl": ppl, "lr": lr,
-                                   "tokens_per_sec": tps}, step=step)
+                                   "tokens_per_sec": tps,
+                                   **{f"sched/{k}": v
+                                      for k, v in logged.items()}}, step=step)
                     running_loss = torch.tensor(0.0, device=device); loss_count = 0
 
                 # ---- SKA health diagnostics (separate cheap fwd, amortized) ----
@@ -224,14 +279,17 @@ def run_training_loop(
                 _window = {"running_loss": float(running_loss.item()),
                            "loss_count": int(loss_count)}
                 if is_main and step > 0 and step % args.save_steps == 0:
-                    _save_all(step, epoch, samples_consumed, _window)
+                    _save_all(step, epoch, samples_consumed, _window,
+                              epoch_start_step)
                 if is_main and preempt_flag is not None and preempt_flag.is_set():
-                    _save_all(step, epoch, samples_consumed, _window)
+                    _save_all(step, epoch, samples_consumed, _window,
+                              epoch_start_step)
                     print(f"  SIGUSR1 received -- wrote resume.pt at step {step}, exiting cleanly")
                     preempted = True
                     break
         if preempted:
             break
+        epoch_start_step = step
         epoch += 1
 
     return LoopResult(step=step, epoch=epoch, tokens_seen=tokens_seen,
