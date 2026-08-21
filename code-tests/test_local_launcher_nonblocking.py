@@ -251,3 +251,74 @@ def test_the_driver_submits_without_waiting():
     assert "wait=False" in src, (
         "run_trial must submit with wait=False, or the objective reader starts "
         "after training ends and there is nothing left to prune")
+
+
+# ------------------------------------ progress must be visible DURING the run ----
+
+def test_progress_is_readable_while_the_child_is_still_running(tmp_path, monkeypatch):
+    """The gap that made "20 reported steps" mean nothing.
+
+    A tailable log is not enough if it only fills at exit. `buffering=1` on the
+    parent's file object does not reach the child, which inherits a raw fd and
+    block-buffers at 8 KB whenever stdout is a file. A 200-step trial emits about
+    1.4 KB of progress, so the log stayed EMPTY until the process ended -- and
+    wait_for_objective then reported every step at once, after training was over.
+    Job 439883 recorded 20 reported steps per trial and not one of them could have
+    pruned anything.
+
+    So this asserts the property that actually matters: read_progress sees a line
+    while the child is alive.
+    """
+    from experimentation.run import launchers as L
+    from experimentation.sweep.search.metrics import read_progress
+
+    monkeypatch.setattr(L, "write_model_config", lambda spec, run_dir: None)
+    launcher = LocalLauncher()
+    # Prints one progress line, then stays alive. No explicit flush -- the point
+    # is that PYTHONUNBUFFERED makes it visible anyway.
+    monkeypatch.setattr(
+        launcher, "build_command",
+        lambda spec, run_dir, resume=False: [
+            sys.executable, "-c",
+            "print('step     10/200 | loss 1.0 | ppl 2.7 | lr 1e-4 | 1.0K tok/s');"
+            " import time; time.sleep(30)"])
+
+    proc = launcher.submit(object(), tmp_path, wait=False)
+    try:
+        deadline = time.time() + 15
+        points = []
+        while time.time() < deadline and not points:
+            points = read_progress(tmp_path)
+            if not points:
+                time.sleep(0.2)
+        assert proc.poll() is None, "child exited; this no longer tests buffering"
+        assert [p.step for p in points] == [10], (
+            "no progress readable while the child runs -- the log is buffered, so "
+            "pruning would only ever see a finished run")
+    finally:
+        M._default_cancel(tmp_path)
+        proc.wait(timeout=10)
+
+
+def test_every_trainer_flushes_its_progress_line():
+    """Belt to PYTHONUNBUFFERED's braces. A trainer launched some other way --
+    sbatch, by hand, by a future launcher -- still needs its own flush."""
+    import ast
+    for rel in ("experimentation/training/train.py",
+                "experimentation/experiments/mqar_finetune.py",
+                "experimentation/experiments/table2.py"):
+        tree = ast.parse((REPO / rel).read_text())
+        progress = [n for n in ast.walk(tree)
+                    if isinstance(n, ast.Call)
+                    and getattr(n.func, "id", None) == "print"
+                    and "loss" in ast.unparse(n)
+                    and "K tok/s" in ast.unparse(n)]
+        # "loss" and "K tok/s", not "step"+"tok/s": the latter also matched
+        # train.py's one-time "tok/step" banner, which is a header rather than a
+        # progress line.
+        assert progress, f"no progress print found in {rel}"
+        for call in progress:
+            kwargs = {k.arg for k in call.keywords}
+            assert "flush" in kwargs, (
+                f"{rel}: progress print lacks flush=True, so its log is invisible "
+                "until exit when stdout is a file")

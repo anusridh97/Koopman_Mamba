@@ -364,8 +364,11 @@ def train(args):
     task = ShardTask()
     if is_main:
         eff = args.per_device_train_batch_size * args.gradient_accumulation_steps * world_size
+        # Flushed because this is the run's first sign of life. In job 439754 it
+        # was the only line that survived 21 minutes -- and only by accident, a
+        # DataLoader fork calling _flush_std_streams just after it.
         print(f"\nTraining: {args.max_steps} steps, eff_batch={eff}, "
-              f"tok/step={eff*args.max_seq_len:,}")
+              f"tok/step={eff*args.max_seq_len:,}", flush=True)
     optimizer.zero_grad(set_to_none=True)
 
     epoch = start_epoch
@@ -436,8 +439,23 @@ def train(args):
                     avg = running_loss.item() / max(loss_count, 1)
                     lr = optimizer.param_groups[0]["lr"]; el = time.time() - t_start
                     tps = tokens_seen / el; ppl = math.exp(min(avg, 20))
+                    # flush=True is load-bearing, not tidiness. When stdout is
+                    # a FILE rather than a tty -- which it is for every
+                    # non-blocking local launch, and for sbatch -- CPython
+                    # block-buffers at 8 KB. A 200-step trial at logging_steps 10
+                    # emits ~1.4 KB, so without this the log stays EMPTY until the
+                    # process exits and then flushes everything at once.
+                    #
+                    # Two things break on that. A cancelled run loses its output
+                    # entirely (job 439754 showed 21 minutes of nothing, and was
+                    # not hung -- ~70 steps had run). And pruning becomes
+                    # decorative: wait_for_objective tails this log, so every
+                    # report lands after training already finished. Job 439883
+                    # recorded "20 reported steps" per trial and every one of them
+                    # arrived too late to prune anything.
                     print(f"step {step:>6d}/{args.max_steps} | loss {avg:.4f} | "
-                          f"ppl {ppl:.1f} | lr {lr:.2e} | {tps/1e3:.1f}K tok/s")
+                          f"ppl {ppl:.1f} | lr {lr:.2e} | {tps/1e3:.1f}K tok/s",
+                          flush=True)
                     if args.wandb_project:
                         import wandb
                         wandb.log({"loss": avg, "ppl": ppl, "lr": lr,

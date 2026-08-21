@@ -339,9 +339,15 @@ def train(args) -> None:
             combined = sum(means) / len(means) if means else float("nan")
             ppl = math.exp(min(combined, 20)) if means else float("nan")
             tail = ("  " + "  ".join(parts)) if parts else ""
+                # flush=True: when stdout is a FILE (every non-blocking
+                # local launch, and sbatch) CPython block-buffers at 8 KB, so a
+                # short run's log stays empty until exit. That loses a cancelled
+                # run's output entirely and makes pruning decorative, since
+                # wait_for_objective tails this log.
             print(f"step {step:>5d}/{args.max_steps} | loss {combined:.4f} | "
                   f"ppl {ppl:.1f} | lr {lr:.2e} | "
-                  f"{tokens_seen / max(elapsed, 1e-9) / 1e3:.1f}K tok/s" + tail)
+                  f"{tokens_seen / max(elapsed, 1e-9) / 1e3:.1f}K tok/s" + tail,
+                  flush=True)
             loss_sum = {"toolcall": 0.0, "sysprompt": 0.0}
             loss_count = {"toolcall": 0, "sysprompt": 0}
 

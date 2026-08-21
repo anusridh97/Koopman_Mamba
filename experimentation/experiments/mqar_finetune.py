@@ -338,9 +338,15 @@ def train(args):
                 # to max_steps. Only the loss values are on record here and
                 # they are unchanged; this alters the line's shape, not any
                 # number in it.
+                # flush=True: when stdout is a FILE (every non-blocking
+                # local launch, and sbatch) CPython block-buffers at 8 KB, so a
+                # short run's log stays empty until exit. That loses a cancelled
+                # run's output entirely and makes pruning decorative, since
+                # wait_for_objective tails this log.
                 print(f"step {step:>6d}/{args.max_steps} | "
                       f"loss {loss.item():.4f} | ppl {ppl:.1f} | "
-                      f"lr {lr:.2e} | {tokens_seen/elapsed/1e3:.1f}K tok/s")
+                      f"lr {lr:.2e} | {tokens_seen/elapsed/1e3:.1f}K tok/s",
+                      flush=True)
                 if use_wandb:
                     wandb.log({"loss": loss.item(), "ppl": ppl,
                                "lr": lr, "step": step})

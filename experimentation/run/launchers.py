@@ -13,6 +13,7 @@ SKA_REQUIRE_B200=1).
 from __future__ import annotations
 
 import abc
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -199,7 +200,15 @@ class LocalLauncher(Launcher, _ScoresRuns):
         # wants its output on the terminal, a watched run wants it on disk.
         log_path = Path(run_dir) / self.LOG_FILE
         log = open(log_path, "w", buffering=1)          # line-buffered
-        proc = subprocess.Popen(cmd, start_new_session=True,
+        # PYTHONUNBUFFERED because `buffering=1` above only affects THIS
+        # process's file object -- the child inherits a raw fd and does its own
+        # buffering, and CPython block-buffers at 8 KB when stdout is a file. A
+        # 200-step trial emits ~1.4 KB, so without this the log is empty until the
+        # child exits and pruning has nothing to tail. The trainers also pass
+        # flush=True on their progress line; this is the belt to that braces, so a
+        # new trainer that forgets does not silently disable pruning again.
+        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        proc = subprocess.Popen(cmd, start_new_session=True, env=env,
                                 stdout=log, stderr=subprocess.STDOUT)
         atomic_write_text(Path(run_dir) / self.PID_FILE, f"{proc.pid}\n")
         return proc
