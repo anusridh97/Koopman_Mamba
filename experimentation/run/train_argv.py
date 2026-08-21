@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from experimentation.atomic_io import atomic_write_json
 from experimentation.run.spec import RunSpec, ShardDataSpec
@@ -92,7 +92,9 @@ def write_model_config(spec: RunSpec, run_dir) -> Path:
 
 
 def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
-                      resume: bool = False) -> List[str]:
+                      resume: bool = False,
+                      eval_on_final: bool = False,
+                      eval_data_dir: Optional[str] = None) -> List[str]:
     """Map a RunSpec onto experimentation.training.train's existing CLI flags.
     Only kind='shard' is supported: kind='synthetic' needs TrainTask/
     SyntheticTask (§6.2), a separate, later plan."""
@@ -131,6 +133,20 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
         "--seed", str(spec.runtime.seed),
         "--phase_tag", spec.name,
     ]
+    if eval_on_final:
+        # The adaptive searcher's objective. Optuna reads a trial's score from
+        # run_dir/eval/<ckpt>/quick_eval.json, and nothing in the launch path
+        # wrote it -- so a study trained N models and recorded N FAILs, having
+        # paid for all of them.
+        #
+        # Threaded as an argument rather than read off the spec because it is not
+        # a property of the EXPERIMENT: the same RunSpec launched by hand and
+        # launched by a study must keep the same run_id, and anything in the spec
+        # would be hashed into it. A scored run and an unscored run of the same
+        # config are the same run.
+        argv += ["--eval_on_final"]
+        if eval_data_dir:
+            argv += ["--eval_data_dir", eval_data_dir]
     # Derived from model.compute_precision, not runtime.precision (design 6):
     # the model config is what is hashed into run identity, so it is the field
     # that can answer "what precision did this run use?" after the fact.

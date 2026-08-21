@@ -92,6 +92,10 @@ class StudySpec:
     logging_steps: int = 10
     #: Optional anchor designs to enqueue before adaptive sampling starts.
     design_file: Optional[str] = None
+    #: Held-out shard for a trial's own end-of-run scoring. Defaults to the base
+    #: spec's training shard, which is fine for a proxy objective but means the
+    #: score is not held out -- set it for anything whose ranking you trust.
+    eval_data_dir: Optional[str] = None
     backend_policy: str = "exact_auto"
     seq_len: Optional[int] = None
     batch_ladder: bool = False

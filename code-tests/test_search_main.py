@@ -13,10 +13,12 @@ means the plan is printed BEFORE anything is materialized, and that no optuna
 import happens on the dry path -- so the check runs on a machine that has never
 installed it.
 
-**A study with no objective producer must refuse loudly.** Nothing in the launch
-path writes `run_dir/eval/<ckpt>/quick_eval.json`, so every trial would train
-successfully and be recorded FAIL. Discovering that after N GPU jobs is the
-expensive failure; a startup error is the cheap one.
+**The objective gate must keep its teeth.** Optuna reads a trial's score from
+`run_dir/eval/<ckpt>/quick_eval.json`. When nothing in the launch path wrote it,
+every trial trained successfully and was recorded FAIL -- N GPU jobs for nothing --
+so the CLI refused at startup. `train.py --eval_on_final` now writes it, so the
+refusal no longer fires; what is tested is the MECHANISM, because removing the
+hook must bring the refusal back rather than silently restoring N-trials-N-FAILs.
 """
 
 import pathlib
@@ -98,39 +100,56 @@ def test_dry_run_does_not_need_optuna(tmp_path):
     assert "optuna" not in r.stderr.lower(), r.stderr
 
 
-def test_dry_run_warns_rather_than_refuses(tmp_path):
-    """A dry run spends nothing, so refusing to print the plan would make the
-    missing objective harder to discover rather than easier."""
+def test_the_objective_producer_is_now_detected():
+    """The gate's SUBJECT changed under it: train.py now writes
+    quick_eval.json via --eval_on_final, so the refusal must no longer fire.
+
+    Three tests here previously pinned the refusal itself. That was pinning a
+    transient state -- when the state flipped, they failed, correctly. Rewritten
+    to test the MECHANISM, which is what has to keep working: the gate must
+    detect a producer when there is one, and refuse when there is not."""
+    import importlib.util as u
+    spec = u.spec_from_file_location(
+        "_search_main", REPO / "experimentation/sweep/search/__main__.py")
+    mod = u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._objective_producer_exists(REPO) is True, (
+        "train.py's --eval_on_final should satisfy the gate")
+
+
+def test_the_gate_still_refuses_when_no_producer_exists(tmp_path):
+    """The gate has to keep teeth. Point it at a tree with a train.py that does
+    not write quick_eval.json and it must still say no -- otherwise removing the
+    hook would silently reintroduce N-trials-N-FAILs."""
+    import importlib.util as u
+    spec = u.spec_from_file_location(
+        "_search_main2", REPO / "experimentation/sweep/search/__main__.py")
+    mod = u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    fake = tmp_path / "repo"
+    (fake / "experimentation/training").mkdir(parents=True)
+    (fake / "experimentation/run").mkdir(parents=True)
+    (fake / "experimentation/training/train.py").write_text("def train(): pass\n")
+    (fake / "experimentation/run/launchers.py").write_text("class L: pass\n")
+    assert mod._objective_producer_exists(fake) is False
+
+
+def test_a_real_launch_now_proceeds_past_the_gate(tmp_path):
+    """The end of the search's one hard blocker. It no longer exits 2; it gets
+    as far as needing optuna, which is a dependency problem rather than a
+    design one."""
+    r = _run(_spec(tmp_path), "--run_root", tmp_path / "runs", "--allow-dirty")
+    assert r.returncode != 2, (
+        f"still refusing at the objective gate:\n{r.stdout}")
+    assert "REFUSING TO LAUNCH" not in r.stdout
+
+
+def test_dry_run_no_longer_warns_about_a_missing_objective(tmp_path):
     r = _run(_spec(tmp_path), "--dry_run")
     assert r.returncode == 0
-    assert "WARNING" in r.stdout
-    assert "REFUSING" not in r.stdout
-
-
-# ------------------------------------------------- the missing objective gate ----
-
-def test_a_real_launch_refuses_without_an_objective_producer(tmp_path):
-    """The expensive failure is N trained trials scoring nothing. Refuse at
-    startup instead."""
-    r = _run(_spec(tmp_path), "--run_root", tmp_path / "runs")
-    assert r.returncode == 2, f"expected refusal, got {r.returncode}\n{r.stdout}"
-    assert "REFUSING TO LAUNCH" in r.stdout
-    assert "quick_eval.json" in r.stdout
-
-
-def test_the_refusal_names_where_the_fix_is_tracked(tmp_path):
-    """A refusal that does not say what unblocks it just looks broken."""
-    r = _run(_spec(tmp_path), "--run_root", tmp_path / "runs")
-    assert "traintask-design" in r.stdout
-
-
-def test_force_no_eval_says_warning_not_refusing(tmp_path):
-    """Printing REFUSING and then launching anyway is how people learn to stop
-    reading the output."""
-    r = _run(_spec(tmp_path), "--force-no-eval", "--allow-dirty",
-             "--run_root", tmp_path / "runs", optuna=True)
-    assert "REFUSING" not in r.stdout, r.stdout
-    assert "WARNING" in r.stdout
+    assert "quick_eval.json" not in r.stdout, (
+        "the objective warning should be gone now that a producer exists")
 
 
 # ------------------------------------------------------------- spec plumbing ----

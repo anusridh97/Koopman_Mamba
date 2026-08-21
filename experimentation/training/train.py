@@ -485,8 +485,62 @@ def train(args):
     if is_main:
         _save_checkpoint(raw_model, cfg, tokenizer, step, args, dirname="final")
         print(f"\nDone in {(time.time()-t_start)/3600:.1f}h, {tokens_seen/1e9:.2f}B tokens")
+        if args.eval_on_final:
+            _write_final_quick_eval(raw_model, cfg, args, device)
     if is_ddp:
         torch.distributed.destroy_process_group()
+
+
+def _write_final_quick_eval(model, cfg, args, device):
+    """Score the finished model and leave the result where the searcher reads it.
+
+    This closes the adaptive search's one hard dependency. Optuna reads a trial's
+    objective from ``run_dir/eval/<ckpt>/quick_eval.json``, and until now NOTHING
+    in the launch path wrote it -- not this file, not the sbatch template. The only
+    caller anywhere was scripts/verify_search_and_provenance.sbatch, by hand. So a
+    study trained N models successfully and recorded N FAILs, having paid for all
+    of them.
+
+    Opt-in, and that matters in both directions. Ordinary runs and static sweeps
+    stay byte-identical by default, so nothing already on record moves; and a
+    search-launched run gets its score on the GPU node where the model already
+    lives, rather than shipping the eval to a driver that may have no GPU.
+
+    Deliberately non-fatal. A run that trained for hours and then hit a missing
+    val shard should not be thrown away over its score -- the searcher already
+    treats an unreadable objective as FAIL, which is the correct outcome, and it
+    reaches that conclusion from the absent file rather than from a crash. So this
+    warns and returns.
+
+    Runs on the main rank only (its caller is inside `if is_main`), since two
+    ranks writing one JSON is a race for no benefit.
+    """
+    from experimentation.evaluation.quick_eval import run_quick_eval, write_quick_eval
+
+    val_dir = args.eval_data_dir or args.data_dir
+    if not val_dir:
+        print("  [eval_on_final] no --eval_data_dir or --data_dir; skipping")
+        return
+    checkpoint = os.path.join(args.output_dir, "final", "model.pt")
+    try:
+        was_training = model.training
+        model.eval()
+        metrics = run_quick_eval(
+            model, device, data_dir=val_dir,
+            max_seq_len=min(args.max_seq_len, 1024),
+            batch_size=max(1, args.per_device_train_batch_size // 2),
+            max_batches=args.eval_on_final_batches, ska_ablation=True)
+        written = write_quick_eval(checkpoint, metrics)
+        full = metrics.get("full", {})
+        print(f"  [eval_on_final] loss {full.get('loss'):.4f} "
+              f"ppl {full.get('ppl'):.2f} -> {written}")
+        if was_training:
+            model.train()
+    except Exception as exc:                       # noqa: BLE001
+        # See the docstring: a lost score must not lose the training run.
+        print(f"  [eval_on_final] FAILED ({type(exc).__name__}: {exc}); "
+              f"the run's checkpoints are intact and the searcher will read "
+              f"this trial as FAIL")
 
 
 def checkpoint_meta(cfg, step, model_type, model_size):
@@ -582,6 +636,18 @@ def parse_args():
     p.add_argument("--phase_tag", type=str, default="run",
                    help="experiment tag used in the default wandb group name")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--eval_on_final", action="store_true", default=False,
+                   help="after the final checkpoint, run quick_eval and write "
+                        "run_dir/eval/final/quick_eval.json -- the file the "
+                        "adaptive searcher reads a trial's objective from. Off by "
+                        "default so ordinary runs and static sweeps stay "
+                        "byte-identical; set by build_train_argv for "
+                        "search-launched runs")
+    p.add_argument("--eval_data_dir", type=str, default=None,
+                   help="held-out shard for --eval_on_final (default: --data_dir)")
+    p.add_argument("--eval_on_final_batches", type=int, default=8,
+                   help="batches to score for --eval_on_final. Small on purpose: "
+                        "this runs once per trial across a whole study")
     p.add_argument("--deterministic", action="store_true", default=False,
                    help="enable torch deterministic algorithms + seeded dataloader "
                         "(reproducible loss curves; lower throughput)")

@@ -197,8 +197,15 @@ def main(argv=None):
         print(f"[search] enqueued {added} anchor(s) "
               f"({len(designs) - added} already present)")
 
-    launcher = LocalLauncher() if launcher_name == "local" else SlurmLauncher(
-        repo_root=str(repo_root))
+    # eval_on_final=True is what makes a trial scoreable at all: it puts
+    # --eval_on_final on the training command, so the run writes
+    # run_dir/eval/final/quick_eval.json before exiting and the objective reader
+    # finds something. Set on the LAUNCHER rather than the spec, since whether a
+    # run scores itself is a property of who launched it -- anything on the spec
+    # would be hashed into run_id, and a scored run is not a different experiment.
+    scoring = {"eval_on_final": True, "eval_data_dir": spec.eval_data_dir}
+    launcher = (LocalLauncher(**scoring) if launcher_name == "local"
+                else SlurmLauncher(repo_root=str(repo_root), **scoring))
 
     # A FACTORY, not a reader: pruning is trial.report + trial.should_prune, so
     # the reader has to see the trial it is scoring. drive() fixes its kwargs

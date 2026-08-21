@@ -99,13 +99,36 @@ class Launcher(abc.ABC):
         ...
 
 
-class LocalLauncher(Launcher):
+class _ScoresRuns:
+    """Mixin: should a launcher ask its runs to score themselves?
+
+    Set at CONSTRUCTION, not per submit, and deliberately not on the RunSpec.
+    Whether a run writes quick_eval.json is a property of who launched it, not of
+    the experiment -- the same spec launched by hand and by a study has to keep
+    the same run_id, and anything on the spec would be hashed into it. A scored
+    run and an unscored run of the same config are the same run.
+    """
+
+    eval_on_final: bool = False
+    eval_data_dir = None
+
+    def _scoring_kwargs(self):
+        return {"eval_on_final": self.eval_on_final,
+                "eval_data_dir": self.eval_data_dir}
+
+
+class LocalLauncher(Launcher, _ScoresRuns):
     """Runs training in-process via subprocess: `python -m ...` for a single
     GPU, `torchrun --standalone` when runtime.ddp and runtime.gpus > 1."""
 
+    def __init__(self, *, eval_on_final: bool = False, eval_data_dir=None):
+        self.eval_on_final = eval_on_final
+        self.eval_data_dir = eval_data_dir
+
     def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
         world_size = spec.runtime.gpus if (spec.runtime.ddp and spec.runtime.gpus > 1) else 1
-        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume)
+        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume,
+                              **self._scoring_kwargs())
         if world_size > 1:
             return ["torchrun", "--standalone", f"--nproc_per_node={world_size}",
                      "-m", "experimentation.training.train", *train_args]
@@ -198,15 +221,19 @@ def render_array_sbatch(sweep_name: str, cells: List[Tuple[RunSpec, "Path"]],
     )
 
 
-class SlurmLauncher(Launcher):
+class SlurmLauncher(Launcher, _ScoresRuns):
     """Generates run_dir/launch.sbatch and submits it with `sbatch`."""
 
-    def __init__(self, repo_root: str = "."):
+    def __init__(self, repo_root: str = ".", *, eval_on_final: bool = False,
+                 eval_data_dir=None):
         self.repo_root = repo_root
+        self.eval_on_final = eval_on_final
+        self.eval_data_dir = eval_data_dir
 
     def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
         world_size = spec.runtime.gpus * spec.runtime.nodes
-        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume)
+        train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume,
+                              **self._scoring_kwargs())
         if world_size > 1:
             return ["torchrun", f"--nnodes={spec.runtime.nodes}",
                      f"--nproc_per_node={spec.runtime.gpus}",
