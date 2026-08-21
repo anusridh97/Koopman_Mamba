@@ -34,6 +34,8 @@ from experimentation.training.repro import seed_everything, enable_determinism
 from experimentation.training.optim import param_groups as _param_groups
 from experimentation.training.amp import amp_for
 from experimentation.training.loop import run_training_loop
+from experimentation.training.optim import parse_group_specs
+from experimentation.training.schedules import ScheduleApplier, validate_schedules
 from experimentation.training.task import ShardTask
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.koopman_lm import KoopmanLM
@@ -501,7 +503,68 @@ def _save_checkpoint(model, cfg, tokenizer, step, args, dirname=None):
     print(f"  Saved checkpoint to {ckpt_dir}  (cfg_hash={config_hash(cfg)[:8]})")
 
 
-def parse_args():
+def read_spec_extensions(spec_path):
+    """Read the two optional sections of a materialized spec.yaml that are too
+    structured for CLI flags: `optim.groups` (§7) and `schedules` (§6).
+
+    Returns ``(groups, schedules)``, both empty when `spec_path` is None -- so a
+    bare `python -m experimentation.training.train` invocation is completely
+    unaffected by either mechanism.
+
+    Reads the file raw rather than going through
+    `experimentation.run.resolve.load_materialized_spec` on purpose: that would
+    make the training layer depend on the run layer, and would re-validate the
+    whole model key-set here, turning any spec.yaml written by an older schema
+    into a trainer crash. Both sections are still validated -- an unknown
+    schedule target or a malformed group raises here, at startup, rather than
+    becoming a silent no-op (§6.4).
+    """
+    import yaml
+
+    if spec_path is None:
+        return (), {}
+    path = os.fspath(spec_path)
+    if not os.path.exists(path):
+        raise SystemExit(f"--spec given but no spec.yaml at {path}")
+    raw = yaml.safe_load(open(path).read()) or {}
+    groups = parse_group_specs((raw.get("optim") or {}).get("groups"))
+    schedules = raw.get("schedules") or {}
+    # Construction validates; ScheduleApplier re-validates against the live
+    # model (empty match -> raise), which needs the model and so happens later.
+    validate_schedules(schedules)
+    return groups, schedules
+
+
+def epoch_seq_len(applier, epoch_start_step, default):
+    """The sequence length this epoch should run at (§6.5).
+
+    Keyed on the step the EPOCH BEGAN, never on the current step. An
+    uninterrupted run holds one seq_len for a whole epoch, so a run resumed
+    mid-epoch must not pick up a value from a breakpoint its epoch already
+    crossed -- that would rebuild the dataset at a different length than its
+    uninterrupted twin and desync the resume index arithmetic. `epoch_start_step`
+    is checkpointed into resume.pt for exactly this reason.
+
+    `default` is the CLI/config max_seq_len, used both as the fallback and as the
+    ceiling: the model is built once for model.max_seq_len, so a curriculum that
+    walks past it must fail here, at the epoch boundary, rather than deep in the
+    forward on a compute node.
+    """
+    scheduled = applier.seq_len_at(epoch_start_step)
+    if scheduled is None:
+        return default
+    if scheduled > default:
+        raise ValueError(
+            f"data.seq_len schedule reaches {scheduled} at step "
+            f"{epoch_start_step}, but the model was built for "
+            f"max_seq_len={default}. Raise model.max_seq_len to the "
+            f"curriculum's maximum, or lower the schedule.")
+    if scheduled <= 0:
+        raise ValueError(f"data.seq_len schedule produced {scheduled}; must be > 0")
+    return scheduled
+
+
+def parse_args(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--model_type", type=str, default="koopman",
                    choices=["koopman", "mamba_attn", "mamba_only",
@@ -570,7 +633,14 @@ def parse_args():
                    help="resume from <output_dir>/resume.pt + its matching "
                         "step_<N>/model.pt (optimizer, scheduler, RNG, and "
                         "dataloader position restored exactly; §5)")
-    return p.parse_args()
+    p.add_argument("--spec", type=str, default=None,
+                   help="path to the materialized spec.yaml written by "
+                        "experimentation.run. Supplies the two sections too "
+                        "structured for flags: optim.groups (per-group "
+                        "lr_mult/weight_decay, design §7) and schedules "
+                        "(time-varying values, design §6). Omit for a plain CLI "
+                        "run -- both are then inert.")
+    return p.parse_args(argv)
 
 
 def main():

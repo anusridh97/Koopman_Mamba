@@ -11,9 +11,11 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 from koopman_lm.config import KoopmanLMConfig, build_config
+from experimentation.training.optim import ParamGroupSpec, parse_group_specs
+from experimentation.training.schedules import validate_schedules
 
 _SYNTHETIC_GENERATORS = {"mqar", "toolcall", "sysprompt", "niah"}
 
@@ -90,6 +92,9 @@ def resolve_model_config(value) -> KoopmanLMConfig:
 
 @dataclass(frozen=True)
 class OptimSpec:
+    """Optimizer settings. `groups` (§7) is an optional ordered list of
+    per-parameter-group overrides -- a *partial* map where absence is the norm,
+    so it is an optional list here rather than new required fields."""
     lr: float
     warmup_steps: int
     max_steps: int
@@ -97,8 +102,13 @@ class OptimSpec:
     effective_batch: int = 512
     weight_decay: float = 0.1
     grad_clip: float = 1.0
+    groups: Tuple[ParamGroupSpec, ...] = ()
 
     def __post_init__(self):
+        # Normalize YAML's list-of-dicts into ParamGroupSpecs at construction,
+        # so validation happens once, here, rather than at optimizer-build time
+        # on a compute node 20 minutes into a queue.
+        object.__setattr__(self, "groups", parse_group_specs(self.groups))
         if not isinstance(self.lr, (int, float)) or isinstance(self.lr, bool):
             raise TypeError(
                 f"OptimSpec.lr must be numeric, got {type(self.lr).__name__} "
@@ -205,16 +215,32 @@ class RuntimeSpec:
 
 @dataclass(frozen=True)
 class RunSpec:
-    """The unit of configuration and of identity (§3.1)."""
+    """The unit of configuration and of identity (§3.1).
+
+    `schedules` (§6) is a top-level sibling of model/data/optim/runtime, NOT a
+    KoopmanLMConfig field. KoopmanLMConfig is a *total* description -- every
+    field has a value, absence is impossible, and _check_model_key_set depends
+    on exactly that totality. `schedules` is a *partial* map where absence is
+    the norm and means something specific (constant). Those cannot share a
+    validation regime (§6.1).
+
+    Framing: **`model` describes the model at step 0; `schedules` describes how
+    it moves.**
+    """
     name: str
     model: KoopmanLMConfig
     data: DataSpec
     optim: OptimSpec
     runtime: RuntimeSpec
+    schedules: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.name:
             raise ValueError("RunSpec.name is required")
+        if self.schedules is None:
+            object.__setattr__(self, "schedules", {})
+        # Fail at spec-construction time, not 20 minutes into a queued job.
+        validate_schedules(self.schedules)
         if not isinstance(self.model, KoopmanLMConfig):
             raise TypeError(f"RunSpec.model must be a KoopmanLMConfig, got {type(self.model)}")
         if not isinstance(self.data, (ShardDataSpec, SyntheticDataSpec)):
@@ -255,11 +281,27 @@ def _json_stable(payload: Dict[str, Any]) -> str:
 
 
 def _scientific_payload(spec: RunSpec, include_seed: bool) -> Dict[str, Any]:
+    """The hashed payload. §6/§7's two optional sections are **omitted when
+    empty**, deliberately: `schedules` and `optim.groups` are partial maps
+    where absence is the norm, so an absent one must contribute nothing to the
+    hash. Emitting `schedules: {}` / `groups: []` instead would renumber every
+    run recorded before these mechanisms existed, and three seeds of one config
+    would stop aggregating with their own earlier attempts.
+
+    When present, both ARE hashed (§6.4): with a schedule, the materialized
+    spec's `model.ska_ridge` is only the *initial* value -- the schedule is the
+    real story, and two runs with different annealing must not share a run_id.
+    """
+    optim = dataclasses.asdict(spec.optim)
+    if not optim.get("groups"):
+        optim.pop("groups", None)
     payload = {
         "model": dataclasses.asdict(spec.model),
         "data": dataclasses.asdict(spec.data),
-        "optim": dataclasses.asdict(spec.optim),
+        "optim": optim,
     }
+    if spec.schedules:
+        payload["schedules"] = spec.schedules
     if include_seed:
         payload["seed"] = spec.runtime.seed
     return payload

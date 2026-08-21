@@ -98,7 +98,8 @@ def resolve_run_spec(path) -> RunSpec:
     data = data_spec_from_dict(raw["data"])
     optim = OptimSpec(**raw["optim"])
     runtime = RuntimeSpec(**raw.get("runtime", {}))
-    return RunSpec(name=raw["name"], model=model, data=data, optim=optim, runtime=runtime)
+    return RunSpec(name=raw["name"], model=model, data=data, optim=optim,
+                   runtime=runtime, schedules=raw.get("schedules") or {})
 
 
 def to_flat_dict(spec: RunSpec) -> Dict[str, Any]:
@@ -106,7 +107,7 @@ def to_flat_dict(spec: RunSpec) -> Dict[str, Any]:
     implicit, every value spelled out -- including the model config inlined
     (never a registry name), so a later drift in configs/*.yaml cannot
     retroactively change a finished run's meaning."""
-    return {
+    payload = {
         "name": spec.name,
         "run_id": run_id(spec),
         "group_id": group_id(spec),
@@ -115,6 +116,13 @@ def to_flat_dict(spec: RunSpec) -> Dict[str, Any]:
         "optim": dataclasses.asdict(spec.optim),
         "runtime": dataclasses.asdict(spec.runtime),
     }
+    # §6.1: schedules is a top-level sibling of model/data/optim/runtime, in
+    # the same materialized file but its own section. Written only when
+    # non-empty, mirroring _scientific_payload's omit-when-absent rule so the
+    # file matches what was hashed.
+    if spec.schedules:
+        payload["schedules"] = spec.schedules
+    return payload
 
 
 def materialize(spec: RunSpec, run_dir, *, dirty: bool = False,
@@ -186,7 +194,8 @@ def load_materialized_spec(spec_yaml_path) -> RunSpec:
     data = data_spec_from_dict(raw["data"])
     optim = OptimSpec(**raw["optim"])
     runtime = RuntimeSpec(**raw["runtime"])
-    return RunSpec(name=raw["name"], model=model, data=data, optim=optim, runtime=runtime)
+    return RunSpec(name=raw["name"], model=model, data=data, optim=optim,
+                   runtime=runtime, schedules=raw.get("schedules") or {})
 
 
 def load_raw_spec(path) -> Dict[str, Any]:

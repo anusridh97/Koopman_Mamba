@@ -165,11 +165,19 @@ def _base_sections(base_path) -> Dict[str, Dict[str, Any]]:
         "data": dict(raw["data"]),
         "optim": dict(raw.get("optim", {})),
         "runtime": dict(raw.get("runtime", {})),
+        # A top-level SIBLING of the four sections, parsed here because this is
+        # where the base spec is read -- but PASSED to build_cell_run_spec as its
+        # own argument rather than merged field-wise. `schedules` maps a target
+        # ("model.ska_ridge") to a spec dict, and those targets contain dots of
+        # their own. Deliberately absent from _AXIS_SECTIONS: threading it is
+        # restoring §6, whereas sweeping OVER schedules is a separate feature.
+        "schedules": dict(raw.get("schedules", {})),
     }
 
 
 def build_cell_run_spec(name: str, sections: Dict[str, Dict[str, Any]],
-                         overrides: Dict[str, Any]) -> RunSpec:
+                         overrides: Dict[str, Any],
+                         schedules: Optional[Dict[str, Any]] = None) -> RunSpec:
     """Apply one cell's {'<section>.<field>': value} overrides onto `sections`
     (a base spec's per-section dicts, as returned by _base_sections) and
     build the resulting RunSpec. `name` becomes RunSpec.name for every cell
@@ -186,6 +194,16 @@ def build_cell_run_spec(name: str, sections: Dict[str, Dict[str, Any]],
         data=data_spec_from_dict(cell_sections["data"]),
         optim=OptimSpec(**cell_sections["optim"]),
         runtime=RuntimeSpec(**cell_sections["runtime"]),
+        # Its OWN parameter, not read out of `sections`. A top-level sibling
+        # does not survive the per-section copy above, and routing it through
+        # `sections` would make the threading depend on a dict key that can go
+        # missing without changing any signature. Omitting it is the exact bug
+        # test_every_top_level_runspec_field_is_threaded_through_build_cell_run_spec
+        # was written for: every cell runs WITHOUT the annealing its base spec
+        # declared, while run.spec still hashes `schedules` into run_id -- so the
+        # run_ids claim the annealing happened and the cells compare cleanly
+        # against each other. Wrong science with a correct-looking identity.
+        schedules=dict(schedules or {}),
     )
 
 
@@ -207,6 +225,7 @@ def expand_cells(sweep: SweepSpec) -> List[SweepCell]:
     that all share one group_id, exactly as a hand-launched replicate set
     would."""
     sections = _base_sections(sweep.base)
-    return [SweepCell(spec=build_cell_run_spec(sweep.name, sections, overrides),
+    return [SweepCell(spec=build_cell_run_spec(sweep.name, sections, overrides,
+                                               schedules=sections.get("schedules")),
                        overrides=overrides)
             for overrides in raw_cells(sweep)]

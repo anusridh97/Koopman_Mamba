@@ -116,6 +116,13 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
     # instead of leaving the CLI default in force unconditionally.
     save_steps = max(1, spec.optim.max_steps // 3)
     argv = [
+        # §6/§7: schedules and optim.groups are too structured for flags, so the
+        # trainer reads them off the materialized spec.yaml. __main__ writes it
+        # before handing off to a Launcher, so it always exists by now. Passed
+        # unconditionally: a spec with neither section leaves both inert, and
+        # making the flag conditional would mean a run could silently drop its
+        # schedules if the condition ever drifted.
+        "--spec", str(run_dir / "spec.yaml"),
         "--model_size", str(model_config_path),
         "--data_dir", spec.data.shard_dir,
         "--tokenizer", spec.data.tokenizer,

@@ -2,11 +2,11 @@
 
 Measured what optuna 4.9's journal actually persists: params with distributions,
 values, per-step intermediate_values, state, user_attrs, timestamps, worker_id.
-So the space and every trajectory are already durable, and this study_spec must NOT
+So the space and every trajectory are already durable, and this spec must NOT
 re-declare the space -- space.py owns it once.
 
 What the journal cannot hold: anything optuna never sees (max_steps, the base
-study_spec, the shard -- constants of our objective, invisible to a black-box
+spec, the shard -- constants of our objective, invisible to a black-box
 optimiser), and one thing it does use but does not persist (the sampler and
 pruner, reconstructed by whoever opens the study, with a different pruner
 accepted silently).

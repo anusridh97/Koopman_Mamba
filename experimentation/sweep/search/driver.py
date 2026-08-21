@@ -152,7 +152,8 @@ def run_trial(study: optuna.study.Study, trial, *,
         attempt_overrides = dict(overrides)
         if pdbs is not None:
             attempt_overrides["runtime.per_device_batch_size"] = pdbs
-        spec = build_cell_run_spec(study_name, base_sections, attempt_overrides)
+        spec = build_cell_run_spec(study_name, base_sections, attempt_overrides,
+                                  schedules=base_sections.get("schedules"))
         # Since the microbatch moved to RuntimeSpec every rung resolves to the SAME
         # run_dir, which is the point: a retry is the same experiment fitted into
         # memory differently, so it reuses the directory and appends another
