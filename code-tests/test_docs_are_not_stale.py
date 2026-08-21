@@ -255,3 +255,86 @@ def test_documented_shell_commands_name_files_that_exist(doc):
                 or (_ROOT / Path(*parts) / "__main__.py").is_file()):
             missing.append(f"-m {mod}")
     assert not missing, f"{doc} documents commands that cannot run: {sorted(missing)}"
+
+
+# --------------------------------------------------------------------------
+# In-tree pointers. READING-PROGRESS's finding was that docstrings held while
+# prose docs drifted -- but only because nothing had checked. A docstring or a
+# config comment that says "see X" is a promise about a path, and the ones that
+# rotted were all of the same shape: a file was renamed or absorbed and every
+# sentence naming it stayed put. run/slurm.py was absorbed into
+# run/launchers.py (839b704) and was still named in three places; RETRIEVAL.md,
+# scripts/retrieval_adapt.sh, scripts/eval_sweep.sh and
+# scripts/koopman_utilization_report.py were named by files that shipped and
+# never existed at all.
+#
+# One of them was not prose: kernels/chunk_stats_exact.py's __main__ block
+# loaded ska_core by FILE PATH from the deleted koopman_lm/ska_core_torch.py, so
+# `python -m koopman_lm.kernels.chunk_stats_exact` could not run.
+# --------------------------------------------------------------------------
+
+_POINTER = re.compile(
+    r"\b(?:scripts|configs|code-tests|experimentation|koopman_lm)"
+    r"/[\w/.-]*\.(?:py|sh|yaml|md|sbatch)\b")
+
+# Deliberate references to something that is gone, where the surrounding text
+# says so. Each needs a reason; "it's only a comment" is not one.
+_ALLOWED_DEAD_POINTERS = {
+    # The anti-pattern these modules exist to replace, named in the past tense
+    # and described as deleted. Naming it is the point.
+    ("experimentation/sweep/spec.py", "scripts/slurm_array.sh"),
+    ("configs/sweeps/ska-rank-lr.yaml", "scripts/slurm_array.sh"),
+    # The comment's own subject is that this script does not exist.
+    ("configs/180m_v2.yaml", "scripts/koopman_utilization_report.py"),
+    # A citation pinned to a commit: deleted in d979e24, but
+    # `git show 38b04a7:code-tests/test_incremental_lar_parity.py` still works.
+    ("koopman_lm/kernels/incremental_transport.py",
+     "code-tests/test_incremental_lar_parity.py"),
+    # Explicitly written as "the since-moved X (now Y)", with Y correct.
+    ("koopman_lm/pooling.py", "koopman_lm/retrieval/encoder.py"),
+    # The comment records where ska_core used to live and why the __main__
+    # block no longer loads it from there.
+    ("koopman_lm/kernels/chunk_stats_exact.py", "koopman_lm/ska_core_torch.py"),
+}
+
+
+def _pointer_sources():
+    for tree in ("experimentation", "koopman_lm", "configs"):
+        for path in sorted((_ROOT / tree).rglob("*")):
+            if path.suffix in (".py", ".yaml") and "__pycache__" not in path.parts:
+                yield path
+
+
+def test_in_tree_pointers_resolve():
+    """Every repo-relative path named inside production code must exist.
+
+    Catches the whole class at once, and cheaply: the scan is over ~100 files.
+    A reference to something genuinely gone goes in _ALLOWED_DEAD_POINTERS with
+    a reason, which makes keeping one a visible decision rather than a default.
+    """
+    dangling = []
+    for path in _pointer_sources():
+        rel = str(path.relative_to(_ROOT))
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            for token in _POINTER.findall(line):
+                if (_ROOT / token).exists():
+                    continue
+                if (rel, token) in _ALLOWED_DEAD_POINTERS:
+                    continue
+                dangling.append(f"{rel}:{lineno} -> {token}")
+    assert not dangling, (
+        "these point at paths that do not exist:\n  " + "\n  ".join(dangling))
+
+
+def test_the_dead_pointer_allowlist_is_not_stale():
+    """An entry that now resolves, or whose file is gone, must be removed --
+    otherwise the allowlist accumulates and stops meaning anything."""
+    stale = []
+    for rel, token in sorted(_ALLOWED_DEAD_POINTERS):
+        if not (_ROOT / rel).exists():
+            stale.append(f"{rel} (the referring file is gone)")
+        elif (_ROOT / token).exists():
+            stale.append(f"{rel} -> {token} (now resolves; drop the exemption)")
+        elif token not in (_ROOT / rel).read_text():
+            stale.append(f"{rel} no longer mentions {token}")
+    assert not stale, stale

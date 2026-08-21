@@ -9,5 +9,6 @@ Modules:
   adapt    -- the adaptation training loop (InfoNCE + LM anchor, 4:1 batch
               schedule, backbone/projection param groups) + Recall@k eval.
 
-See RETRIEVAL.md and scripts/retrieval_adapt.sh.
+There is no launcher script and no RETRIEVAL.md; adapt.py's own docstring is
+the reference, and it is run as `python -m experimentation.retrieval.adapt`.
 """
