@@ -33,6 +33,7 @@ from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
 from experimentation.training.repro import seed_everything, enable_determinism, seed_worker
 from experimentation.training.optim import param_groups as _param_groups
 from experimentation.training.amp import amp_for
+from experimentation.training.task import ShardTask
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.mamba import Mamba2Block
@@ -355,6 +356,12 @@ def train(args):
     step = start_step; micro_step = 0
     running_loss = torch.tensor(0.0, device=device); loss_count = 0
     t_start = time.time(); tokens_seen = 0
+    # Which loss convention this loop is running. ShardTask means "the dataset
+    # already offset input_ids/labels, so score positionally, inside the model,
+    # carrying loss_weights" -- exactly what this file did inline. Naming it makes
+    # the convention explicit at the top of the loop rather than implicit in the
+    # forward call, and it is the seam SyntheticTask attaches to next.
+    task = ShardTask()
     if is_main:
         eff = args.per_device_train_batch_size * args.gradient_accumulation_steps * world_size
         print(f"\nTraining: {args.max_steps} steps, eff_batch={eff}, "
@@ -401,8 +408,21 @@ def train(args):
             lw = batch.get("loss_weights")
             if lw is not None: lw = lw.to(device, non_blocking=True)
             with autocast_ctx:
-                outputs = model(input_ids=ids, labels=labels, loss_weights=lw)
-                raw_loss = outputs["loss"]
+                # §6.2 step one: the loss now comes from the TASK rather than
+                # being inlined here. Nothing else changes yet -- ShardTask's
+                # step_loss is `model(input_ids, labels, loss_weights)["loss"]`,
+                # pinned bit-identical to the two lines it replaces by
+                # code-tests/test_train_task.py.
+                #
+                # This is the seam the unification needs, and putting it in first
+                # while the loop is otherwise untouched means the risky part --
+                # collapsing three loops -- lands against a loop that already
+                # delegates, verified by the 4m golden curve rather than by
+                # inspection.
+                #
+                # The loop still enters autocast; a task never manages precision.
+                raw_loss = task.step_loss(model, {
+                    "input_ids": ids, "labels": labels, "loss_weights": lw})
                 scaled_loss = raw_loss / args.gradient_accumulation_steps
             scaled_loss.backward()
             running_loss += raw_loss.detach(); loss_count += 1
