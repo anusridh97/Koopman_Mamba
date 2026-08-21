@@ -3,8 +3,9 @@
 # Identical backbone to 180m.yaml (d_model/n_layers/SKA layout untouched); the
 # ONLY differences are the four Koopman-MLP changes that enforce uniform neuron
 # utilization by construction and fix the frozen-decay pathology. Meant as the
-# v2 arm of a v1(180m.yaml)-vs-v2 comparison -- see
-# scripts/koopman_utilization_report.py.
+# v2 arm of a v1(180m.yaml)-vs-v2 comparison -- measured by
+# koopman_lm/diagnostics/koopman_mlp.py::utilization_report (the
+# scripts/koopman_utilization_report.py this used to name does not exist).
 d_model: 768
 n_layers: 24
 vocab_size: 32000

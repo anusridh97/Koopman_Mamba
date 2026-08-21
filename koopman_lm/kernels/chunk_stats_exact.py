@@ -58,13 +58,11 @@ def exact_stats(z, zb, zq, v, ridge):
 
 
 if __name__ == "__main__":
-    import sys, importlib.util
+    # ska_core moved out of the deleted koopman_lm/ska_core_torch.py into
+    # kernels/ska_operator.py; loading it by file path from the old location
+    # made this self-check unrunnable. Same function, same signature.
     torch.set_default_dtype(torch.float64); torch.manual_seed(0)
-    s = importlib.util.spec_from_file_location("koopman_lm.ska_core_torch",
-                                               "koopman_lm/ska_core_torch.py")
-    core = importlib.util.module_from_spec(s)
-    sys.modules["koopman_lm.ska_core_torch"] = core; s.loader.exec_module(core)
-    ska_core = core.ska_core
+    from koopman_lm.kernels.ska_operator import ska_core
 
     # same structured short-range recall task that showed ~100% chunk error
     B, H, r, P, K, ridge, T = 1, 2, 16, 8, 2, 1e-3, 256

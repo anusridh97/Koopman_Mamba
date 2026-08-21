@@ -22,7 +22,7 @@ Orchestration order, per invocation:
     hand off every surviving cell to a Launcher:
       --launcher local  one LocalLauncher.submit() per cell
       --launcher slurm  one SlurmLauncher.submit_array() for the whole
-                         sweep (experimentation/run/slurm.py's array-job support,
+                         sweep (experimentation/run/launchers.py's array-job support,
                          §4.3) -- a single #SBATCH --array=0-N[%K] job, not N
                          separate submissions
 """

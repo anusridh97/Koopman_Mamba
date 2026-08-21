@@ -537,9 +537,9 @@ def parse_args():
     p.add_argument("--model_type", type=str, default="koopman",
                    choices=["koopman", "mamba_attn", "mamba_only",
                             "mamba_ska_swiglu", "mamba_ska_koopman"])
-    p.add_argument("--model_size", type=str, default="50m_prefix_scan",
-                   help="model size name (50m_prefix_scan or 180m_prefix_scan) "
-                        "or path to a custom YAML config")
+    p.add_argument("--model_size", type=str, default="50m",
+                   help="model size name (a CONFIG_REGISTRY key, e.g. 50m or "
+                        "180m) or path to a custom YAML config")
     p.add_argument("--init_from", type=str, default=None,
                    help="path to a base checkpoint model.pt for a WEIGHTS-ONLY "
                         "warm start (continued pretraining). Loads weights only; "

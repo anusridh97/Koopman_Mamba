@@ -7,7 +7,7 @@ scripts/slurm_array.sh hardcoding MODEL_TYPES/KV_PAIRS/GAPS in bash beneath a
 comment reading "must match PAPER_MODEL_TYPES, ... in mqar_finetune.py". Two
 copies of a grid kept in sync by a comment is a drift bug with a countdown on
 it; here there is exactly one data structure (this module's `SweepSpec` +
-`expand_cells`), and experimentation/run/slurm.py's array job only ever reads the
+`expand_cells`), and experimentation/run/launchers.py's array job only ever reads the
 list `expand_cells` produced -- bash never sees axis values.
 
 Two ways to declare the grid, and exactly one may be used per sweep:

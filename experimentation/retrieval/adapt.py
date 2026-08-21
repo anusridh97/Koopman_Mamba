@@ -18,8 +18,10 @@ Backbone and projection head are optimized with SEPARATE learning rates
 
 Recall@{1,5,20} on a held-out in-domain pool is measured every --eval_steps.
 Zero-shot LM benchmarks (MMLU/ARC/PIQA/HellaSwag/WinoGrande) are intentionally
-NOT run in-loop (too slow); checkpoints are saved every --eval_steps so
-scripts/eval_sweep.sh can rank them on the full suite offline.
+NOT run in-loop (too slow); checkpoints are saved every --eval_steps so they
+can be ranked on the full suite offline. The eval_sweep.sh that used to do
+that ranking no longer exists; today it is one
+`python -m experimentation.evaluation.lm_harness_eval` per checkpoint.
 
 Usage:
   python -m experimentation.retrieval.adapt \
@@ -249,7 +251,7 @@ def train(args):
 def _save(encoder, backbone, cfg, tok, step, args, dirname=None):
     d = os.path.join(args.output_dir, dirname or f"step_{step}")
     os.makedirs(d, exist_ok=True)
-    # backbone state (loadable by eval_sweep.sh / lm_harness) + full encoder.
+    # backbone state (loadable by lm_harness_eval) + full encoder.
     torch.save(backbone.state_dict(), os.path.join(d, "model.pt"))
     torch.save(encoder.state_dict(), os.path.join(d, "retrieval_encoder.pt"))
     # code_id/dirty: see training/train.py::checkpoint_meta (provenance 4.1).

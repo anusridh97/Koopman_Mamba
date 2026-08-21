@@ -87,7 +87,7 @@ path. `memory.py` is reachable only through `forward_with_memory`.
 ```
 scripts/train_50m.sh
   └─ sets TORCH_CUDA_ARCH_LIST=10.0, SKA_REQUIRE_B200=1
-  └─ exec scripts/pretrain.sh 50m_prefix_scan
+  └─ exec bash scripts/pretrain.sh 50m
        │
        ├─ 1. defaults for this size
        │     TOKENS=3e9  STEPS=15000  PDBS=16  GA=6  LR=4e-4  WARMUP=300
@@ -106,12 +106,12 @@ scripts/train_50m.sh
        │
        └─ 4. train
              python -m experimentation.training.train \
-               --model_type koopman --model_size 50m_prefix_scan \
+               --model_type koopman --model_size 50m \
                --data_dir .../train --max_seq_len 2048 \
                --per_device_train_batch_size 16 --gradient_accumulation_steps 6 \
                --max_steps 15000 --learning_rate 4e-4 --warmup_steps 300 \
                --bf16 --no_compile --no_gradient_checkpointing \
-               --output_dir $RUN_ROOT/echo-50m_prefix_scan
+               --output_dir $RUN_ROOT/echo-50m
              -> $RUN_DIR/final/model.pt
 
   NPROC>1 swaps `python -m` for `torchrun --nproc_per_node=$NPROC` and adds --ddp,
