@@ -1,10 +1,10 @@
 # Reviewing `jack/search-and-provenance`
 
-64 commits, 124 files, +15,010 / −373. Written to be reviewed commit-by-commit
+72 commits, 125 files, +15,349 / −387. Written to be reviewed commit-by-commit
 rather than as one diff, because most of the insertions are new files where a diff
 tells you nothing you wouldn't get from reading the file.
 
-**Test counts.** 1136 passed / 45 skipped standard; ~1150 with optuna on the path.
+**Test counts.** 1142 passed / 45 skipped standard; ~1160 with optuna on the path.
 `main` was 499 / 28.
 
 This file is the entry point. It says what changed, in what order to look, how to
@@ -31,7 +31,8 @@ Then read §3's table and §6. Everything else is depth.
 | **B** | Provenance: `code_id` + `dirty` in all four checkpoint writers; `harness.py` stops overwriting a recorded `cfg_hash` | GPU 436063 step 3b: `meta.pt` carries `code_id=3be37b7` |
 | **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **works end to end.** GPU job 439883: 4 trials COMPLETE with real objectives (7.18–7.64), 4 `quick_eval.json`, 20 reported steps each, all reports written. Caveat in §6 |
 | **D** | `per_device_batch_size` moved `OptimSpec` → `RuntimeSpec`, so an OOM-ladder rung no longer renames the experiment | 0 of 11 config hashes moved |
-| **E** | Test infrastructure: import gate, static undefined-name check, `param_groups` characterization, loss-alignment conformance, a golden training curve | see §4 |
+| **E** | Test infrastructure: import gate, static undefined-name check, `param_groups` characterization, loss-alignment conformance, two golden training curves | see §4 |
+| **G** | `TrainTask` seam: both trainers now get their loss from a task instead of inlining it, so the three-loop unification lands against loops that already delegate | **both gates passed on GPU** — 4m golden MATCH at 0.0001, MQAR golden MATCH at **0.000000**. §6 says what is left |
 | **F** | Cleanup: both documented training commands were broken; `load_model` deduplicated; dangling in-tree pointers | §4 |
 
 ## 2. Read in this order
@@ -133,7 +134,7 @@ matters is which of them would catch a real mistake:
 | `test_ska_precision_wiring.py` | the precision refactor is bit-identical at its defaults, against a golden captured **before** the change |
 | `test_identity_baseline.py` | no config hash moved that shouldn't have |
 | `golden_4m_curve.json` + comparator | the shard loop still trains identically. Noise floor 0.0002 -- log-format precision, not numerical. **Used as a gate:** job 439919 re-ran it after `train.py`'s loss moved into `ShardTask` and MATCHED at worst delta 0.0001 |
-| `golden_mqar_curve.json` | the synthetic loop, the path whose shift convention differs. Noise floor **0.0** with `--deterministic`; **0.53 without it**, which is how that missing flag was found |
+| `golden_mqar_curve.json` | the synthetic loop, the path whose shift convention differs. Noise floor **0.0** with `--deterministic`; **0.53 without it**, which is how that missing flag was found. **Used as a gate:** job 439941 re-ran it after `mqar_finetune.py`'s loss moved into `SyntheticTask` and MATCHED at **0.000000** |
 | `test_train_task.py` | each task's `step_loss` is bit-identical to the inline code it replaces. Mutation-checked against all three mistakes the refactor can make |
 | `test_progress_log_format.py` | a trainer whose log the pruner cannot parse, which made synthetic trials silently unprunable |
 | `test_search_trial_budget.py` | a trial training for the base spec's budget instead of the study's -- a 25x overspend against a 15000-step base |
@@ -210,6 +211,23 @@ it. But the default policy for a study is `exact_auto`, and a real study on it
 would appear to hang. `configs/search/smoke-4m.yaml` now uses `proxy_chunked` --
 space.py's own "cheap approximate screen" -- and the underlying slowness is
 **unexplained and untracked beyond this note.**
+
+**The three-loop unification is NOT done.** What is done is the seam: `train.py`
+and `mqar_finetune.py` each get their loss from a `TrainTask` instead of inlining
+it, verified bit-identical on GPU. What remains, from
+`specs/2026-08-21-traintask-design.md` §10:
+
+- **`table2.py` is untouched.** It has no dataset -- `make_train_batch(step, args)`
+  returns a whole batch keyed on the step counter -- so wrapping it needs
+  `batch_size=None` or a custom collate. Wrapping it naively yields `[B, B, T]`
+  *and silently consumes B steps of curriculum per iteration*. It is also the only
+  trainer running fp16 with a `GradScaler`. And its numbers would need
+  regenerating, which is a human's call.
+- **One loop still does not exist.** Both trainers delegate their loss; neither
+  shares a loop body. The duplication the design is about is still there.
+- **`SyntheticDataSpec` still cannot launch.** `run/train_argv.py:101` and
+  `run/data_verify.py:53` still refuse `kind: synthetic` by name, so MQAR is not
+  yet an ordinary run with a run directory and a result envelope.
 
 **Never exercised:** multi-GPU / DDP. Which SKA backend a run actually selected
 (nothing asserts it). `ska_precision='fp64'` on GPU. An optuna study driving real
