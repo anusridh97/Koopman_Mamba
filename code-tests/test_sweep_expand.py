@@ -158,3 +158,51 @@ def test_axis_key_without_a_dot_is_rejected(tmp_path):
     sweep = SweepSpec(name="x", base=str(base), axes={"lr": [1e-4]})
     with pytest.raises(ValueError):
         expand_cells(sweep)
+
+
+def test_every_top_level_runspec_field_is_threaded_through_build_cell_run_spec():
+    """A structural guard, ported from 486cc5d73 on jack/overnight-cleanup.
+
+    build_cell_run_spec rebuilds a cell's RunSpec by copying the base spec's
+    per-section dicts, so anything INSIDE model/data/optim/runtime survives for
+    free. A top-level SIBLING of those sections does not: it has to be passed
+    explicitly, and forgetting to is silent. On the branch this comes from,
+    `schedules` was a sibling that never got threaded, so every cell of a sweep
+    ran without the annealing its base spec declared -- while still hashing
+    `schedules` into run_id, so the run_ids claimed the annealing happened and
+    the cells compared cleanly against each other. Wrong science with a correct
+    -looking identity is the worst failure this file can prevent.
+
+    TODAY THIS PASSES TRIVIALLY: RunSpec has exactly the five fields
+    build_cell_run_spec already handles, so there is nothing to miss and the
+    assertion is empty-vs-empty. That is the point. It is a tripwire for the
+    sixth field, not a claim about the fifth. VERIFIED it trips: adding a dummy
+    top-level field to RunSpec makes it fail with that field named.
+
+    486cc5d73's assertions about `schedules` and `optim.groups` are deliberately
+    NOT ported -- neither field exists here, so those tests would be asserting
+    about a data model this branch does not have.
+    """
+    import dataclasses
+    import inspect
+
+    from experimentation.run.spec import RunSpec
+    from experimentation.sweep.spec import build_cell_run_spec
+
+    # `name` comes from the sweep, not the base spec; the other four are rebuilt
+    # from `sections`. Everything else must arrive as its own parameter.
+    rebuilt_from_sections = {"name", "model", "data", "optim", "runtime"}
+    fields = {f.name for f in dataclasses.fields(RunSpec)}
+    threaded = set(inspect.signature(build_cell_run_spec).parameters)
+
+    unexpected = sorted(rebuilt_from_sections - fields)
+    assert not unexpected, (
+        f"{unexpected} is exempted here but is no longer a RunSpec field, so "
+        f"the exemption list is stale and may be hiding a real gap")
+
+    missing = sorted(fields - rebuilt_from_sections - threaded)
+    assert not missing, (
+        f"RunSpec top-level field(s) {missing} are not threaded through "
+        f"build_cell_run_spec, so every cell of a sweep would silently drop "
+        f"them while experimentation.run.spec still hashes them into run_id. "
+        f"Add a parameter to build_cell_run_spec and pass it from expand_cells.")
