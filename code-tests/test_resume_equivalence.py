@@ -171,3 +171,84 @@ def test_interrupted_and_resumed_run_matches_uninterrupted_run(tmp_path):
     assert set(sd_a) == set(sd_c)
     for k in sd_a:
         assert torch.equal(sd_a[k], sd_c[k]), f"{k} diverged after resume"
+
+
+# ------------------------------------------------- the logging window ----
+#
+# Found by the resume golden (job 440211), which is the first thing to compare a
+# resumed run against an uninterrupted one through train.py's OWN loop. Training
+# was bit-exact -- every step from 280 to 400 matched at 0.000000 -- but the
+# single log line at step 270 differed by 0.0011.
+#
+# Cause: `running_loss`/`loss_count` are a WINDOW, reset after each log. A run
+# that stopped at 266 and resumed reported the average over 267..270 while the
+# uninterrupted run reported 261..270. Same training, different denominator.
+#
+# Worth fixing rather than excusing, because the alternative is a standing
+# "ignore the first post-resume log line" exemption in the comparator -- at
+# exactly the step where a real resume bug would first appear.
+
+
+def test_resume_state_round_trips_a_nested_log_window(tmp_path):
+    """train.py stashes the window through `extra`, so the contract it depends on
+    is that `extra` survives with nested dicts and float/int types intact."""
+    import torch
+
+    from experimentation.training.resume import (load_resume_state,
+                                                 save_resume_state)
+
+    model = nn.Linear(3, 3)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda _: 1.0)
+
+    path = tmp_path / "resume.pt"
+    save_resume_state(path, step=266, epoch=0, samples_consumed=2128,
+                      optimizer=opt, scheduler=sched,
+                      extra={"log_window": {"running_loss": 39.7248,
+                                            "loss_count": 6}})
+    state = load_resume_state(path)
+    assert state["log_window"] == {"running_loss": 39.7248, "loss_count": 6}
+    assert state["step"] == 266
+
+
+def test_a_resume_state_without_a_log_window_still_loads(tmp_path):
+    """Every resume.pt written before this existed has no log_window, and such a
+    run must still resume -- reporting one short window, which is the behaviour
+    it had anyway."""
+    import torch
+
+    from experimentation.training.resume import (load_resume_state,
+                                                 save_resume_state)
+
+    model = nn.Linear(3, 3)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda _: 1.0)
+
+    path = tmp_path / "resume.pt"
+    save_resume_state(path, step=10, epoch=0, samples_consumed=80,
+                      optimizer=opt, scheduler=sched)
+    state = load_resume_state(path)
+    assert "log_window" not in state
+    # The exact expression train.py uses, so this fails if that idiom changes.
+    win = state.get("log_window") or {}
+    assert float(win.get("running_loss", 0.0)) == 0.0
+    assert int(win.get("loss_count", 0)) == 0
+
+
+def test_train_py_both_saves_and_restores_the_window():
+    """A tripwire, not a proof -- the proof is the resume golden on a GPU. But
+    deleting either half of this would silently reintroduce a 0.0011 step and the
+    CPU suite would stay green, so the two halves are asserted to both exist."""
+    import pathlib as _pl
+
+    src = (_pl.Path(__file__).resolve().parents[1]
+           / "experimentation/training/train.py").read_text()
+
+    assert 'extra={"log_window"' in src, \
+        "train.py no longer PERSISTS the logging window across a save"
+    assert 'resume_state.get("log_window")' in src, \
+        "train.py no longer RESTORES the logging window on resume"
+    # Saving without restoring, or vice versa, is the failure mode that reads as
+    # working -- both must reference the same key.
+    assert src.count("log_window") >= 3
+

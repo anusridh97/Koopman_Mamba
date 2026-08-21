@@ -348,13 +348,32 @@ def train(args):
     def _save_all(step, epoch, samples_consumed, dirname=None):
         _save_checkpoint(raw_model, cfg, tokenizer, step, args, dirname=dirname)
         resume_path = os.path.join(args.output_dir, "resume.pt")
+        # The logging window travels with the resume state. Without it, the first
+        # progress line after a resume averages over a SHORT window -- the run
+        # that stopped at 266 reports steps 267..270 while an uninterrupted run
+        # reports 261..270 -- so the two logs disagree at exactly one step even
+        # though training is bit-identical. Measured at 0.0011 in job 440211,
+        # with every later step at 0.000000.
+        #
+        # Fixed here rather than excused in the comparator: "ignore the delta at
+        # the first post-resume log" is a standing exemption at the one step a
+        # real resume bug would show up first.
         save_resume_state(resume_path, step=step, epoch=epoch,
                            samples_consumed=samples_consumed,
-                           optimizer=optimizer, scheduler=scheduler)
+                           optimizer=optimizer, scheduler=scheduler,
+                           extra={"log_window": {
+                               "running_loss": float(running_loss.item()),
+                               "loss_count": int(loss_count)}})
 
     model.train()
     step = start_step; micro_step = 0
-    running_loss = torch.tensor(0.0, device=device); loss_count = 0
+    # Resumed mid-window if the checkpoint carried one. `.get` with a zero
+    # default on both sides: every resume.pt written before this existed has no
+    # log_window, and such a run must still resume -- it just reports one short
+    # window, which is the old behaviour.
+    _win = (resume_state.get("log_window") or {}) if args.resume else {}
+    running_loss = torch.tensor(float(_win.get("running_loss", 0.0)), device=device)
+    loss_count = int(_win.get("loss_count", 0))
     t_start = time.time(); tokens_seen = 0
     # Which loss convention this loop is running. ShardTask means "the dataset
     # already offset input_ids/labels, so score positionally, inside the model,
