@@ -90,7 +90,9 @@ def run_trial(study: optuna.study.Study, trial, *,
               run_root,
               study_name: str,
               launcher,
-              read_objective: Callable[[Path], Optional[float]],
+              read_objective: Optional[Callable[[Path], Optional[float]]] = None,
+              read_objective_factory: Optional[
+                  Callable[[Any, Any], Callable[[Path], Optional[float]]]] = None,
               base_lr: float = 4e-4,
               backend_policy: str = "exact_auto",
               seq_len: Optional[int] = None,
@@ -157,8 +159,33 @@ def run_trial(study: optuna.study.Study, trial, *,
         return TrialOutcome(state="failed", objective=None, **identity)
 
     run_dir = identity["run_dir"]
+    # `read_objective` reads a FINISHED run: (run_dir) -> float|None, pure, and
+    # it is the whole interface for scoring after the fact.
+    #
+    # Pruning cannot use that shape. metrics.wait_for_objective needs
+    # (study, trial, run_dir) -- the trial, because pruning IS trial.report()
+    # followed by trial.should_prune(). And `drive` builds one **kwargs dict
+    # before any trial exists, so it could only ever pass a fixed reader. The
+    # result was that pruning was UNREACHABLE through drive() despite this
+    # module's docstring claiming it "arrives through the read_objective seam":
+    # reachable by calling run_trial directly, not by the entry point anyone
+    # would use.
+    #
+    # A factory closes it without widening the pure reader's contract. The
+    # rejected alternatives: making read_objective take (run_dir, study, trial)
+    # forces read_quick_eval_objective to accept two arguments it ignores and
+    # drags optuna into metrics.py's module scope, where it is lazy on purpose;
+    # and sniffing with inspect.signature fails silently the moment a signature
+    # drifts, which is the failure mode this file is full of guards against.
+    reader = (read_objective_factory(study, trial)
+              if read_objective_factory is not None else read_objective)
+    if reader is None:
+        raise TypeError(
+            "run_trial needs read_objective or read_objective_factory; got "
+            "neither. A trial with no way to be scored would FAIL after paying "
+            "for its training.")
     try:
-        objective = read_objective(run_dir)
+        objective = reader(run_dir)
     except optuna.TrialPruned as pruned:
         # metrics.wait_for_objective raises this after cancelling the job. It
         # arrives through the read_objective seam rather than through a driver
