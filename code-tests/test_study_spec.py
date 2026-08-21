@@ -157,7 +157,7 @@ def test_study_id_is_not_a_run_identity():
     """Recorded as a test because it is the mistake sweep_id's docstring exists
     to prevent: two studies proposing the same config must produce the same
     run_id, or the content-addressed run directory stops being content-addressed."""
-    from experimentation.run import study_spec as run_spec
+    from experimentation.run import spec as run_spec
     src = (pathlib.Path(__file__).resolve().parents[1]
            / "experimentation/run/spec.py").read_text()
     assert "study_id" not in src, (
