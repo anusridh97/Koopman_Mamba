@@ -1,0 +1,105 @@
+# A tiny REAL training run, whose purpose is to be re-run later and compared.
+#
+# The §6.2 TrainTask unification will collapse train.py, mqar_finetune.py and
+# table2.py into one loop. train.py's loop is at 29% line coverage, so most of
+# what that refactor could break is invisible to the CPU suite -- a silent change
+# to gradient accumulation, the LR schedule, param grouping, the order batches
+# are drawn in, or where the causal shift happens would all produce a loss curve
+# that still descends. "Still trains" is not evidence.
+#
+# So: capture a golden loss curve BEFORE the refactor, from a model small enough
+# to re-run in minutes, and diff against it afterwards.
+#
+# Sizing. This is configs/1m.yaml's architecture (d_model=128, 4 layers,
+# ska_layer_indices [2,3]) with the vocabulary raised from 128 to 32000, because
+# 1m.yaml is built for synthetic MQAR sequences rather than tokenized text. The
+# embedding then dominates the parameter count -- 32000x128 = 4.1M of it -- which
+# lands the model around 4-5M. That is deliberate: the point is to exercise the
+# LOOP (accumulation, scheduling, checkpointing, resume, amp, param groups), and
+# the loop does not care how wide the layers are.
+#
+# max_seq_len is 512 rather than 4096: the shard is packed, so any length is
+# valid, and shorter sequences mean more optimizer steps per minute -- steps are
+# what the golden measures.
+name: 4m-golden
+model:
+  d_model: 128
+  n_layers: 4
+  vocab_size: 32000
+  d_state: 16
+  d_conv: 4
+  mamba_expand: 2
+  ska_n_heads: 4
+  ska_rank: 24
+  ska_ridge: 0.001
+  ska_power_K: 2
+  ska_chunk_size: 16
+  ska_layer_indices:
+  - 2
+  - 3
+  ska_mode: parallel
+  # Pinned explicitly rather than defaulted. A golden that silently changes
+  # backend between capture and comparison measures the backend, not the loop.
+  ska_backend: pytorch
+  ska_inverse_cholesky: false
+  ska_exact_intrachunk: false
+  ska_prefix_scan: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+  ska_norm_clip: true
+  ska_norm_clip_c: 4.0
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.0
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 1.0e-05
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 512
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix:
+    fineweb: 1.0
+    pg19: 0.0
+    scrolls: 0.0
+  n_tokens: 100000536
+optim:
+  lr: 0.0004
+  warmup_steps: 40
+  # 400 steps: long enough that the curve has a warmup ramp, a descent and a
+  # cosine tail, so a refactor that breaks the SCHEDULE (not just the loss) shows
+  # up as a shape change rather than a shifted constant.
+  max_steps: 400
+  schedule: cosine
+  # effective_batch 32 with per_device_batch_size 8 forces gradient accumulation
+  # of 4. Deliberate: at accum=1 the accumulation path is a no-op and the golden
+  # would not cover it, and accumulation is exactly what a loop rewrite breaks.
+  effective_batch: 32
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  per_device_batch_size: 8
+  seed: 42
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: 00:30:00
+  gpu_arch: '9.0'
