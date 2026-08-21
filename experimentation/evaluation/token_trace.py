@@ -35,13 +35,15 @@ be read hours later on another machine. `spec.yaml` is the recipe,
 A trace is bounded on purpose. `--sequences` and `--top_k` default low because
 these land in run directories that already hold 200MB checkpoints, and a
 2048-token sequence at top-20 is a few MB per sequence. `summary.bytes_estimate`
-is reported so a caller can see what it is about to write.
+is reported so a caller can see what it is about to write -- measured off the
+serialized payload, because the closed form it started as read 2.8x low against
+a real trace.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import math
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -56,13 +58,39 @@ def _logits(out):
     return out["logits"] if isinstance(out, dict) else out
 
 
+# SentencePiece "\u2581" and byte-BPE "\u0120" both mean "a space precedes this
+# piece", and both are dropped by decode() on a single id.
+_SPACE_MARKERS = ("\u2581", "\u0120")
+
+
 def _decode(tokenizer, token_id: int) -> str:
+    """Faithful text for ONE token id, leading space included.
+
+    `tokenizer.decode([id])` drops the word-boundary marker when given a single
+    piece: this repo's Llama-2 vocab returns "India" for the piece "\u2581India".
+    Decoding a whole sequence one id at a time therefore produces
+    "in India" -> "inIndia", and a rendered trace has no word boundaries at all.
+    Found by rendering a real shard, not by any unit test -- the stub tokenizer
+    had no notion of a boundary marker to lose.
+
+    The marker is recovered from the raw piece while the text still comes from
+    decode(), so byte pieces like <0x0A> stay the newline they mean rather than
+    becoming their own spelling.
+    """
     if tokenizer is None:
         return f"<{token_id}>"
     try:
-        return tokenizer.decode([token_id])
+        text = tokenizer.decode([token_id])
     except Exception:                                   # noqa: BLE001
         return f"<{token_id}>"
+    try:
+        piece = tokenizer.convert_ids_to_tokens(token_id)
+    except Exception:                                   # noqa: BLE001
+        piece = None
+    if (isinstance(piece, str) and piece[:1] in _SPACE_MARKERS
+            and not text[:1].isspace()):
+        text = " " + text
+    return text
 
 
 def token_report(model, input_ids: torch.Tensor, labels: torch.Tensor,
@@ -113,21 +141,36 @@ def token_report(model, input_ids: torch.Tensor, labels: torch.Tensor,
     return {"tokens": tokens}
 
 
+ABLATION_STATES = ("measured", "skipped", "unsupported")
+
+
 def assemble_trace(reports: List[Dict[str, Any]], *,
-                   top_k: int, source: str) -> Dict[str, Any]:
+                   top_k: int, source: str,
+                   ablation: str = "measured") -> Dict[str, Any]:
     """Reports -> the `metrics` payload, with a summary the renderer can trust.
 
     The summary carries the percentile range and the symmetric ablation bound so
     the viewer does not have to recompute them -- and, more importantly, so two
     traces rendered separately can be put on the SAME scale by reading each
     other's bounds instead of each normalising to itself.
+
+    `ablation` says WHY there are no deltas when there are none. quick_eval's
+    docstring already insists that "`ska_ablation.supported: False` is distinct
+    from `loss_delta: 0.0`"; a lone `has_ablation` bool collapses "you passed
+    --no_ablation" into "this model cannot be ablated", which is the same
+    conflation one level down.
     """
+    if ablation not in ABLATION_STATES:
+        raise ValueError(f"ablation must be one of {ABLATION_STATES}")
     all_lp = sorted(t["logprob"] for r in reports for t in r["tokens"])
     deltas = [t["ska_delta"] for r in reports for t in r["tokens"]
               if t.get("ska_delta") is not None]
+    abs_sorted = sorted(abs(d) for d in deltas)
     n = len(all_lp)
     if not n:
         raise ValueError("no supervised tokens in any sequence")
+    if ablation == "measured" and not deltas:
+        raise ValueError("ablation='measured' but no token carries a ska_delta")
 
     return {
         "sequences": reports,
@@ -141,13 +184,29 @@ def assemble_trace(reports: List[Dict[str, Any]], *,
             # colour ramp into a single shade.
             "logprob_p05": all_lp[int(0.05 * (n - 1))],
             "logprob_p95": all_lp[int(0.95 * (n - 1))],
-            "has_ablation": bool(deltas),
+            "ablation": ablation,
+            "has_ablation": ablation == "measured",
             # Symmetric about zero so a diverging scale cannot misreport sign.
             "ska_delta_absmax": round(max((abs(d) for d in deltas), default=0.0), 8),
+            # ...and a percentile bound as well, for the same reason logprob
+            # carries p05/p95 rather than min/max. Measured on a real 5.2M
+            # checkpoint: 96% of tokens move by more than 1e-4, yet scaling the
+            # diverging ramp to |max| = 7.8e-02 puts 78.5% of them in the
+            # neutral-gray "SKA changed nothing" bucket. The p95 bound puts
+            # 30.5% there. absmax is kept because it is the honest outlier
+            # bound; the renderer prefers this one for colour.
+            "ska_delta_p95abs": round(abs_sorted[int(0.95 * (len(abs_sorted) - 1))], 8)
+                                if abs_sorted else 0.0,
             "ska_delta_mean": (round(sum(deltas) / len(deltas), 8) if deltas else None),
-            # Rough, but enough to notice before writing something enormous next
-            # to a 200MB checkpoint.
-            "bytes_estimate": n * (90 + 26 * top_k),
+            # MEASURED, not modelled. The closed form this replaced,
+            # n * (90 + 26*top_k), read 2.8x low against a real trace: it costed
+            # the numbers and not the `indent=2` both write paths use, and it
+            # scaled with the top_k *asked for* rather than the min(top_k, vocab)
+            # actually written. For the one number whose stated job is "notice
+            # before writing something enormous", 2.8x low is the wrong
+            # direction. Excludes the envelope's own indentation, so still an
+            # estimate -- within ~15% instead of a factor of three.
+            "bytes_estimate": len(json.dumps(reports, indent=2, default=str)),
         },
     }
 
@@ -175,6 +234,13 @@ def write_trace(checkpoint, payload: Dict[str, Any]) -> Optional[Path]:
                         git_commit=git_commit())
 
 
+def _positive(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
+    return value
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         prog="python -m experimentation.evaluation.token_trace",
@@ -185,7 +251,9 @@ def main(argv=None) -> int:
     p.add_argument("--sequences", type=int, default=3)
     p.add_argument("--max_seq_len", type=int, default=128,
                    help="short on purpose: this is for reading, not measuring")
-    p.add_argument("--top_k", type=int, default=5)
+    p.add_argument("--top_k", type=_positive, default=5,
+                   help="how many predictions to keep per token; >=1, because "
+                        "0 silently wrote a trace whose every `top` was []")
     p.add_argument("--device", default=None)
     p.add_argument("--no_ablation", action="store_true",
                    help="skip the SKA-zeroed pass (halves the forward work)")
@@ -194,7 +262,7 @@ def main(argv=None) -> int:
                         "checkpoint that has no run dir)")
     args = p.parse_args(argv)
 
-    from experimentation.evaluation.evaluate import load_model
+    from experimentation.evaluation.loader import load_model
     from experimentation.training.data.dataset import MemmapPackedDataset
 
     device = torch.device(args.device or
@@ -203,20 +271,33 @@ def main(argv=None) -> int:
     model = model.to(device).eval()
 
     dataset = MemmapPackedDataset(args.data_dir, args.max_seq_len, seed=0)
+    n_seq = min(args.sequences, len(dataset))
+    if n_seq < 1:
+        p.error(f"--sequences must be >=1 (got {args.sequences}, "
+                f"dataset holds {len(dataset)})")
+    # Decided BEFORE the forward passes and carried into the summary, so
+    # "skipped" can never be reported as "this model cannot be ablated".
+    ablation = ("skipped" if args.no_ablation
+                else "measured" if hasattr(model, "ablate") else "unsupported")
+
     reports = []
-    for i in range(min(args.sequences, len(dataset))):
+    for i in range(n_seq):
         item = dataset[i]
         reports.append(token_report(
             model, item["input_ids"].to(device), item["labels"].to(device),
             tokenizer, top_k=args.top_k, ablate=not args.no_ablation))
 
-    payload = assemble_trace(reports, top_k=args.top_k, source=args.data_dir)
+    payload = assemble_trace(reports, top_k=args.top_k, source=args.data_dir,
+                             ablation=ablation)
     payload["summary"]["model_type"] = model_type
 
     if args.out:
-        import json
-        Path(args.out).write_text(json.dumps(payload, indent=2))
+        # atomic_write_json, not Path.write_text: it mkdir -p's the parent and
+        # writes through a temp file. write_text crashed on a missing parent
+        # AFTER every forward pass was already paid for.
+        from experimentation.atomic_io import atomic_write_json
         written = Path(args.out)
+        atomic_write_json(written, payload)
     else:
         written = write_trace(args.checkpoint, payload)
         if written is None:
@@ -224,12 +305,14 @@ def main(argv=None) -> int:
             return 1
 
     s = payload["summary"]
-    print(f"wrote {written}")
+    print(f"wrote {written} ({written.stat().st_size / 1e6:.2f} MB)")
     print(f"  {s['n_tokens']} tokens over {s['n_sequences']} sequence(s), "
           f"mean logprob {s['mean_logprob']}")
-    if s["has_ablation"]:
+    if s["ablation"] == "measured":
         print(f"  SKA delta: mean {s['ska_delta_mean']}, "
               f"|max| {s['ska_delta_absmax']}")
+    elif s["ablation"] == "skipped":
+        print("  SKA ablation not measured: --no_ablation was passed")
     else:
         print("  no SKA ablation -- this model exposes no .ablate()")
     return 0

@@ -15,6 +15,10 @@ The second view is why this exists. `ska_ablation.loss_delta` collapses the whol
 question to one scalar, and on a lightly-trained model that scalar is 1.45e-05,
 which reads as "SKA does nothing". Per token it becomes answerable: nothing at
 all, or a little everywhere, or a lot on exactly the positions needing recall.
+Run against real checkpoints it turned out to be the middle one -- 90%+ of
+tokens move, the signed deltas cancel in the mean -- plus one structural
+surprise the aggregate cannot express: under the chunked SKA approximation the
+delta is EXACTLY zero for the whole first chunk of every sequence.
 
 ## Colour, computed rather than chosen
 
@@ -41,7 +45,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-__all__ = ["render_html", "main"]
+__all__ = ["render_html", "label_for", "main"]
 
 SEQUENTIAL = ["#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7",
               "#3987e5", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b"]
@@ -70,6 +74,25 @@ def ink_for(background: str) -> str:
             else INK_LIGHT)
 
 
+def label_for(text: str) -> str:
+    """One token's text as readable markup.
+
+    Whitespace tokens are the ones that break: HTML collapses runs of space and
+    treats a newline as one, so ' ', '\n' and '\n\n' all render as the same
+    single blank cell and a paragraph break becomes invisible. Real shard text is
+    full of them -- the first real trace rendered here had newline tokens in the
+    first 10 positions -- and the fixture the unit tests use has none.
+
+    Returns markup, so the caller must not escape it again.
+    """
+    if not text:
+        return "&#9251;"                                 # U+2423 open box
+    return (html.escape(text)
+            .replace("\n", "&crarr;")                    # U+21B5, then a real break
+            .replace("\t", "&#8677;")                    # U+21E5
+            .replace(" ", "&nbsp;"))
+
+
 def _bucket(value: float, lo: float, hi: float, ramp: List[str]) -> str:
     if hi <= lo:
         return ramp[len(ramp) // 2]
@@ -92,7 +115,14 @@ def render_html(trace: Dict[str, Any], *,
         summary.update(scale_override)
 
     lo, hi = summary["logprob_p05"], summary["logprob_p95"]
-    dmax = summary.get("ska_delta_absmax") or 0.0
+    # p95 of |delta| in preference to |max|, for the same reason the logprob ramp
+    # uses p05/p95: scaled to the outlier, a real trace put 78.5% of its tokens
+    # in the neutral-gray bucket that is supposed to mean "SKA did nothing" while
+    # 96% of them had in fact moved by more than 1e-4. The ramp saturates at the
+    # bound, exactly as the sequential one does. Older traces carry no p95abs and
+    # fall back to the bound they were written with.
+    dmax = (summary.get("ska_delta_p95abs")
+            or summary.get("ska_delta_absmax") or 0.0)
     seq_ramp = list(reversed(SEQUENTIAL))     # dark = surprising
     div_ramp = list(reversed(DIVERGING))      # blue = SKA helped
 
@@ -100,15 +130,20 @@ def render_html(trace: Dict[str, Any], *,
     for si, seq in enumerate(metrics["sequences"]):
         lp_spans, d_spans = [], []
         for tok in seq["tokens"]:
-            label = html.escape(tok["token"]).replace(" ", "&nbsp;") or "&#9251;"
+            label = label_for(tok["token"])
+            # A newline token keeps its glyph AND breaks the line, so the shape
+            # of the source document survives into the page.
+            after = "<br>" if "\n" in tok["token"] else ""
             tip = html.escape(json.dumps(tok))
             bg = _bucket(tok["logprob"], lo, hi, seq_ramp)
             lp_spans.append(f'<span class="tk" style="background:{bg};'
-                            f'color:{ink_for(bg)}" data-t="{tip}">{label}</span>')
+                            f'color:{ink_for(bg)}" data-t="{tip}">{label}</span>'
+                            + after)
             if tok.get("ska_delta") is not None and dmax > 0:
                 dbg = _bucket(tok["ska_delta"], -dmax, dmax, div_ramp)
                 d_spans.append(f'<span class="tk" style="background:{dbg};'
-                               f'color:{ink_for(dbg)}" data-t="{tip}">{label}</span>')
+                               f'color:{ink_for(dbg)}" data-t="{tip}">{label}</span>'
+                               + after)
         blocks.append(
             f'<h3>sequence {si} &middot; {len(seq["tokens"])} tokens</h3>'
             f'<div class="seq" data-view="logprob">{"".join(lp_spans)}</div>'
@@ -197,7 +232,7 @@ button:disabled {{ opacity:.45; cursor:not-allowed; }}
   <span>surprising ({lo})</span>{legend_lp}<span>confident ({hi})</span>
 </div>
 <div class="legend hidden" id="lg-ska">
-  <span>SKA hurt (&minus;{dmax})</span>{legend_d}<span>SKA helped (+{dmax})</span>
+  <span>SKA hurt (&le;&minus;{dmax})</span>{legend_d}<span>SKA helped (&ge;+{dmax})</span>
 </div>
 
 {blocks}
@@ -205,11 +240,14 @@ button:disabled {{ opacity:.45; cursor:not-allowed; }}
 <p class="note">Log probability is a magnitude, so it gets one hue
 light&#8594;dark. The ablation delta is a polarity, so it gets two hues with a
 <em>neutral gray</em> midpoint &mdash; gray means SKA changed nothing at that
-token, which is most of them on a lightly-trained model. That scale is symmetric
+token. Measured on a 200-step 5.2M checkpoint that is <em>not</em> most of them:
+96% of tokens move by more than 1e&minus;4 and the aggregate is small only
+because the signed deltas cancel. That scale is symmetric
 about zero so colour cannot misreport sign. Ink is chosen per cell by luminance,
 and the one ramp step where neither ink reached WCAG&nbsp;4.5:1 was dropped rather
-than shipped unreadable. Range is the 5th&ndash;95th percentile, so one
-pathological token cannot flatten the ramp. Hover a token for the top-k the model
+than shipped unreadable. Both ramps are bounded by a percentile and saturate
+there, so one pathological token cannot flatten either into a single shade.
+Hover a token for the top-k the model
 actually predicted and where the true token ranked.</p>
 </div>
 <div id="tip"></div>
@@ -273,8 +311,13 @@ def main(argv=None) -> int:
         override = {
             "logprob_p05": min(a["logprob_p05"], b["logprob_p05"]),
             "logprob_p95": max(a["logprob_p95"], b["logprob_p95"]),
+            # Every bound the renderer might read, or the one it prefers gets
+            # taken from the trace's own summary and the two pages silently stop
+            # sharing a scale -- the exact failure --also exists to prevent.
             "ska_delta_absmax": max(a.get("ska_delta_absmax") or 0.0,
                                     b.get("ska_delta_absmax") or 0.0),
+            "ska_delta_p95abs": max(a.get("ska_delta_p95abs") or 0.0,
+                                    b.get("ska_delta_p95abs") or 0.0),
         }
 
     out = Path(args.out or Path(args.trace).with_suffix(".html"))

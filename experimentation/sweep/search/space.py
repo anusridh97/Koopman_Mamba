@@ -134,6 +134,7 @@ DEFAULT_WEIGHT_DECAYS = (0.05, 0.10, 0.15)
 DEFAULT_WARMUP_RATIOS = (0.02, 0.04, 0.06)
 DEFAULT_GRAD_CLIPS = (0.5, 1.0)
 DEFAULT_GAMMAS = (0.90, 1.00, 1.05)
+DEFAULT_POWER_KS = (1, 2)
 DEFAULT_NORM_CLIP_MULTIPLIERS = (0.75, 1.00, 1.25)
 
 RIDGE_BOUNDS = (3e-3, 3e-2)
@@ -167,6 +168,18 @@ def _with_value(choices: Sequence[float], value: float) -> list[float]:
     return sorted(merged)
 
 
+def _with_value_int(choices: Sequence[int], value: int) -> list[int]:
+    """`_with_value` for parameters that index something rather than scale it.
+
+    Separate from `_with_value` because that one coerces to float, which is
+    right for a ridge and wrong for a matrix power: optuna records the sampled
+    value verbatim, so choices of [1.0, 2.0] put floats in the journal and make
+    1.0 a different category from a hand-written 1 in an anchor design. Both
+    int-valued parameters here (ska_rank, ska_power_K) use this.
+    """
+    return sorted({*(int(c) for c in choices), int(value)})
+
+
 def _bounds_containing(bounds: tuple[float, float], value: float) -> tuple[float, float]:
     return (min(bounds[0], float(value)), max(bounds[1], float(value)))
 
@@ -187,7 +200,7 @@ def search_space(base_model: KoopmanLMConfig, *,
 
     return {
         "ska_rank": {"kind": "categorical",
-                     "choices": sorted({*(int(r) for r in ranks), base_model.ska_rank})},
+                     "choices": _with_value_int(ranks, base_model.ska_rank)},
         "n_ska_layers": {"kind": "categorical",
                          "choices": layer_count_choices(
                              len(base_model.ska_layer_indices), base_model.n_layers)},
@@ -204,6 +217,20 @@ def search_space(base_model: KoopmanLMConfig, *,
                                                         base_multiplier)},
         "gamma_value": {"kind": "categorical",
                         "choices": _with_value(DEFAULT_GAMMAS, base_model.ska_gamma_value)},
+        # Searched rather than pinned. It used to be pinned to 1 while
+        # configs/runs/4m-golden.yaml pins 2, so a study on that base compared
+        # every trial at K=1 against a baseline at K=2 -- internally consistent
+        # trials, but "we beat the baseline" confounded on one axis. Searching it
+        # removes the confound rather than picking a side, and it is nearly free:
+        # job 440135 measured route 3 at 0.00542 s (K=1) vs 0.00559 s (K=2).
+        #
+        # Choices are the two values any config in this repo actually uses, plus
+        # whatever the base pins (baseline containment). Not widened further: K
+        # is a matrix power, so K=3+ is both untested here and monotonically
+        # more work.
+        "ska_power_K": {"kind": "categorical",
+                        "choices": _with_value_int(DEFAULT_POWER_KS,
+                                                  base_model.ska_power_K)},
         "learning_rate": {"kind": "float", "log": True,
                           "low": lr * LR_FACTOR_BOUNDS[0], "high": lr * LR_FACTOR_BOUNDS[1]},
         "weight_decay": {"kind": "categorical", "choices": list(DEFAULT_WEIGHT_DECAYS)},
@@ -300,7 +327,12 @@ def params_to_overrides(params: Mapping[str, Any], base_model: KoopmanLMConfig, 
         "model.ska_gamma_learnable": False,
         "model.ska_gamma_clamp": None,
         "model.ska_gamma_bounds": None,
-        "model.ska_power_K": 1,
+        # `.get`, not `[...]`: report.py replays trial.params out of a journal,
+        # and trials recorded before this became searchable have no such key.
+        # They ran at the pinned value 1 -- so the fallback is 1 and NOT
+        # base_model.ska_power_K, or promoting an archived study would confirm
+        # a K the trial never ran at.
+        "model.ska_power_K": int(params.get("ska_power_K", 1)),
         "optim.lr": float(params["learning_rate"]),
         "optim.weight_decay": float(params["weight_decay"]),
         "optim.grad_clip": float(params["grad_clip"]),

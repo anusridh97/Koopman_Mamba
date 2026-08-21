@@ -155,6 +155,11 @@ def resolve_design(design: Design, base_model: KoopmanLMConfig,
         "weight_decay": nearest(design.weight_decay, space["weight_decay"]["choices"]),
         "warmup_ratio": nearest(design.warmup_ratio, space["warmup_ratio"]["choices"]),
         "grad_clip": nearest(design.grad_clip, space["grad_clip"]["choices"]),
+        # From the base config, not from a factor. An anchor is defined relative
+        # to the config you already run, and `_with_value_int` guarantees that
+        # config's own K is a declared choice, so this never snaps away.
+        "ska_power_K": int(nearest(base_model.ska_power_K,
+                                   space["ska_power_K"]["choices"])),
     }
 
 

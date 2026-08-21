@@ -184,3 +184,141 @@ def test_the_sign_convention_is_documented_where_it_is_computed():
     src = (REPO / "experimentation/evaluation/token_trace.py").read_text()
     assert "POSITIVE means SKA helped" in src
     assert 'lp - float(ablated[i, target])' in src
+
+
+# ------------------------------------- what only a real checkpoint showed ----
+#
+# Everything below was added after running the trace against a 200-step 5.2M
+# checkpoint and a real fineweb shard for the first time. None of it was
+# reachable from the hand-written fixture above, which is the point: the fixture
+# has no whitespace tokens, no tokenizer, and no filesystem.
+
+
+def test_whitespace_tokens_stay_distinguishable():
+    """' ', '\\n' and '\\n\\n' are three different tokens and HTML renders all
+    three as one collapsed blank. Real shard text is mostly whitespace-adjacent;
+    the fixture has none, which is why this needed a real trace to find."""
+    from experimentation.evaluation.inspect_html import label_for
+    got = {label_for(t) for t in (" ", "\n", "\n\n", "\t", "")}
+    assert len(got) == 5, f"whitespace tokens collided: {got}"
+    assert " " not in label_for(" "), "a literal space would collapse"
+    assert "\n" not in label_for("\n"), "a literal newline would collapse"
+
+
+def test_a_newline_token_breaks_the_line_it_renders_on():
+    """Otherwise a 512-token trace is one unbroken block and the paragraph
+    structure of the source document is invisible."""
+    trace = _fixture()
+    trace["metrics"]["sequences"][0]["tokens"][1]["token"] = "\n"
+    page = render_html(trace)
+    assert page.count("</span><br>") == 2, "both views break the line"
+    # Counted as </span><br> specifically: the tooltip script contains a bare
+    # <br> of its own, so a plain count of "<br>" is never zero.
+    assert render_html(_fixture()).count("</span><br>") == 0
+
+
+def test_the_summary_says_WHY_there_is_no_ablation():
+    """quick_eval's docstring: "`supported: False` is distinct from
+    `loss_delta: 0.0`". A lone has_ablation bool makes --no_ablation
+    indistinguishable from a model that cannot be ablated at all."""
+    from experimentation.evaluation import token_trace as tt
+
+    reports = [{"tokens": [{"pos": 0, "token": "a", "logprob": -1.0,
+                            "rank": 1, "top": [["a", 0.4]]}]}]
+    for state in ("skipped", "unsupported"):
+        summary = tt.assemble_trace(reports, top_k=1, source="s",
+                                    ablation=state)["summary"]
+        assert summary["ablation"] == state
+        assert summary["has_ablation"] is False
+    with pytest.raises(ValueError, match="no token carries a ska_delta"):
+        tt.assemble_trace(reports, top_k=1, source="s", ablation="measured")
+
+
+def test_bytes_estimate_is_measured_not_modelled():
+    """It was `n * (90 + 26*top_k)`, which read 2.8x LOW against a real trace:
+    it costed the numbers and not the indent=2 both write paths use. Too low is
+    the wrong direction for a number whose job is to warn you."""
+    from experimentation.evaluation import token_trace as tt
+
+    tokens = [{"pos": i, "token": "tok", "logprob": -7.0, "rank": 900,
+               "top": [["a", 0.01]] * 5, "ska_delta": 0.0} for i in range(40)]
+    payload = tt.assemble_trace([{"tokens": tokens}], top_k=5, source="s")
+    actual = len(json.dumps(payload, indent=2))
+    estimate = payload["summary"]["bytes_estimate"]
+    assert 0.7 * actual <= estimate <= 1.3 * actual, (estimate, actual)
+
+
+def test_top_k_below_one_is_rejected_at_the_boundary():
+    """--top_k 0 ran a full GPU pass and wrote a trace whose every `top` was [],
+    which is a page of coloured cells with nothing behind the tooltip."""
+    from experimentation.evaluation import token_trace as tt
+    with pytest.raises(SystemExit):
+        tt.main(["--checkpoint", "x", "--data_dir", "y", "--top_k", "0"])
+
+
+def test_the_out_path_is_written_atomically_through_a_created_parent(tmp_path):
+    """Path.write_text raised FileNotFoundError on a missing parent -- after
+    every forward pass had already been paid for."""
+    src = (REPO / "experimentation/evaluation/token_trace.py").read_text()
+    assert "atomic_write_json(written, payload)" in src
+    assert "Path(args.out).write_text" not in src
+    from experimentation.atomic_io import atomic_write_json
+    target = tmp_path / "a" / "b" / "trace.json"
+    atomic_write_json(target, {"ok": True})
+    assert json.loads(target.read_text()) == {"ok": True}
+
+
+def test_a_single_token_id_decodes_with_its_leading_space():
+    """`tokenizer.decode([id])` drops SentencePiece's boundary marker, so a
+    trace of "in India" rendered as "inIndia" -- no word boundaries anywhere.
+    Checked against a stand-in with the same contract as the real tokenizer,
+    since the real one is a 500MB download."""
+    from experimentation.evaluation.token_trace import _decode
+
+    class SPLike:
+        pieces = {7: "▁India", 8: "ving", 9: "▁"}
+
+        def decode(self, ids):
+            return self.pieces[ids[0]].replace("▁", "")
+
+        def convert_ids_to_tokens(self, tid):
+            return self.pieces[tid]
+
+    tok = SPLike()
+    assert _decode(tok, 7) == " India"
+    assert _decode(tok, 8) == "ving"
+    assert _decode(tok, 9) == " ", "the bare boundary piece IS a space"
+
+
+def test_the_ablation_ramp_is_bounded_by_a_percentile_not_the_outlier():
+    """The logprob ramp already uses p05/p95 for this reason; the diverging one
+    used raw |max| and so painted 78.5% of a real trace's tokens with the
+    neutral gray that means "SKA did nothing" -- while 96% of them had moved by
+    more than 1e-4. The view was hiding its own finding."""
+    from experimentation.evaluation import token_trace as tt
+
+    deltas = [0.004] * 99 + [0.9]            # one outlier, 99 real signals
+    reports = [{"tokens": [
+        {"pos": i, "token": "t", "logprob": -7.0, "rank": 9, "top": [["a", 0.1]],
+         "ska_delta": d} for i, d in enumerate(deltas)]}]
+    summary = tt.assemble_trace(reports, top_k=1, source="s")["summary"]
+    assert summary["ska_delta_absmax"] == 0.9, "the outlier bound is still recorded"
+    assert summary["ska_delta_p95abs"] == 0.004
+
+    trace = {"metrics": {"sequences": reports, "summary": summary}}
+    page = render_html(trace)
+    mid = DIVERGING[len(DIVERGING) // 2]
+    assert page.count(f"background:{mid}") <= 2, \
+        "the 99 real signals must not all collapse into the neutral bucket"
+
+
+def test_also_shares_every_bound_the_renderer_might_read(tmp_path):
+    """--also builds the shared scale from the summaries. Miss the key the
+    renderer actually prefers and each page silently self-normalises again."""
+    import inspect
+
+    from experimentation.evaluation import inspect_html as ih
+    src = inspect.getsource(ih.main)
+    for key in ("ska_delta_absmax", "ska_delta_p95abs",
+                "logprob_p05", "logprob_p95"):
+        assert key in src, f"--also drops {key} from the shared scale"

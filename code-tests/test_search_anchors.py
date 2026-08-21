@@ -210,3 +210,32 @@ def test_anchors_imports_without_optuna():
     import experimentation.sweep.search.anchors as anchors
 
     assert "optuna" not in anchors.__dict__
+
+
+# ------------------------------------------- the space and the anchor agree ----
+#
+# The bidirectional keys-match guard is already
+# `test_resolved_params_match_the_declared_space_keys` above, and it is what
+# caught ska_power_K missing here when the space grew that dimension on
+# 2026-08-21. Worth knowing WHY it matters: study.enqueue_trial accepts a
+# PARTIAL params dict and samples whatever is absent, so an unresolved dimension
+# does not error -- it silently makes that axis random for every anchor, which
+# is the one thing an anchor exists not to be.
+
+def test_an_anchor_runs_at_the_base_configs_power_K():
+    """An anchor is defined relative to the base config, so K comes from there
+    rather than from a factor -- and `_with_value_int` guarantees the base's own
+    value is a declared choice. 4m-golden pins 2, configs/50m.yaml pins 1, and
+    both must round-trip."""
+    import dataclasses
+
+    from experimentation.sweep.search.anchors import Design, resolve_design
+
+    for value in (1, 2):
+        cfg = dataclasses.replace(_base_model(), ska_power_K=value)
+        from experimentation.sweep.search.space import search_space
+        space = search_space(cfg, base_name="probe")
+        params = resolve_design(Design(name="baseline"), cfg, space, base_lr=4e-4)
+        assert params["ska_power_K"] == value
+        assert value in space["ska_power_K"]["choices"], "snapping would move it"
+

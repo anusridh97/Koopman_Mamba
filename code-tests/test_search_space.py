@@ -44,6 +44,7 @@ def _baseline_params():
         "ska_layerscale_init": cfg.ska_layerscale_init,  # 0.01
         "norm_clip_multiplier": cfg.ska_norm_clip_c / math.sqrt(cfg.ska_rank),
         "gamma_value": cfg.ska_gamma_value,             # 1.0
+        "ska_power_K": cfg.ska_power_K,                  # 1
         "learning_rate": 4.0e-4,
         "weight_decay": 0.1,
         "warmup_ratio": 0.02,
@@ -411,3 +412,64 @@ def test_exact_auto_warns_about_the_rank_cliff_not_a_constant_slowdown():
     doc = space.__doc__
     assert "cliff" in doc.lower(), "the discontinuity has to be named as one"
     assert "440122" in doc or "440135" in doc, "cite the measurement"
+
+
+# ------------------------------------------------------------- power_K ----
+
+def test_power_K_is_searched_rather_than_pinned():
+    """It used to be pinned to 1 while `configs/runs/4m-golden.yaml` pins 2, so a
+    study on that base compared every trial at K=1 against a baseline at K=2 --
+    trials internally consistent, but "we beat the baseline" confounded on one
+    axis. Searching it removes the confound instead of picking a side, and costs
+    nothing: job 440135 measured route 3 at 0.00542 s (K=1) vs 0.00559 s (K=2).
+    """
+    from experimentation.sweep.search.space import params_to_overrides, search_space
+
+    decl = search_space(_base_model())["ska_power_K"]
+    assert decl["kind"] == "categorical"
+    assert set(decl["choices"]) >= {1, 2}, \
+        "both values any config in this repo uses must be reachable"
+    assert all(isinstance(c, int) for c in decl["choices"]), \
+        "power_K indexes a matrix power; a float would silently truncate"
+
+    for k in (1, 2):
+        overrides = params_to_overrides(dict(_baseline_params(), ska_power_K=k),
+                                        _base_model(), max_steps=15000)
+        assert overrides["model.ska_power_K"] == k
+
+
+def test_a_base_config_pinning_power_K_stays_reachable():
+    """Baseline containment, the same rule the rest of the space follows: a space
+    that cannot express the config you already run cannot tell you whether you
+    improved on it. 4m-golden pins 2, configs/50m.yaml pins 1."""
+    import dataclasses
+
+    from experimentation.sweep.search.space import search_space
+
+    for value in (1, 2, 3):
+        cfg = dataclasses.replace(_base_model(), ska_power_K=value)
+        assert value in search_space(cfg)["ska_power_K"]["choices"]
+
+
+def test_an_archived_trial_without_power_K_promotes_at_one():
+    """report.py replays `trial.params` from a journal through
+    params_to_overrides. Trials recorded BEFORE power_K was searchable have no
+    such key and ran at the pinned value 1 -- so the fallback has to be 1, not
+    the base config's value, or promoting an old study would confirm something
+    the trial never ran.
+    """
+    import dataclasses
+
+    from experimentation.sweep.search.space import params_to_overrides
+
+    # The base MUST pin something other than 1 here, or the wrong implementation
+    # (falling back to base_model.ska_power_K) coincides with the right one and
+    # this test is a green guard. configs/50m.yaml pins 1; 4m-golden pins 2, and
+    # 4m-golden is the base the first real study runs on.
+    cfg = dataclasses.replace(_base_model(), ska_power_K=2)
+    archived = _baseline_params()
+    del archived["ska_power_K"]
+    overrides = params_to_overrides(archived, cfg, max_steps=15000)
+    assert overrides["model.ska_power_K"] == 1, (
+        "an archived trial ran at the pinned K=1; promoting it at the base "
+        "config's K would confirm something it never ran")
