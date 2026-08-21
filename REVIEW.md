@@ -244,19 +244,40 @@ from `docs/superpowers/specs/2026-08-21-traintask-design.md` §10:
   `code-tests/test_golden_coverage.py::NO_CURVE_EXPECTED` with the reason written
   next to them. **Whether they belong in the unification is an open decision.**
 
-**No run launched through the production path is reproducible.** `RuntimeSpec`
-has `seed` but no `deterministic` field, and `run/train_argv.py` never passes
-`--deterministic`. Consequences worth knowing before trusting any comparison:
+**FIXED: a spec-driven run can now be reproducible.** `RuntimeSpec.deterministic`
+exists and `train_argv` passes `--deterministic`. It lives on `runtime` because
+`run_id` is sha256(model + data + optim + seed), so it renumbers nothing --
+`4m-golden.yaml` keeps `run_id 2e63f16e` / `group_id d812e412`, verified against
+HEAD and pinned by test. Default False; `4m-golden.yaml` sets it, because that
+spec's purpose is to be re-run and compared.
 
-- `golden_4m_curve.json`'s "noise floor" of **2.0e-4 is run-to-run
-  nondeterminism**, not a precision limit. The two synthetic goldens reach
-  0.000000 only because their capture scripts invoke `train.py`/`mqar_finetune.py`
-  directly with `--deterministic`. So one of three instruments is ~2000x blunter
-  than the others, and the gap is a missing field.
-- **No SKA route can be run reproducibly at all.** The route is selectable only
-  from a spec (the run system, which has no determinism), and determinism only
-  from a trainer's CLI (which has no route flag). Nothing bridges them.
-- No search trial is reproducible.
+Consequences, all now measured (jobs 440211 / 440216):
+
+- `golden_4m_curve.json`'s old "noise floor" of 2.0e-4 **was** nondeterminism, not
+  precision. Re-captured deterministically it is **0.000000**. All four
+  instruments are now equally sharp.
+- **A now-possible measurement that has NOT been run:** the chunked-vs-exact SKA
+  route comparison. It previously produced 2.3e-4 against a 2.0e-4 floor, i.e.
+  unresolvable. Deterministic runs resolve to 1e-4 (the log prints `loss %.4f`),
+  and 2.3e-4 is above that, so the question "how much training loss does the
+  chunked approximation actually cost" is now answerable and worth answering
+  before trusting a short-horizon study.
+- Search trials are still not reproducible: `StudySpec` has no way to request
+  determinism for its trials. Deliberate for now (it would slow every trial), but
+  it means trial-to-trial differences below ~2e-4 are noise.
+
+**What the instruments can resolve.** The progress line prints `loss %.4f`, so
+1e-4 is the smallest representable difference and `compare_golden_curve.py`'s
+`MIN_TOLERANCE` is exactly that. A "0.000000 floor" means *identical at the
+printed resolution*, not to arbitrary precision.
+
+**Resume through `train.py`'s own loop is verified exact** (`golden_resume_curve.json`,
+job 440216): interrupted after the step-266 checkpoint, resumed to 400,
+0.000000 at every shared step. Its first run found a real defect that no existing
+test could see -- `test_resume_equivalence.py` exercises its own loop body, not
+`train.py`'s -- namely that the running-loss window did not cross the checkpoint,
+showing up as 0.0011 at the first post-resume log. Training was already bit-exact;
+the reporting was not. Fixed in `train.py::_save_all`.
 - **`SyntheticDataSpec` still cannot launch.** `run/train_argv.py:101` and
   `run/data_verify.py:53` still refuse `kind: synthetic` by name, so MQAR is not
   yet an ordinary run with a run directory and a result envelope.
