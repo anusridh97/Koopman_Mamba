@@ -585,3 +585,57 @@ def test_table2_resumes_at_the_next_step():
     assert len(got) == 2, "steps 4 and 5 remain"
     assert torch.equal(got[0][0], make_train_batch(4, args)[0])
 
+
+def test_table2_batches_consume_no_global_rng():
+    """Why table2's resume is exact despite restoring no RNG -- measured in job
+    440248 at 0.000000 across the interruption.
+
+    Its `load_checkpoint` restores model + optimizer + scheduler + step and does
+    no RNG handling at all (`grep -c rng` is 0 in table2.py and
+    mqar_finetune.py), unlike train.py's save_resume_state. That should desync a
+    resumed run's stochastic stream -- and does not, for two reasons:
+
+      * KoopmanLMConfig declares no dropout field, so the forward has no
+        stochastic op;
+      * the curriculum generators use a LOCAL torch.Generator().manual_seed(...)
+        keyed on args.seed + step, never the global stream.
+
+    So the step consumes no global RNG and there is nothing to restore. That is
+    a property of the current data generator, NOT of the resume mechanism: swap
+    one local Generator for a global call and table2's resume silently stops
+    being reproducible, with no test to notice. This is that test, for the half
+    that runs without a GPU.
+    """
+    from experimentation.experiments.table2 import make_train_batch
+
+    args = _Table2Args(curriculum="batch_mixed")
+    torch.manual_seed(99)
+    before = torch.random.get_rng_state()
+    make_train_batch(1, args)
+    make_train_batch(2, args)
+    after = torch.random.get_rng_state()
+
+    assert torch.equal(before, after), (
+        "make_train_batch drew from the GLOBAL torch RNG. table2's resume "
+        "restores no RNG state, so this silently makes a resumed run diverge "
+        "from an uninterrupted one -- use torch.Generator().manual_seed(...) "
+        "as curricula.py already does")
+
+
+def test_table2_batches_are_reproducible_from_the_step_alone():
+    """The other half of the same property: the same step gives the same batch
+    regardless of what ran before it. That is what makes a resume able to pick
+    up at step N with no data position to recover."""
+    from experimentation.experiments.table2 import make_train_batch
+
+    args = _Table2Args(curriculum="batch_mixed")
+    torch.manual_seed(1)
+    first = make_train_batch(7, args)
+    torch.manual_seed(12345)
+    for _ in range(3):
+        make_train_batch(99, args)
+    second = make_train_batch(7, args)
+
+    assert torch.equal(first[0], second[0]) and torch.equal(first[1], second[1]), \
+        "step 7's batch depends on history, so a resume cannot reproduce it"
+

@@ -348,6 +348,27 @@ Long commit messages are deliberate — they carry the *why*, and the deviations
 
 ## 8. Corrections I made to my own earlier claims
 
+**"The loop unification fixes a correctness bug in two trainers."** I predicted
+this from reading the code: `mqar_finetune.py` and `table2.py` restore no RNG on
+resume (`grep -c rng` is 0 in both) while `train.py` does, so a resumed run's
+stochastic stream should desync. Job 440248 measured it and **table2's resume is
+exact, 0.000000 across the interruption**. The prediction was wrong.
+
+Why it holds: `KoopmanLMConfig` declares no dropout field, so the forward has no
+stochastic op, and the curriculum generators use a LOCAL
+`torch.Generator().manual_seed(args.seed + step)` rather than the global stream.
+A table2 step consumes no global RNG, so there is nothing to restore.
+
+The real residue is smaller but genuine: that exactness is a property of the
+current architecture and data generator, **not** of the resume mechanism. Add a
+dropout, or swap one local Generator for a global call, and table2's resume
+silently stops being reproducible with nothing to catch it. Now pinned by
+`test_table2_batches_consume_no_global_rng` for the half that runs on CPU.
+
+So the loop unification is **deduplication, not a bug fix** -- which is worth
+knowing before spending the riskiest remaining refactor on it.
+
+
 **"The route effect is 2.3e-4."** I wrote that as though it were a measurement of
 how much the SKA route matters. It is an upper bound at the instrument's own noise
 floor: both runs compared were nondeterministic and `golden_4m_curve.json`'s floor
