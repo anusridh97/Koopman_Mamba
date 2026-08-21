@@ -1,11 +1,11 @@
 # Reviewing `jack/search-and-provenance`
 
-49 commits, 104 files, +11,734 / −361. Written to be reviewed commit-by-commit
-rather than as one diff, because 89% of the insertions are new files where a diff
+64 commits, 124 files, +15,010 / −373. Written to be reviewed commit-by-commit
+rather than as one diff, because most of the insertions are new files where a diff
 tells you nothing you wouldn't get from reading the file.
 
-**Test counts.** 1051 passed / 43 skipped standard; 1127 / 31 with optuna on the
-path. `main` was 499 / 28.
+**Test counts.** 1136 passed / 45 skipped standard; ~1150 with optuna on the path.
+`main` was 499 / 28.
 
 This file is the entry point. It says what changed, in what order to look, how to
 run each new thing, and — most importantly — **what is not verified**.
@@ -29,7 +29,7 @@ Then read §3's table and §6. Everything else is depth.
 |---|---|---|
 | **A** | Precision policy: `compute_precision` / `ska_precision` / `mlp_precision`, threaded into the SKA core, the Koopman rotation, and all five trainers via one `amp_for` helper | GPU job 436063: real 30-step H100 training, loss 10.08 → 8.26 |
 | **B** | Provenance: `code_id` + `dirty` in all four checkpoint writers; `harness.py` stops overwriting a recorded `cfg_hash` | GPU 436063 step 3b: `meta.pt` carries `code_id=3be37b7` |
-| **C** | Adaptive search (`experimentation/sweep/search/`, 8 modules): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | unit-tested to 92–100%; **NOT runnable yet — see §6** |
+| **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **runnable** — `python -m experimentation.sweep.search`; wiring verified on CPU (4 anchors enqueued, 4 trials driven, reports written). End-to-end on GPU still open, see §6 |
 | **D** | `per_device_batch_size` moved `OptimSpec` → `RuntimeSpec`, so an OOM-ladder rung no longer renames the experiment | 0 of 11 config hashes moved |
 | **E** | Test infrastructure: import gate, static undefined-name check, `param_groups` characterization, loss-alignment conformance, a golden training curve | see §4 |
 | **F** | Cleanup: both documented training commands were broken; `load_model` deduplicated; dangling in-tree pointers | §4 |
@@ -78,8 +78,8 @@ export TOOLS=/users/jkli/.venvs/koopman-tools/site     # coverage, lm_eval
 
 **Tests.**
 ```bash
-$CPU -m pytest code-tests/ -q                                    # 1051 / 43 skipped
-PYTHONPATH=.:$OPT $CPU -m pytest code-tests/ -q                   # 1127 / 31
+$CPU -m pytest code-tests/ -q                                    # 1136 / 45 skipped
+PYTHONPATH=.:$OPT $CPU -m pytest code-tests/ -q                   # ~1150 / 31
 ```
 
 **Coverage** — 58% overall; this branch's own new code is 95%.
@@ -108,6 +108,12 @@ $CPU scripts/compare_golden_curve.py <a-train.log>
 sbatch scripts/verify_search_and_provenance.sbatch
 ```
 
+**An adaptive search:**
+```bash
+$CPU -m experimentation.sweep.search configs/search/smoke-4m.yaml --dry_run
+sbatch scripts/verify_study_e2e.sbatch      # 4 trials x 200 steps, ~minutes
+```
+
 **The static anchor sweep** (works today, needs no optuna):
 ```bash
 $CPU scripts/gen_anchor_sweep.py --design-file configs/search/curated_15.yaml \
@@ -126,7 +132,12 @@ matters is which of them would catch a real mistake:
 | `test_module_import_health.py` | a `NameError` in a module no test imports. Found two real ones on first run |
 | `test_ska_precision_wiring.py` | the precision refactor is bit-identical at its defaults, against a golden captured **before** the change |
 | `test_identity_baseline.py` | no config hash moved that shouldn't have |
-| `golden_4m_curve.json` + comparator | the training loop still trains identically. Noise floor measured at 0.0002 by running twice |
+| `golden_4m_curve.json` + comparator | the shard loop still trains identically. Noise floor 0.0002 -- log-format precision, not numerical |
+| `golden_mqar_curve.json` | the synthetic loop, the path whose shift convention differs. Noise floor **0.0** with `--deterministic`; **0.53 without it**, which is how that missing flag was found |
+| `test_train_task.py` | each task's `step_loss` is bit-identical to the inline code it replaces. Mutation-checked against all three mistakes the refactor can make |
+| `test_progress_log_format.py` | a trainer whose log the pruner cannot parse, which made synthetic trials silently unprunable |
+| `test_search_trial_budget.py` | a trial training for the base spec's budget instead of the study's -- a 25x overspend against a 15000-step base |
+| `test_local_launcher_nonblocking.py` | a locally-launched trial that cannot be cancelled, i.e. pruning that frees no GPU |
 
 **On mutation checks.** Several of these were written *after* the code, so each
 was verified by breaking the code and confirming the test fails. A test that has
@@ -147,14 +158,13 @@ notice.
 
 Read this section before trusting anything above it.
 
-**The adaptive search cannot be run.** Two independent blockers:
-- there is no `search/__main__.py`. `experimentation/sweep/search/__init__.py`
-  advertises `python -m experimentation.sweep.search <study.yaml>`; that
-  invocation does not exist. My docstring, my error.
-- **nothing writes the objective file.** Optuna reads
-  `run_dir/eval/<ckpt>/quick_eval.json`, and the only caller of
-  `write_quick_eval` anywhere is `scripts/verify_search_and_provenance.sbatch`,
-  by hand. A study today would train N models successfully and record N FAILs.
+**The adaptive search runs, but has never completed a study on GPU.** Its wiring
+is verified on CPU -- anchors enqueued, trials driven, `trials.csv` and
+`top_trials.md` written -- and `train.py --eval_on_final` now writes the
+`quick_eval.json` a trial is scored from, which was the hard blocker. What has not
+happened is a study finishing on real hardware with real scores. Job 439754 was
+that attempt and was cancelled (see the `exact_auto` note below); the rerun is
+`sbatch scripts/verify_study_e2e.sbatch`.
 
 **Also missing for a *good* study:** `configs/search/curated_15.yaml` — 15
 hand-chosen anchor designs. A study runs without it, but the first four trials are
@@ -169,6 +179,20 @@ also means **`--resume` and decode/prefill parity are unverified.**
 `test_importing_koopman_lm_does_not_reach_the_cuda_extras` fails on GPU and passes
 *vacuously* on CPU, because `triton` is absent there — checked by running its
 probe against untouched `main` in the same venv, where it fails identically.
+
+**`backend_policy: exact_auto` can look like a hang.** Measured (job 439754): a
+study whose base spec pins `ska_backend: pytorch` / `ska_prefix_scan: false` has
+those overridden to `auto` / `true`, and the resulting path sat at **99% CPU for 21
+minutes without logging a single step** on a 5.2M model that trains in ~2 minutes
+standalone. One trainer, one attempt, `--no_compile` -- so neither a collision nor
+compilation. Silent: no error, no warning, no slow-path notice.
+
+Overriding the backend is *correct* (trials must be comparable, so a search cannot
+inherit whichever kernel the base spec chose), so the fix is not to stop pinning
+it. But the default policy for a study is `exact_auto`, and a real study on it
+would appear to hang. `configs/search/smoke-4m.yaml` now uses `proxy_chunked` --
+space.py's own "cheap approximate screen" -- and the underlying slowness is
+**unexplained and untracked beyond this note.**
 
 **Never exercised:** multi-GPU / DDP. Which SKA backend a run actually selected
 (nothing asserts it). `ska_precision='fp64'` on GPU. An optuna study driving real
@@ -223,3 +247,17 @@ Recorded because a branch that hides its retractions is harder to trust:
   `main`.
 - Reported 58% coverage as if it meant something, in the same session where I
   demonstrated it does not.
+- "The search is one entry point short of usable" — **wrong twice.** It also
+  needed an objective producer, and then a trial-budget fix, and then a backend
+  policy that does not sit at 99% CPU. Each was found by trying to run it, not by
+  reading it.
+- Wrote `StudySpec.max_steps` documented as "steps per trial, the single most
+  important field to pin" while nothing applied it. The spec promised a budget the
+  driver never delivered.
+- Claimed a run-directory collision from two `train.py` processes sharing an
+  `--output_dir`. **Wrong** — `attempts.jsonl` showed one attempt; the second pid
+  was a `--num_workers 4` DataLoader worker inheriting argv. Checked before
+  reporting, which is the only reason it is here as a retraction and not as a
+  finding.
+- Committed and pushed `fd05a82` with a test failing, having read "1099 passed"
+  and missed "1 failed" one line above it in the same combined command.
