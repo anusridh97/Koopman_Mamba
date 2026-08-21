@@ -66,10 +66,38 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-__all__ = ["TrainTask", "ShardTask", "SyntheticTask", "IGNORE_INDEX"]
+__all__ = ["TrainTask", "ShardTask", "SyntheticTask", "Table2Task",
+           "synthetic_loss", "IGNORE_INDEX"]
 
 #: Both conventions agree on this; only *where* the offset happens differs.
 IGNORE_INDEX = -100
+
+
+def synthetic_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """The synthetic-convention loss, as ONE definition.
+
+    `logits[:, :-1]` against `labels[:, 1:]`: the logits at position t are scored
+    against the label at t+1, so the model must PREDICT the answer rather than
+    repeat it. `eval_mqar` (curricula.py:99) offsets identically, and it has to --
+    an accuracy computed at the other offset would report plausible numbers
+    forever.
+
+    Exists as a function, not only as `SyntheticTask.step_loss`, because
+    `step_loss` takes the MODEL and runs the forward -- which is right for a
+    training step and wrong for table2's per-task eval, which deliberately
+    reuses the training forward's logits rather than paying for a second pass.
+    table2.py spelled this expression out three times (the step loss and both
+    curriculum halves); it now has one definition and three call sites.
+
+    The design doc's §6.3 anticipated table2's dataset and its fp16 scaler, but
+    not that its in-loop eval shares the training forward. This is that
+    resolution: share the expression, leave the interface alone.
+    """
+    return F.cross_entropy(
+        logits[:, :-1].reshape(-1, logits.size(-1)),
+        labels[:, 1:].reshape(-1),
+        ignore_index=IGNORE_INDEX,
+    )
 
 
 class TrainTask:
@@ -87,6 +115,14 @@ class TrainTask:
     shift_in_data: bool = True
 
     name: str = "task"
+
+    #: Which precision this loop has always trained in, so a unified loop can
+    #: honour it instead of imposing one. Only `Table2Task` sets fp16, and it is
+    #: the only loop that runs a GradScaler -- so this field is what keeps a
+    #: shared loop from silently retraining table2 in bf16, which would change
+    #: training while still producing a descending curve. `None` means "whatever
+    #: the config/runtime says", which is every other task's existing behaviour.
+    compute_precision: Optional[str] = None
 
     # ---------------------------------------------------------------- required
 
@@ -196,12 +232,7 @@ class SyntheticTask(TrainTask):
         plausible numbers forever.
         """
         input_ids, labels = _unpack(batch)
-        logits = _logits(model(input_ids=input_ids))
-        return F.cross_entropy(
-            logits[:, :-1].reshape(-1, logits.size(-1)),
-            labels[:, 1:].reshape(-1),
-            ignore_index=IGNORE_INDEX,
-        )
+        return synthetic_loss(_logits(model(input_ids=input_ids)), labels)
 
     def in_loop_eval(self, model, step: int) -> Optional[Mapping[str, Any]]:
         if not self._eval_fn or not self.eval_every:
@@ -209,6 +240,85 @@ class SyntheticTask(TrainTask):
         if step % self.eval_every:
             return None
         return self._eval_fn(model, step)
+
+
+class _StepKeyedBatches(torch.utils.data.Dataset):
+    """`make_train_batch(step, args)` as a Dataset, indexed by the STEP number.
+
+    Two things this exists to get right, both from the design doc §6.3.
+
+    **The index is the step, not a zero offset.** table2's loop is
+    `range(start_step + 1, max_steps + 1)`, so its first step is 1 while a
+    Dataset is conventionally indexed from 0. That is not cosmetic here:
+    `--curriculum mixed` alternates whole batches on `step % 2`, so a one-place
+    shift swaps the two tasks for every batch of the run and still produces a
+    loss that descends. Index 0 is therefore rejected rather than quietly mapped.
+
+    **One index is one whole BATCH.** `__getitem__` conventionally returns a
+    single sample for `DataLoader` to stack, but `make_train_batch` returns the
+    batch. Handed to `DataLoader(batch_size=8)` this yields `[8, B, T]` *and*
+    burns 8 steps of curriculum per iteration -- the shape is catchable, the
+    curriculum burn shows up only in a curve. So the requirement travels with
+    the object as `dataloader_batch_size = None` rather than living in a comment
+    at the one call site that currently knows about it.
+
+    Being keyed on `step` also makes resume exact: step 400 after a restart
+    draws exactly what step 400 would have drawn, with no epoch position to
+    recover. That is stronger than the shard path, which has to fast-forward.
+    """
+
+    #: For `DataLoader(dataset, batch_size=dataset.dataloader_batch_size)`.
+    #: MUST be None -- DataLoader's default is 1, which would add a phantom
+    #: leading axis instead of raising.
+    dataloader_batch_size = None
+
+    def __init__(self, make_batch, args, max_steps: int):
+        self._make_batch = make_batch
+        self._args = args
+        self._max_steps = int(max_steps)
+
+    def __len__(self) -> int:
+        # +1 because step numbering is 1-based and `__getitem__(max_steps)` must
+        # be in range.
+        return self._max_steps + 1
+
+    def __getitem__(self, step: int):
+        if step <= 0:
+            raise IndexError(
+                f"step index {step} is out of range: table2 steps are 1-based "
+                f"(`range(start_step + 1, max_steps + 1)`), and treating index 0 "
+                f"as the first step shifts the whole run's curriculum parity")
+        return self._make_batch(int(step), self._args)
+
+
+class Table2Task(SyntheticTask):
+    """table2's curriculum training, the third loop.
+
+    Subclasses `SyntheticTask` because its loss is not merely equivalent to it,
+    it is character-identical -- `logits[:, :-1]` against `labels[:, 1:]` with
+    `ignore_index` -100, spelled as a literal in table2.py and as
+    `IGNORE_INDEX` here. Re-deriving it would create a second copy of the one
+    expression the alignment suite exists to pin.
+
+    What is genuinely different is everything around it: no dataset (see
+    `_StepKeyedBatches`), fp16 with a GradScaler, and a two-task eval split.
+    """
+
+    name = "table2"
+    shift_in_data = False
+    #: The only task that sets this. table2 has always trained fp16 + GradScaler
+    #: and nothing else exercises the loop's scaler path.
+    compute_precision = "fp16"
+
+    def __init__(self, *, max_steps: int = 400, **kwargs):
+        super().__init__(**kwargs)
+        self._max_steps = max_steps
+
+    def dataset(self, cfg, args) -> torch.utils.data.Dataset:
+        from experimentation.experiments.table2 import make_train_batch
+
+        return _StepKeyedBatches(make_train_batch, args,
+                                 getattr(args, "max_steps", self._max_steps))
 
 
 def _unpack(batch):

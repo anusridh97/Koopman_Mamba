@@ -65,13 +65,13 @@ import time
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 
 from experimentation.experiments.curricula import eval_niah, make_sysprompt, make_toolcall
 from koopman_lm.config import build_config, config_hash
 from experimentation.training.optim import param_groups
 from experimentation.training.repro import enable_determinism
 from experimentation.training.amp import amp_for
+from experimentation.training.task import Table2Task, synthetic_loss
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.baselines import (
     build_mamba_attention,
@@ -267,6 +267,13 @@ def train(args) -> None:
     # its numbers.
     autocast, scaler = amp_for(cfg, "cuda", enabled=(device.type == "cuda"))
 
+    # NB: named train_task, not `task` -- `task` is already a local below,
+    # holding a curriculum NAME ("toolcall"/"sysprompt") in the mixed branch.
+    train_task = Table2Task(max_steps=args.max_steps)
+    assert train_task.compute_precision == "fp16", (
+        "Table2Task declares the precision this loop has always used; if that "
+        "no longer says fp16 the scaler above is the wrong tool")
+
     model.train()
     t0 = time.time()
     # Per-task running loss, tracked regardless of --curriculum so the log is
@@ -278,8 +285,14 @@ def train(args) -> None:
     tokens_seen = 0
     half = args.batch_size // 2
 
+    # Batches come through the task's dataset rather than from a bare
+    # make_train_batch call. Same function underneath, but the STEP-KEYED
+    # indexing is now the thing under test (task.py::_StepKeyedBatches), so the
+    # unified loop inherits a wrapper this trainer's own golden has validated.
+    batches = train_task.dataset(cfg, args)
+
     for step in range(start_step + 1, args.max_steps + 1):
-        inputs, labels = make_train_batch(step, args)
+        inputs, labels = batches[step]
         inputs = inputs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
         tokens_seen += inputs.numel()
@@ -287,11 +300,12 @@ def train(args) -> None:
         with autocast:
             out = model(input_ids=inputs)
             logits = out["logits"]
-            loss = F.cross_entropy(
-                logits[:, :-1].reshape(-1, logits.size(-1)),
-                labels[:, 1:].reshape(-1),
-                ignore_index=-100,
-            )
+            # ONE definition of this expression, in task.py::synthetic_loss,
+            # shared with mqar_finetune via SyntheticTask. The forward stays
+            # HERE rather than going through Table2Task.step_loss, because the
+            # per-task eval below deliberately reuses these logits instead of
+            # paying for a second pass -- see synthetic_loss's docstring.
+            loss = synthetic_loss(logits, labels)
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -310,10 +324,8 @@ def train(args) -> None:
                 task = "toolcall" if step % 2 == 0 else "sysprompt"
                 loss_sum[task] += loss.item(); loss_count[task] += 1
             else:  # batch_mixed: slice the already-computed logits, no extra forward pass
-                tc_loss = F.cross_entropy(
-                    logits[:half, :-1].reshape(-1, logits.size(-1)), labels[:half, 1:].reshape(-1), ignore_index=-100)
-                sp_loss = F.cross_entropy(
-                    logits[half:, :-1].reshape(-1, logits.size(-1)), labels[half:, 1:].reshape(-1), ignore_index=-100)
+                tc_loss = synthetic_loss(logits[:half], labels[:half])
+                sp_loss = synthetic_loss(logits[half:], labels[half:])
                 loss_sum["toolcall"] += tc_loss.item(); loss_count["toolcall"] += 1
                 loss_sum["sysprompt"] += sp_loss.item(); loss_count["sysprompt"] += 1
 

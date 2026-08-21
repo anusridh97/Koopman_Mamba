@@ -258,3 +258,201 @@ def test_in_loop_eval_is_off_without_a_function():
 def test_an_unknown_model_type_is_rejected_by_name():
     with pytest.raises(ValueError, match="mamba_only"):
         SyntheticTask(model_type="nope").build_model(object())
+
+
+# ------------------------------------------------------------- Table2Task ----
+#
+# The third loop, and the one the design doc (§6.3) calls the real migration
+# cost. `table2.py` has NO dataset: `make_train_batch(step, args)` is a function
+# of the STEP COUNTER returning a whole batch. Wrapping that as a Dataset has two
+# traps, and the second is the dangerous one.
+
+
+class _Table2Args:
+    """The subset of table2's argparse namespace make_train_batch reads."""
+    def __init__(self, curriculum="batch_mixed", batch_size=8, seed=42):
+        self.curriculum = curriculum
+        self.batch_size = batch_size
+        self.seed = seed
+        self.task_vocab_size = 64
+        self.toolcall_keys = 4
+        self.toolcall_queries = 2
+        self.overwrite_prob = 0.3
+        self.sysprompt_vars = 4
+        self.sysprompt_decoys = 2
+
+
+def test_table2_step_loss_equals_the_inline_expression():
+    """The seam guarantee, same as the other two loops. table2's inline loss is
+    character-identical to SyntheticTask's, including ignore_index=-100 spelled
+    as a literal there and as IGNORE_INDEX here."""
+    from experimentation.training.task import Table2Task
+
+    torch.manual_seed(0)
+    logits = torch.randn(2, 6, 11)
+    labels = torch.randint(0, 11, (2, 6))
+    model = _FixedLogits(logits)
+
+    expected = F.cross_entropy(
+        logits[:, :-1].reshape(-1, logits.size(-1)),
+        labels[:, 1:].reshape(-1), ignore_index=-100)
+    got = Table2Task().step_loss(model, (torch.zeros_like(labels), labels))
+    assert torch.equal(got, expected)
+
+
+def test_table2_declares_the_synthetic_shift_convention():
+    """It shifts in the LOSS, like MQAR and unlike the shard path. Getting this
+    backwards makes every token trivially predictable -- see
+    test_routing_aligned_data_through_the_shard_task_is_catastrophic."""
+    from experimentation.training.task import Table2Task
+
+    assert Table2Task().shift_in_data is False
+
+
+def test_table2_declares_fp16_because_only_it_runs_a_scaler():
+    """The one loop running fp16 with a GradScaler. Nothing else exercises the
+    loop's scaler path, so a unified loop that silently ran this in bf16 would
+    change training while still descending."""
+    from experimentation.training.task import Table2Task
+
+    assert Table2Task().compute_precision == "fp16"
+
+
+# ------------------------------------------------------- the step indexing ----
+
+def test_the_dataset_index_is_the_step_number_not_a_zero_offset():
+    """THE trap. table2's loop is `range(start_step + 1, max_steps + 1)`, so the
+    first step is 1, while a Dataset is indexed from 0. Off by one is not a
+    cosmetic error here: `--curriculum mixed` alternates whole batches on
+    `step % 2`, so shifting the index by one INVERTS the entire curriculum while
+    still producing a descending loss.
+    """
+    from experimentation.experiments.table2 import make_train_batch
+    from experimentation.training.task import Table2Task
+
+    args = _Table2Args(curriculum="mixed")
+    ds = Table2Task().dataset(None, args)
+
+    for step in (1, 2, 3, 17):
+        want_x, want_y = make_train_batch(step, args)
+        got_x, got_y = ds[step]
+        assert torch.equal(got_x, want_x), f"step {step}: inputs differ"
+        assert torch.equal(got_y, want_y), f"step {step}: labels differ"
+
+
+def test_alternating_curriculum_parity_survives_the_wrapper():
+    """The observable consequence of the trap above, asserted directly: under
+    `mixed`, even steps are toolcall and odd are sysprompt. If the wrapper were
+    zero-offset, every batch would come from the other task."""
+    from experimentation.experiments.table2 import (_make_sysprompt_batch,
+                                                    _make_toolcall_batch)
+    from experimentation.training.task import Table2Task
+
+    args = _Table2Args(curriculum="mixed")
+    ds = Table2Task().dataset(None, args)
+
+    even_x, _ = _make_toolcall_batch(args.batch_size, 2, args)
+    odd_x, _ = _make_sysprompt_batch(args.batch_size, 3, args)
+    assert torch.equal(ds[2][0], even_x), "even step must be the toolcall task"
+    assert torch.equal(ds[3][0], odd_x), "odd step must be the sysprompt task"
+
+
+def test_one_index_yields_one_whole_batch_not_one_sample():
+    """The collate wrinkle. `Dataset.__getitem__` conventionally returns ONE
+    SAMPLE for DataLoader to stack, but make_train_batch returns a FULL BATCH.
+    A naive wrapper handed to DataLoader(batch_size=B) yields [B, B, T] AND
+    silently consumes B steps of curriculum per iteration -- the shape is
+    catchable, the curriculum burn is only visible in a loss curve.
+
+    So the wrapper declares batch_size=None, and this pins the shape it relies
+    on: index -> a batch already.
+    """
+    from experimentation.training.task import Table2Task
+
+    args = _Table2Args(batch_size=8)
+    x, y = Table2Task().dataset(None, args)[1]
+    assert x.shape[0] == args.batch_size, (
+        f"index gave leading dim {x.shape[0]}, expected the batch size "
+        f"{args.batch_size}; DataLoader must be given batch_size=None")
+    assert y.shape[0] == args.batch_size
+
+
+def test_the_wrapper_says_batch_size_none_out_loud():
+    """Not a style assertion: DataLoader's default batch_size is 1, so wrapping
+    this without saying so produces [1, B, T] and trains on a wrong shape rather
+    than raising. The requirement has to travel with the dataset."""
+    from experimentation.training.task import Table2Task
+
+    ds = Table2Task().dataset(None, _Table2Args())
+    assert getattr(ds, "dataloader_batch_size", "missing") is None, (
+        "the dataset must advertise batch_size=None for a DataLoader")
+
+
+def test_its_length_covers_the_requested_steps():
+    """Deterministic in `step`, so length is the step budget -- and because it is
+    keyed on step rather than on an epoch position, resume is exact: step 400
+    after a restart draws what step 400 would have drawn."""
+    from experimentation.training.task import Table2Task
+
+    ds = Table2Task(max_steps=400).dataset(None, _Table2Args())
+    assert len(ds) >= 400
+    a = ds[400]
+    b = Table2Task(max_steps=400).dataset(None, _Table2Args())[400]
+    assert torch.equal(a[0], b[0]), "step 400 must be reproducible across builds"
+
+
+def test_the_synthetic_loss_expression_is_callable_on_logits_directly():
+    """table2 reuses its TRAINING forward's logits for the per-task eval split
+    ("slice the already-computed logits, no extra forward pass"), so it cannot
+    call `step_loss(model, batch)` -- that does its own forward and would double
+    the cost of every step for an identical number.
+
+    The design doc did not anticipate this. The resolution is that what must be
+    shared is the EXPRESSION, not the entry point: `synthetic_loss` is the single
+    definition, `step_loss` calls it after a forward, and table2 calls it three
+    times on logits it already has. Before this, table2.py spelled that
+    expression out three times.
+    """
+    from experimentation.training.task import SyntheticTask, synthetic_loss
+
+    torch.manual_seed(0)
+    logits = torch.randn(4, 7, 13)
+    labels = torch.randint(0, 13, (4, 7))
+
+    direct = synthetic_loss(logits, labels)
+    via_model = SyntheticTask().step_loss(_FixedLogits(logits),
+                                          (torch.zeros_like(labels), labels))
+    assert torch.equal(direct, via_model), \
+        "the two paths must be the SAME expression, not two equivalent ones"
+
+
+def test_the_shared_expression_honours_ignore_index():
+    """It is the property the alignment suite depends on, and it is one keyword
+    away from being dropped in an extraction."""
+    from experimentation.training.task import IGNORE_INDEX, synthetic_loss
+
+    torch.manual_seed(1)
+    logits = torch.randn(1, 5, 9)
+    labels = torch.randint(0, 9, (1, 5))
+    masked = labels.clone()
+    masked[0, 3] = IGNORE_INDEX
+
+    assert not torch.equal(synthetic_loss(logits, labels),
+                           synthetic_loss(logits, masked)), \
+        "masking a supervised position must change the loss"
+
+
+def test_slicing_logits_by_half_matches_a_separate_call():
+    """table2's batch_mixed eval splits one batch into toolcall/sysprompt halves
+    and costs each separately off the shared logits. Pinning that the halves are
+    read the way the whole is."""
+    from experimentation.training.task import synthetic_loss
+
+    torch.manual_seed(2)
+    logits = torch.randn(8, 6, 11)
+    labels = torch.randint(0, 11, (8, 6))
+    half = 4
+
+    assert torch.equal(synthetic_loss(logits[:half], labels[:half]),
+                       synthetic_loss(logits[:half].clone(), labels[:half].clone()))
+
