@@ -200,3 +200,16 @@ def test_the_optuna_floor_is_4_not_3():
     so >=3 would install something that cannot create a study."""
     text = (REPO / "pyproject.toml").read_text()
     assert "optuna>=3" not in text
+
+
+def test_the_plan_prints_the_journal_filename_the_code_actually_writes(tmp_path):
+    """These drifted apart: the plan said journal.log and study.py writes
+    optuna_journal.log. Cosmetic until you act on it -- a second worker told to
+    open "the journal in the plan output" gets an empty file and believes it is
+    collaborating on a study it cannot see."""
+    src = (REPO / "experimentation/sweep/search/study.py").read_text()
+    assert "optuna_journal.log" in src, "study.py's journal name moved"
+    r = _run(_spec(tmp_path), "--dry_run")
+    assert r.returncode == 0
+    assert "optuna_journal.log" in r.stdout, (
+        "the plan must name the file make_storage actually creates")

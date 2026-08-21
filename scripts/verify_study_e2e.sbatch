@@ -64,9 +64,23 @@ python -c "
 import torch, optuna
 print('torch', torch.__version__, 'cuda', torch.cuda.is_available())
 print('optuna', optuna.__version__)
-assert torch.cuda.is_available()
+if torch.cuda.is_available():
+    print('device', torch.cuda.get_device_name(0))
+assert torch.cuda.is_available(), 'no CUDA device visible to torch'
 "
-echo "STATUS venv=$?"
+SANITY=$?
+echo "STATUS venv=$SANITY"
+if [ "$SANITY" -ne 0 ]; then
+    # ABORT, do not continue. Job 439811 landed on a node where nvidia-smi saw an
+    # H100 but torch.cuda.is_available() was False; this check caught it and the
+    # script ran the whole study anyway, which then reported "4 trial(s): 4
+    # failed" -- a result indistinguishable from a real wiring failure. A
+    # verification job that keeps going after its own precondition fails produces
+    # evidence about nothing.
+    echo "FATAL: torch cannot see a GPU on $(hostname). Not running the study --"
+    echo "       a study with no GPU fails every trial and tells you nothing."
+    exit 1
+fi
 
 ##############################################################################
 echo "############################################################"
@@ -103,8 +117,16 @@ if not studies:
     raise SystemExit(1)
 sd = studies[-1]
 
+# study.py:160 names it optuna_journal.log. An earlier version of this script
+# said journal.log, so JournalFileBackend happily created an EMPTY file and
+# load_study raised KeyError: Record does not exist -- a verification step that
+# crashed instead of reporting.
+journal = sd / "optuna_journal.log"
+if not journal.exists():
+    print(f"NO JOURNAL at {journal}; contents: {[p.name for p in sd.iterdir()]}")
+    raise SystemExit(1)
 storage = optuna.storages.JournalStorage(
-    optuna.storages.journal.JournalFileBackend(str(sd / "journal.log")))
+    optuna.storages.journal.JournalFileBackend(str(journal)))
 study = optuna.load_study(study_name="smoke-4m", storage=storage)
 
 print(f"\ntrials: {len(study.trials)}")

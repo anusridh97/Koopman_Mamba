@@ -107,7 +107,11 @@ def _print_plan(spec, args, *, n_anchors, study_dir, run_root, launcher):
     print(f"[search] budget       {args.n_trials or spec.n_trials} trials "
           f"x {spec.max_steps} steps")
     print(f"[search] launcher     {launcher}  ->  run_root {run_root}")
-    print(f"[search] journal      {study_dir / 'journal.log'}")
+    # study.py:160 writes optuna_journal.log. Printing a different name here sent
+    # me looking for a file that was never going to exist -- and a second worker
+    # told to "point at the journal in the plan output" would have opened an empty
+    # one and believed it was collaborating.
+    print(f"[search] journal      {study_dir / 'optuna_journal.log'}")
     print(f"[search] pruning      after step {spec.prune_after_step}, "
           f"reporting every {spec.logging_steps}")
     if spec.design_file:
