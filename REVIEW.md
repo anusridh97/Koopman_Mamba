@@ -231,8 +231,19 @@ bit-identical on GPU. `table2` and `mqar` were re-run at **worst |delta| =
 have a 0.000000 noise floor, so that is exact and not a tolerance). What remains,
 from `docs/superpowers/specs/2026-08-21-traintask-design.md` §10:
 
-- **One loop still does not exist.** All three trainers delegate their loss;
-  none shares a loop body. The duplication the design is about is still there.
+- **One loop still does not exist.** All three trainers delegate their loss and
+  now their data iteration (`TrainTask.iter_batches`), but none shares a loop
+  BODY -- accumulation, DDP, checkpointing and logging still live only in
+  `train.py`. The duplication the design is about is still there.
+- **A decision the doc did not make, now made.** Its ownership table puts
+  `dataset` on the task and `resume` on the loop; §3 says the two are entangled,
+  and they are. train.py and mqar iterate an epoch permutation and resume by
+  skipping a consumed prefix; table2 has no epochs at all, its batches being a
+  pure function of the step counter, so a permutation would hand it batches it
+  has never trained on. Resolved with a DEFAULTED `iter_batches` (epoch path by
+  default, overridden by `Table2Task`) so there is one loop rather than an `if`
+  inside it. Verified bit-identical to the committed golden (job 440235,
+  max |delta| 0.000000).
 - **`table2`'s numbers would need regenerating** if its architecture changed --
   it did not, but that call is a human's either way.
 - **THE CENSUS WAS WRONG: there are FIVE training loops, not three.**
