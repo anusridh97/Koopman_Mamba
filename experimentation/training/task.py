@@ -62,12 +62,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 __all__ = ["TrainTask", "ShardTask", "SyntheticTask", "Table2Task",
-           "synthetic_loss", "IGNORE_INDEX"]
+           "IterContext", "synthetic_loss", "IGNORE_INDEX"]
 
 #: Both conventions agree on this; only *where* the offset happens differs.
 IGNORE_INDEX = -100
@@ -98,6 +100,26 @@ def synthetic_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         labels[:, 1:].reshape(-1),
         ignore_index=IGNORE_INDEX,
     )
+
+
+@dataclass
+class IterContext:
+    """Everything `iter_batches` needs about where the loop is resuming from.
+
+    A context object rather than five keyword arguments, so adding a sixth does
+    not have to be threaded through every override.
+    """
+
+    #: Which pass over the dataset this is. Meaningless for step-keyed data.
+    epoch: int = 0
+    #: The last COMPLETED optimizer step. Iteration resumes after it.
+    start_step: int = 0
+    #: Samples already consumed within `epoch`, to be skipped. Epoch paths only.
+    skip_samples: int = 0
+    #: DDP sampler, when the loop is running distributed.
+    sampler: Any = None
+    is_ddp: bool = False
+    local_rank: int = 0
 
 
 class TrainTask:
@@ -136,6 +158,56 @@ class TrainTask:
         raise NotImplementedError
 
     # ---------------------------------------------------------------- optional
+
+    def iter_batches(self, dataset, args, ctx: "IterContext"):
+        """One epoch's batches, in the order this task's resume arithmetic needs.
+
+        Defaulted rather than abstract because two of the three tasks want the
+        same thing: an explicit epoch permutation over a map dataset, resumed by
+        skipping the consumed prefix. Only `Table2Task` differs, and it differs
+        completely -- its data is a function of the step counter, with no epochs
+        and no shuffle.
+
+        This is the seam the design doc left unresolved. Its ownership table puts
+        `dataset` on the task and `resume` on the loop, while §3 says the two are
+        entangled -- and they are, because "where do I resume in the data" is
+        answered by index arithmetic for a shard and by a step number for
+        table2. Defaulting here keeps ONE loop rather than an `if` inside it.
+
+        Lifted from train.py, not rewritten. Two details are load-bearing:
+
+        * the order comes from `epoch_permutation`, NOT DataLoader's implicit
+          `shuffle=True`, so a mid-epoch resume can skip forward over consumed
+          indices without re-reading them;
+        * `generator=` is REQUIRED, not an optimisation. `DataLoader.__iter__`
+          draws one int64 from the GLOBAL torch RNG on every fresh iteration to
+          seed `_base_seed`, even at `num_workers=0` with an explicit sampler. A
+          resumed run builds a new DataLoader mid-epoch and would pay a draw its
+          uninterrupted twin never pays there, desyncing dropout from the first
+          resumed step.
+        """
+        from torch.utils.data import DataLoader
+
+        from experimentation.training.repro import seed_worker
+        from experimentation.training.resume import (epoch_permutation,
+                                                     resume_indices)
+
+        if ctx.is_ddp and ctx.sampler is not None:
+            ctx.sampler.set_epoch(ctx.epoch)
+            indices = list(ctx.sampler)
+            if ctx.skip_samples:
+                indices = indices[ctx.skip_samples:]
+        else:
+            seed = args.seed + ctx.local_rank
+            indices = (resume_indices(len(dataset), seed, ctx.epoch, ctx.skip_samples)
+                       if ctx.skip_samples
+                       else epoch_permutation(len(dataset), seed, ctx.epoch))
+
+        return DataLoader(
+            dataset, batch_size=args.per_device_train_batch_size,
+            sampler=indices, num_workers=args.num_workers,
+            pin_memory=True, drop_last=True, worker_init_fn=seed_worker,
+            generator=torch.Generator())
 
     def in_loop_eval(self, model, step: int) -> Optional[Mapping[str, Any]]:
         """Periodic eval during training, or None. MQAR accuracy lives here."""
@@ -319,6 +391,18 @@ class Table2Task(SyntheticTask):
 
         return _StepKeyedBatches(make_train_batch, args,
                                  getattr(args, "max_steps", self._max_steps))
+
+    def iter_batches(self, dataset, args, ctx: "IterContext"):
+        """One batch per step, in step order, starting after `ctx.start_step`.
+
+        No DataLoader and no permutation, deliberately. table2's batches are a
+        pure function of the step counter, so an epoch permutation would not be
+        merely unnecessary -- it would hand this trainer different batches than
+        it has ever trained on. Matching `range(start_step + 1, max_steps + 1)`
+        is also what makes its resume exact with no position to recover.
+        """
+        last = getattr(args, "max_steps", self._max_steps)
+        return (dataset[step] for step in range(ctx.start_step + 1, last + 1))
 
 
 def _unpack(batch):

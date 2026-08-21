@@ -456,3 +456,132 @@ def test_slicing_logits_by_half_matches_a_separate_call():
     assert torch.equal(synthetic_loss(logits[:half], labels[:half]),
                        synthetic_loss(logits[:half].clone(), labels[:half].clone()))
 
+
+# --------------------------------------------------------- iter_batches ----
+#
+# The seam the loop unification needs, and the one the design doc left
+# unresolved. Its ownership table says "dataset | task" and "resume | loop",
+# with the note "indexable, so the loop can do resume arithmetic" -- but §3 also
+# says resume is entangled with data iteration, and it is:
+#
+#   * train.py and mqar_finetune iterate an EPOCH PERMUTATION over a map dataset,
+#     resuming by skipping `samples_consumed` indices;
+#   * table2 has no epochs and no shuffle at all -- its batches are a pure
+#     function of the step counter.
+#
+# So one loop cannot literally own iteration. `iter_batches` is DEFAULTED to the
+# epoch path (what two of three tasks want) and overridden by Table2Task, which
+# keeps the loop single and puts the one genuinely divergent concern behind a
+# hook instead of an `if`.
+
+
+class _CountingDataset(torch.utils.data.Dataset):
+    """Records nothing, returns its own index, so batch order is observable."""
+
+    def __init__(self, n=16):
+        self.n = n
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, i):
+        return {"input_ids": torch.tensor([i]), "labels": torch.tensor([i])}
+
+
+class _Args:
+    per_device_train_batch_size = 2
+    num_workers = 0
+    seed = 7
+
+
+def _order(batches):
+    return [int(v) for b in batches for v in b["input_ids"].flatten()]
+
+
+def test_the_default_iterates_the_epoch_permutation():
+    """Not DataLoader's implicit shuffle: train.py builds the order explicitly
+    with epoch_permutation so a mid-epoch resume can skip consumed indices
+    without re-reading them. A default that quietly used shuffle=True would look
+    identical until someone resumed."""
+    from experimentation.training.resume import epoch_permutation
+    from experimentation.training.task import IterContext, ShardTask
+
+    ds = _CountingDataset()
+    ctx = IterContext(epoch=0, start_step=0, skip_samples=0)
+    got = _order(ShardTask().iter_batches(ds, _Args(), ctx))
+    want = epoch_permutation(len(ds), _Args.seed + 0, 0)
+    assert got == want[:len(got)]
+    assert got != list(range(len(ds))), "a permutation that is the identity proves nothing"
+
+
+def test_the_default_skips_exactly_the_consumed_prefix_on_resume():
+    from experimentation.training.resume import epoch_permutation
+    from experimentation.training.task import IterContext, ShardTask
+
+    ds = _CountingDataset()
+    full = epoch_permutation(len(ds), _Args.seed + 0, 0)
+    ctx = IterContext(epoch=0, start_step=0, skip_samples=6)
+    got = _order(ShardTask().iter_batches(ds, _Args(), ctx))
+    assert got == full[6:len(full)][:len(got)], \
+        "a resumed epoch must continue the SAME permutation, not reshuffle"
+
+
+def test_the_default_passes_an_explicit_generator():
+    """Invisible and load-bearing. DataLoader.__iter__ draws one int64 from the
+    GLOBAL torch RNG on every fresh iteration to seed _base_seed -- even at
+    num_workers=0 with an explicit sampler. A resumed run builds a new DataLoader
+    mid-epoch and so pays a draw its uninterrupted twin never pays there,
+    desyncing dropout from the first resumed step.
+
+    Asserted by watching the global RNG rather than by reading the source, so it
+    survives a rewrite: iterating must not advance the global stream.
+    """
+    from experimentation.training.task import IterContext, ShardTask
+
+    ds = _CountingDataset()
+    ctx = IterContext(epoch=0, start_step=0, skip_samples=0)
+
+    torch.manual_seed(1234)
+    before = torch.random.get_rng_state()
+    list(ShardTask().iter_batches(ds, _Args(), ctx))
+    after = torch.random.get_rng_state()
+    assert torch.equal(before, after), \
+        "iterating consumed global RNG -- generator= was dropped, and resume " \
+        "will desync from the first step after a restart"
+
+
+def test_table2_iterates_by_step_and_ignores_epochs():
+    """Its data is a pure function of the step counter, so the epoch permutation
+    is not merely unnecessary -- applying it would hand table2 different batches
+    than it has ever trained on."""
+    from experimentation.experiments.table2 import make_train_batch
+    from experimentation.training.task import IterContext, Table2Task
+
+    args = _Table2Args(curriculum="mixed")
+    args.max_steps = 5
+    task = Table2Task(max_steps=5)
+    ctx = IterContext(epoch=0, start_step=0, skip_samples=0)
+
+    got = list(task.iter_batches(task.dataset(None, args), args, ctx))
+    assert len(got) == 5, f"expected one batch per step, got {len(got)}"
+    for i, (x, y) in enumerate(got, start=1):
+        wx, wy = make_train_batch(i, args)
+        assert torch.equal(x, wx), f"step {i} inputs differ"
+        assert torch.equal(y, wy), f"step {i} labels differ"
+
+
+def test_table2_resumes_at_the_next_step():
+    """start_step is where the loop left off, so iteration continues at
+    start_step + 1 -- matching `range(start_step + 1, max_steps + 1)`."""
+    from experimentation.experiments.table2 import make_train_batch
+    from experimentation.training.task import IterContext, Table2Task
+
+    args = _Table2Args(curriculum="mixed")
+    args.max_steps = 5
+    task = Table2Task(max_steps=5)
+    ctx = IterContext(epoch=0, start_step=3, skip_samples=0)
+
+    got = list(task.iter_batches(task.dataset(None, args), args, ctx))
+    assert len(got) == 2, "steps 4 and 5 remain"
+    assert torch.equal(got[0][0], make_train_batch(4, args)[0])
+

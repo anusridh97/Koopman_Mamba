@@ -26,14 +26,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from koopman_lm.config import build_config, config_hash, CONFIG_FACTORIES
-from experimentation.training.repro import seed_everything, enable_determinism, seed_worker
+from experimentation.training.repro import seed_everything, enable_determinism
 from experimentation.training.optim import param_groups as _param_groups
 from experimentation.training.amp import amp_for
-from experimentation.training.task import ShardTask
+from experimentation.training.task import IterContext, ShardTask
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.modules.seq.mamba import Mamba2Block
@@ -45,8 +45,7 @@ from koopman_lm.models.baselines import (
 )
 from experimentation.training.data.dataset import MemmapPackedDataset
 from experimentation.training.resume import (
-    apply_resume_state, epoch_permutation, load_resume_state,
-    resume_indices, save_resume_state,
+    apply_resume_state, load_resume_state, save_resume_state,
 )
 
 
@@ -394,35 +393,16 @@ def train(args):
     preempted = False
     while step < args.max_steps:
         if hasattr(train_ds, 'set_epoch'): train_ds.set_epoch(epoch)
-        # §5.2: the epoch's sample order is built explicitly (index
-        # arithmetic, no data read) instead of relying on DataLoader's
-        # implicit shuffle=True RandomSampler, so a mid-epoch resume can skip
-        # forward over already-consumed indices without re-reading them.
-        if is_ddp:
-            sampler.set_epoch(epoch)
-            indices = list(sampler)
-        else:
-            indices = epoch_permutation(len(train_ds), args.seed + local_rank, epoch)
-        samples_consumed = 0
-        if epoch == start_epoch and start_samples_consumed > 0:
-            if is_ddp:
-                indices = indices[start_samples_consumed:]
-            else:
-                indices = resume_indices(len(train_ds), args.seed + local_rank,
-                                          epoch, start_samples_consumed)
-            samples_consumed = start_samples_consumed
-        # generator= is REQUIRED for exact resume, not an optimisation.
-        # DataLoader.__iter__ draws one int64 from the GLOBAL torch RNG on every
-        # fresh iteration to seed _base_seed (torch/utils/data/dataloader.py),
-        # even at num_workers=0 with an explicit sampler. A resumed run builds a
-        # new DataLoader mid-epoch and so pays a draw its uninterrupted twin
-        # never pays there, desyncing dropout masks from the first resumed step.
-        # Passing an explicit generator takes that draw off the global stream.
-        epoch_loader = DataLoader(
-            train_ds, batch_size=args.per_device_train_batch_size,
-            sampler=indices, num_workers=args.num_workers,
-            pin_memory=True, drop_last=True, worker_init_fn=seed_worker,
-            generator=torch.Generator())
+        # §5.2's explicit index arithmetic (no implicit shuffle=True) and the
+        # required `generator=` now live in TrainTask.iter_batches, unchanged --
+        # see its docstring for why each is load-bearing. Moved rather than
+        # rewritten so the one loop can serve table2, whose batches are a
+        # function of the step counter and have no epoch permutation at all.
+        samples_consumed = start_samples_consumed if epoch == start_epoch else 0
+        epoch_loader = task.iter_batches(train_ds, args, IterContext(
+            epoch=epoch, start_step=step, skip_samples=samples_consumed,
+            sampler=sampler if is_ddp else None,
+            is_ddp=is_ddp, local_rank=local_rank))
         for batch in epoch_loader:
             if step >= args.max_steps: break
             ids = batch["input_ids"].to(device, non_blocking=True)
