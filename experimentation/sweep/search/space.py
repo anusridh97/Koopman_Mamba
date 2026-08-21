@@ -48,7 +48,7 @@ per-device batch instead.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.geometry import (
@@ -62,6 +62,10 @@ BACKEND_POLICIES = ("exact_auto", "fused_only", "proxy_chunked")
 # The fused SM100 prefix-scan kernel is specialised to this rank (and value
 # width 64); see configs/50m.yaml's header.
 _FUSED_RANK = 24
+# Kept in step with cuda_prefix_scan._VALUE by test, not by hope: the fused
+# kernel is compiled for exactly this value width and silently unreachable at
+# any other.
+_FUSED_VALUE = 64
 
 DEFAULT_RANKS = (8, 16, 24, 32)
 DEFAULT_WEIGHT_DECAYS = (0.05, 0.10, 0.15)
@@ -146,7 +150,8 @@ def search_space(base_model: KoopmanLMConfig, *,
     }
 
 
-def _backend_overrides(policy: str, rank: int) -> Dict[str, Any]:
+def _backend_overrides(policy: str, rank: int, *,
+                       head_dim: Optional[int] = None) -> Dict[str, Any]:
     if policy not in BACKEND_POLICIES:
         raise ValueError(
             f"unknown backend policy {policy!r}; expected one of {list(BACKEND_POLICIES)}")
@@ -156,11 +161,28 @@ def _backend_overrides(policy: str, rank: int) -> Dict[str, Any]:
                 "model.ska_backend": "auto",
                 "model.ska_inverse_cholesky": False,
                 "model.ska_exact_intrachunk": False}
-    if policy == "fused_only" and rank != _FUSED_RANK:
-        raise ValueError(
-            f"backend policy 'fused_only' pins the fused SM100 kernel, which is "
-            f"specialised to ska_rank={_FUSED_RANK}; got {rank}. Use 'exact_auto' "
-            f"to let the backend fall back per rank.")
+    if policy == "fused_only":
+        # Rank AND value width. This checked rank alone, and value width is the
+        # one that actually bites: cuda_prefix_scan.is_supported requires
+        # vbar.shape[-1] == 64, and value width is d_model/ska_n_heads -- a
+        # property of the BASE SPEC that no sampled rank can change. So
+        # fused_only on a base spec with head_dim 32 passed this check and then
+        # died at prefix_scan.py's RuntimeError on the first forward, on a GPU,
+        # after materializing a run directory and queueing a job.
+        problems = []
+        if rank != _FUSED_RANK:
+            problems.append(f"ska_rank={rank} (needs {_FUSED_RANK})")
+        if head_dim is not None and head_dim != _FUSED_VALUE:
+            problems.append(
+                f"value width={head_dim} (needs {_FUSED_VALUE}; it is "
+                f"d_model/ska_n_heads, so no sampled rank can fix it)")
+        if problems:
+            raise ValueError(
+                "backend policy 'fused_only' pins the fused SM100 kernel, which "
+                "is specialised to one geometry: " + "; ".join(problems)
+                + ". Use 'exact_auto' for the exact reference scan at any "
+                  "geometry -- but note it is ~137x slower when the fused "
+                  "kernel does not apply.")
     return {"model.ska_prefix_scan": True,
             "model.ska_backend": "cuda_prefix" if policy == "fused_only" else "auto",
             "model.ska_inverse_cholesky": False,
@@ -214,5 +236,7 @@ def params_to_overrides(params: Mapping[str, Any], base_model: KoopmanLMConfig, 
     }
     if seq_len is not None:
         overrides["model.max_seq_len"] = int(seq_len)
-    overrides.update(_backend_overrides(backend_policy, rank))
+    overrides.update(_backend_overrides(
+        backend_policy, rank,
+        head_dim=base_model.d_model // max(1, base_model.ska_n_heads)))
     return overrides

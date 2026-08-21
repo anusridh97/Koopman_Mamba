@@ -1197,6 +1197,48 @@ class _SKAPrefixScanFn(torch.autograd.Function):
         return dx, dq, dv, None, None, None, None
 
 
+_WARNED_GEOMETRIES: set = set()
+
+
+def _geometry_note(x, q, vbar, power_k, block_size, jitter) -> str:
+    """Which predicate actually failed, named. A warning that says only "falling
+    back" sends the reader to the source; this sends them to the fix."""
+    return (f"dtype={x.dtype}, cuda={x.is_cuda}, rank={x.shape[-1]}, "
+            f"value_width={vbar.shape[-1]}, power_k={int(power_k)}, "
+            f"block_size={int(block_size)}, jitter={float(jitter)}")
+
+
+def _warn_reference_fallback(x, q, vbar, power_k, block_size, jitter) -> None:
+    import warnings
+
+    # Only a DEGRADATION is worth a warning. On CPU the reference scan is not a
+    # fallback, it is the only implementation -- the fused kernel could never
+    # have run. Warning there was pure noise: it fired 19 times across the unit
+    # suite on 4x3 toy tensors, which is exactly how a useful warning gets
+    # filtered out and then ignored when it matters.
+    if not x.is_cuda:
+        return
+
+    key = (str(x.dtype), bool(x.is_cuda), int(x.shape[-1]), int(vbar.shape[-1]),
+           int(power_k), int(block_size), float(jitter))
+    if key in _WARNED_GEOMETRIES:
+        return
+    _WARNED_GEOMETRIES.add(key)
+    warnings.warn(
+        "ska_prefix_scan(backend='auto'): the fused CUDA kernel does not accept "
+        "this geometry, so the PURE-PYTHON REFERENCE scan is running. It is "
+        "exact but roughly two orders of magnitude slower (measured 137x on an "
+        "H100: 4.49s vs 0.033s per fwd+bwd micro-step), because it issues ~1e5 "
+        "tiny kernel launches from rank-long Python loops -- the symptom is 99% "
+        "CPU with an idle GPU. The fused kernel requires FP32 CUDA, rank=24, "
+        f"value width=64, power_k=1, block_size=32, jitter=0; got "
+        f"{_geometry_note(x, q, vbar, power_k, block_size, jitter)}. Value width "
+        "is d_model/ska_n_heads, so it cannot be fixed by changing ska_rank. "
+        "Pass backend='reference' to accept this deliberately, or see "
+        "ska_inverse_cholesky for a different exact route.",
+        RuntimeWarning, stacklevel=3)
+
+
 def ska_prefix_scan(
     x: torch.Tensor,
     q: torch.Tensor,
@@ -1237,8 +1279,23 @@ def ska_prefix_scan(
         if backend in {"cuda", "cuda_prefix"}:
             raise RuntimeError(
                 "cuda_prefix requires FP32 CUDA tensors, rank=24, value "
-                "width=64, power_k=1, block_size=32, and jitter=0"
+                f"width=64, power_k=1, block_size=32, and jitter=0. Got "
+                f"{_geometry_note(x, q, vbar, power_k, block_size, jitter)}"
             )
+        # backend="auto" reaches here, and used to fall through in SILENCE.
+        #
+        # That silence cost two hours. A study on a base spec whose value width
+        # is 32 (d_model 128 / 4 heads) can never satisfy the fused kernel, so
+        # every trial took the reference path at ~137x -- 4.49 s versus 0.033 s
+        # per micro-step on an H100, measured. Nothing said so: `cuda` and
+        # `cuda_prefix` get a precise RuntimeError, `auto` got nothing, and the
+        # reverse substitution is the one that is expensive.
+        #
+        # Warned once per distinct geometry rather than per call: this is on the
+        # forward path, and a per-step warning would be its own denial of
+        # service. warnings' default "once per location" dedup is not enough,
+        # since one call site serves every geometry.
+        _warn_reference_fallback(x, q, vbar, power_k, block_size, jitter)
 
     return _SKAPrefixScanFn.apply(
         x, q, vbar, float(ridge), int(power_k), int(block_size), float(jitter)

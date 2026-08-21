@@ -113,6 +113,38 @@ class SKAModule(nn.Module):
         # Cholesky statistics. The prefix-scan backend supersedes it for new
         # quality runs; this branch remains for checkpoint compatibility.
         self.inverse_cholesky = inverse_cholesky
+
+        # THE CHUNKED PATH ANNOUNCES ITSELF, because it is not a slower-but-fine
+        # alternative -- it computes something different.
+        #
+        # With none of prefix_scan / inverse_cholesky / exact_intrachunk set,
+        # chunk_stats uses EXCLUSIVE-CHUNK-PREFIX boundaries: a token in chunk c
+        # sees only completed chunks < c, so every within-chunk lag-1..lag-(S-1)
+        # cross-covariance term is missing. chunk_stats_exact.py's own header
+        # measures that at "~100% relative error vs a true per-token-causal
+        # reference on short-range recall" -- which is the capability SKA exists
+        # to provide. A number produced this way is a speed upper bound, not a
+        # result.
+        #
+        # Warned at CONSTRUCTION, not per forward: once per model, before any
+        # time is spent, and it names all three exact routes so the reader does
+        # not have to go find them.
+        if not (self.prefix_scan or self.inverse_cholesky or self.exact_intrachunk):
+            import warnings
+            warnings.warn(
+                "SKAModule is running the CHUNKED approximation: no exact path "
+                "is enabled (ska_prefix_scan / ska_inverse_cholesky / "
+                "ska_exact_intrachunk all off). This drops the within-chunk "
+                "lag-1..lag-(S-1) cross-covariance terms entirely -- measured at "
+                "~100% RELATIVE ERROR against a per-token-causal reference on "
+                "short-range recall, i.e. on exactly what SKA is for. Treat any "
+                "number from this configuration as an upper bound on SPEED and "
+                "not as a result. Exact alternatives, cheapest first to try: "
+                "ska_inverse_cholesky=True (batched matmul, no power iteration), "
+                "ska_exact_intrachunk=True (per-token stats, same verified core), "
+                "ska_prefix_scan=True (exact two-level scan; ~137x slower than "
+                "chunked when the fused CUDA kernel's geometry does not match).",
+                RuntimeWarning, stacklevel=2)
         if inverse_cholesky:
             assert rank <= 64, (
                 f"inverse_cholesky path stores per-token (r x r) stats; "

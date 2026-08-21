@@ -123,6 +123,18 @@ causal-conv1d = ["torch", "setuptools", "wheel", "ninja", "packaging"]
 
 [tool.pytest.ini_options]
 testpaths = ["code-tests"]
+filterwarnings = [
+    # The chunked-path disclaimer (ska.py) fires at SKAModule construction, and
+    # the suite constructs chunked modules on purpose to test shapes and wiring.
+    # Left unfiltered it emitted 48 warnings per run -- and a warning that fires
+    # constantly is one people filter and then miss when it matters, which is
+    # exactly how the silent prefix-scan fallback survived.
+    #
+    # Filtered HERE rather than weakened in ska.py, so a real training run still
+    # gets it at full volume. The tests that assert the warning use
+    # warnings.catch_warnings(simplefilter("always")), which overrides this.
+    "ignore:SKAModule is running the CHUNKED approximation:RuntimeWarning",
+]
 # experimentation/ is deliberately NOT installed (packages.find is scoped to
 # koopman_lm*), so it is not importable from site-packages the way koopman_lm
 # is. Putting the repo root on sys.path is exactly how it resolves in
