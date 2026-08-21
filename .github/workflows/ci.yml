@@ -30,3 +30,27 @@ jobs:
         run: python -c "import koopman_lm; import experimentation.experiments.table2; import experimentation.experiments.mqar_finetune; print(list(koopman_lm.CONFIG_FACTORIES))"
       - name: Correctness suite (CPU subset, < 2 min)
         run: pytest code-tests/ -m "correctness and not gpu" -q
+      # Report the size of the tier this job does NOT cover, so a green check
+      # never reads as "the whole suite passed". Without this the gap is
+      # invisible: the fused CUDA kernel shipped un-compilable for months and
+      # both production configs specify ska_backend: cuda_prefix, so nothing CI
+      # runs would have caught it.
+      #
+      # Both numbers are counted, never written down -- the point of the step is
+      # that it cannot go stale. Counting is by grepping '::' out of
+      # `--collect-only -q` rather than by parsing the summary line: pytest's
+      # summary is now "20/1099 tests collected (1079 deselected)", and a regex
+      # for "N collected" pulls 1099 out of that -- the whole suite, not the
+      # deselected tier.
+      #
+      # Informational only. `|| true` keeps a no-match grep (exit 1) from
+      # failing the step under GitHub's `bash -e`, and continue-on-error covers
+      # the rest.
+      - name: Report the tiers this job does not run
+        if: always()
+        continue-on-error: true
+        run: |
+          count() { pytest code-tests/ -m "$1" --collect-only -q 2>/dev/null | grep -c '::' || true; }
+          gpu=$(count "gpu or slow")
+          skipped=$(count "not (correctness and not gpu)")
+          echo "::notice title=Not run by CI::${skipped:-?} of the suite's tests are outside this job's marker expression, ${gpu:-?} of them gpu/slow (they need CUDA). Run the full suite on a GPU node with 'sbatch scripts/slurm_tests.sh' before merging changes to kernels/, modules/seq/, or the decode path."
