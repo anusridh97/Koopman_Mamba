@@ -165,7 +165,10 @@ def run_trial(study: optuna.study.Study, trial, *,
                         group_id=group_id(spec), run_dir=run_dir, anchor=anchor,
                         per_device_batch_size=spec.runtime.per_device_batch_size)
         try:
-            launcher.submit(spec, run_dir, dry_run=dry_run)
+            # wait=False so the objective reader can WATCH this run rather than
+            # only inspect its corpse. With a blocking submit the reader starts
+            # after training ended, so pruning had nothing to prune.
+            launcher.submit(spec, run_dir, dry_run=dry_run, wait=False)
             break
         except Exception as exc:                   # noqa: BLE001 -- see docstring
             last_failure = f"{type(exc).__name__}: {exc}"

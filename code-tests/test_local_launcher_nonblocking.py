@@ -172,3 +172,82 @@ def test_default_cancel_still_reaches_slurm(tmp_path, monkeypatch):
                         lambda cmd, **kw: calls.append(cmd) or None)
     M._default_cancel(tmp_path)
     assert calls == [["scancel", "987654"]]
+
+
+# ------------------------------------- the log the pruner has to be able to read ----
+
+def test_the_log_filename_matches_what_the_pruner_globs():
+    """The gap job 439827 exposed. Not blocking was necessary and not sufficient:
+    a local run left NO log in its run dir, so read_progress's globs matched
+    nothing and pruning could never fire. The study completed 4 trials with real
+    objectives and 'trials with reported intermediate steps: 0'.
+
+    Slurm gets this free -- its sbatch template routes stdout to
+    run_dir/slurm-%j.out. Local execution had to be taught."""
+    from experimentation.sweep.search.metrics import _LOG_GLOBS
+    import fnmatch
+    assert any(fnmatch.fnmatch(LocalLauncher.LOG_FILE, g) for g in _LOG_GLOBS), (
+        f"{LocalLauncher.LOG_FILE!r} matches none of {_LOG_GLOBS}, so a poller "
+        "cannot find a local run's progress")
+
+
+def test_a_non_blocking_local_run_writes_that_log(tmp_path, monkeypatch):
+    """Exercises submit's wait=False branch with a stub command, so the file and
+    the pidfile are both real without needing a GPU or a RunSpec."""
+    from experimentation.run import launchers as L
+
+    monkeypatch.setattr(L, "write_model_config", lambda spec, run_dir: None)
+    launcher = LocalLauncher()
+    monkeypatch.setattr(
+        launcher, "build_command",
+        lambda spec, run_dir, resume=False: [
+            sys.executable, "-c",
+            "print('step     10/200 | loss 1.0 | ppl 2.7 | lr 1e-4 | 1.0K tok/s')"])
+
+    proc = launcher.submit(object(), tmp_path, wait=False)
+    proc.wait(timeout=30)
+
+    log = tmp_path / LocalLauncher.LOG_FILE
+    assert log.exists(), f"no {LocalLauncher.LOG_FILE} written"
+    assert (tmp_path / LocalLauncher.PID_FILE).exists()
+
+    # And the pruner's own parser must be able to read it back.
+    from experimentation.sweep.search.metrics import read_progress
+    points = read_progress(tmp_path)
+    assert [p.step for p in points] == [10], f"read_progress got {points}"
+
+
+def test_a_blocking_local_run_still_inherits_stdout(tmp_path, monkeypatch):
+    """The asymmetry is deliberate: an interactive run wants its output on the
+    terminal. Redirecting by default would silently take that away from
+    `python -m experimentation.run --launcher local`."""
+    from experimentation.run import launchers as L
+
+    monkeypatch.setattr(L, "write_model_config", lambda spec, run_dir: None)
+    launcher = LocalLauncher()
+    monkeypatch.setattr(
+        launcher, "build_command",
+        lambda spec, run_dir, resume=False: [sys.executable, "-c", "print('hi')"])
+
+    launcher.submit(object(), tmp_path, wait=True)
+    assert not (tmp_path / LocalLauncher.LOG_FILE).exists(), (
+        "wait=True must not redirect; the terminal is the point")
+
+
+def test_slurm_submit_accepts_wait_without_caring():
+    """So a caller can pass wait=False to any launcher without first asking which
+    one it holds. sbatch is asynchronous whether or not anyone asks."""
+    import inspect
+    from experimentation.run.launchers import SlurmLauncher
+    params = inspect.signature(SlurmLauncher.submit).parameters
+    assert "wait" in params, "SlurmLauncher.submit must accept wait"
+    assert params["wait"].default is True
+
+
+def test_the_driver_submits_without_waiting():
+    """The other half. A tailable log is useless if the driver still blocks until
+    training is over before it starts reading."""
+    src = (REPO / "experimentation/sweep/search/driver.py").read_text()
+    assert "wait=False" in src, (
+        "run_trial must submit with wait=False, or the objective reader starts "
+        "after training ends and there is nothing left to prune")

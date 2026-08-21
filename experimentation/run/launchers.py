@@ -95,8 +95,18 @@ class Launcher(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
-        ...
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *,
+               resume: bool = False, wait: bool = True):
+        """Start this run. ``wait=False`` means "return before it finishes".
+
+        On the ABC because a caller has to be able to say it without knowing
+        which launcher it holds. The adaptive search needs it: pruning tails a
+        RUNNING job's log, so a submit that blocks leaves nothing to prune.
+
+        Slurm is already asynchronous -- sbatch returns a job id immediately --
+        so SlurmLauncher accepts the flag and ignores it. Local execution is the
+        one that has to change behaviour.
+        """
 
 
 class _ScoresRuns:
@@ -140,6 +150,11 @@ class LocalLauncher(Launcher, _ScoresRuns):
     #: run directory alone (via its ``slurm-*.out`` filenames).
     PID_FILE = ".local_pid"
 
+    #: Where a non-blocking local run's stdout goes, so a poller can tail it.
+    #: Must match one of metrics.py's _LOG_GLOBS ("slurm-*.out", "*.log") or the
+    #: pruner cannot see it.
+    LOG_FILE = "train.log"
+
     def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *,
                resume: bool = False, wait: bool = True):
         """Run training here. Blocking by default, and that default is load-bearing.
@@ -168,8 +183,24 @@ class LocalLauncher(Launcher, _ScoresRuns):
         if dry_run:
             return cmd
         if wait:
+            # Inherit stdout: a human running this watches the terminal.
             return subprocess.run(cmd, check=True)
-        proc = subprocess.Popen(cmd, start_new_session=True)
+
+        # Not waiting means somebody intends to WATCH this run, and the only
+        # channel for that is a file in the run directory (metrics.py's module
+        # docstring: nothing there holds a subprocess or a pipe). Slurm gets this
+        # for free -- its sbatch template routes stdout to run_dir/slurm-%j.out --
+        # and local runs had no log at all, so read_progress's globs matched
+        # nothing and PRUNING COULD NEVER FIRE. Measured: job 439827 completed 4
+        # trials with real objectives and "trials with reported intermediate
+        # steps: 0", because there was nothing to parse.
+        #
+        # Asymmetric with the wait=True branch on purpose: an interactive run
+        # wants its output on the terminal, a watched run wants it on disk.
+        log_path = Path(run_dir) / self.LOG_FILE
+        log = open(log_path, "w", buffering=1)          # line-buffered
+        proc = subprocess.Popen(cmd, start_new_session=True,
+                                stdout=log, stderr=subprocess.STDOUT)
         atomic_write_text(Path(run_dir) / self.PID_FILE, f"{proc.pid}\n")
         return proc
 
@@ -257,7 +288,13 @@ class SlurmLauncher(Launcher, _ScoresRuns):
             launch_line=launch_line,
         )
 
-    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *, resume: bool = False):
+    def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *,
+               resume: bool = False, wait: bool = True):
+        # `wait` is accepted and ignored: sbatch returns a job id as soon as the
+        # job is QUEUED, so this launcher is asynchronous whether or not anyone
+        # asks. Accepting it lets a caller pass wait=False to any launcher
+        # without first asking which one it holds.
+        del wait
         run_dir = Path(run_dir)
         write_model_config(spec, run_dir)
         sbatch_path = run_dir / "launch.sbatch"

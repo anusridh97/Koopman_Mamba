@@ -216,8 +216,13 @@ def main(argv=None):
     # before trial 0 exists, which is why a plain reader can never prune.
     def objective_reader_for(study_, trial):
         def read(run_dir):
-            return wait_for_objective(study_, trial, run_dir,
-                                      **spec.objective)
+            # timeout_seconds is not optional now that the driver submits with
+            # wait=False: a crashed trial no longer raises from submit, so its
+            # only remaining symptom is an objective that never arrives.
+            return wait_for_objective(
+                study_, trial, run_dir,
+                timeout_seconds=spec.trial_timeout_seconds,
+                **spec.objective)
         return read
 
     outcomes = drive(

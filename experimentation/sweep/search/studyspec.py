@@ -92,6 +92,16 @@ class StudySpec:
     logging_steps: int = 10
     #: Optional anchor designs to enqueue before adaptive sampling starts.
     design_file: Optional[str] = None
+    #: How long to wait for a trial's objective before giving up on it.
+    #:
+    #: Load-bearing once the driver stops blocking on submit. With a blocking
+    #: submit, a crashed trial surfaced as a non-zero exit from subprocess.run;
+    #: without one, it surfaces only as "the objective never appeared". No
+    #: timeout means a single dead trial hangs the whole study indefinitely.
+    #:
+    #: 2 hours by default -- generous next to the minutes a small trial takes, and
+    #: still far short of a night.
+    trial_timeout_seconds: float = 7200.0
     #: Held-out shard for a trial's own end-of-run scoring. Defaults to the base
     #: spec's training shard, which is fine for a proxy objective but means the
     #: score is not held out -- set it for anything whose ranking you trust.
@@ -132,6 +142,11 @@ class StudySpec:
             raise ValueError(
                 "logging_steps must be >= 1 -- it becomes the pruner's "
                 "interval_steps, which optuna requires to be positive")
+        if self.trial_timeout_seconds <= 0:
+            raise ValueError(
+                "trial_timeout_seconds must be positive -- without a timeout one "
+                "dead trial hangs the study forever, and the driver no longer "
+                "blocks on submit, so a crash has no other way to surface")
         if self.prune_after_step >= self.max_steps:
             raise ValueError(
                 f"prune_after_step={self.prune_after_step} >= max_steps="
