@@ -94,7 +94,7 @@ def run_trial(study: optuna.study.Study, trial, *,
               read_objective_factory: Optional[
                   Callable[[Any, Any], Callable[[Path], Optional[float]]]] = None,
               base_lr: float = 4e-4,
-              backend_policy: str = "exact_auto",
+              backend_policy: str = "exact_invchol",
               seq_len: Optional[int] = None,
               dry_run: bool = False,
               force: bool = False,

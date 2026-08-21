@@ -106,7 +106,7 @@ class StudySpec:
     #: spec's training shard, which is fine for a proxy objective but means the
     #: score is not held out -- set it for anything whose ranking you trust.
     eval_data_dir: Optional[str] = None
-    backend_policy: str = "exact_auto"
+    backend_policy: str = "exact_invchol"
     seq_len: Optional[int] = None
     batch_ladder: bool = False
     #: Objective weights, passed through to metrics.objective_from_metrics.

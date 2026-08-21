@@ -18,9 +18,11 @@ The full config is already in that run's own materialized `spec.yaml`. A second
 copy is a second thing that can disagree with the first, and the run directory is
 the thing you actually want to open.
 
-Promotion cells force `exact_auto` regardless of what was screened. Screening may
-run the cheap approximate backend; a confirmation run that inherited that would
-be confirming the proxy rather than the architecture. And `warmup_ratio` is
+Promotion cells force `exact_invchol` regardless of what was screened, so a
+confirmation run confirms the architecture rather than whichever route a screen
+happened to use. It is the exact route that costs what the approximation costs
+(space.py's docstring has the measurement), which is what lets this be
+unconditional instead of a speed/fidelity choice. And `warmup_ratio` is
 re-applied against the *promotion* run length, because a warmup baked in at 600
 screening steps would occupy a fifth of a 3000-step run.
 """
@@ -164,12 +166,12 @@ def write_promotion_sweep(study: optuna.study.Study, out_path, *,
 
     cells: List[Dict[str, Any]] = []
     for trial in completed[:top_k]:
-        # warmup_ratio re-applied against the PROMOTION length, and exact_auto
-        # forced: a confirmation run must confirm the architecture, not the proxy
-        # backend a screen may have used.
+        # warmup_ratio re-applied against the PROMOTION length, and the exact
+        # route forced: a confirmation run must confirm the architecture, not
+        # whichever route a screen used.
         overrides = params_to_overrides(trial.params, base_model,
                                        max_steps=max_steps, seq_len=seq_len,
-                                       backend_policy="exact_auto")
+                                       backend_policy="exact_invchol")
         overrides["optim.max_steps"] = int(max_steps)
         for seed in seeds:
             cells.append({**overrides, "runtime.seed": int(seed)})

@@ -35,7 +35,47 @@ improved on it.
 whatever its base config happened to imply would be comparing across two
 parameterisations, so the modern policy is written explicitly into every trial.
 
-**Backend hazard.** Every policy here except ``proxy_chunked`` sets
+**Which route computes SKA, and what it costs.** ``SKAModule`` dispatches on
+three independent booleans in an ``if/elif`` chain -- ``ska_prefix_scan``,
+``ska_inverse_cholesky``, ``ska_exact_intrachunk`` -- and the *approximate*
+route is what you get when none of them is set. So "exact" is the negation of a
+disjunction of implementation flags and has no field of its own. That is what a
+`backend_policy` exists to hide, and the policy list is short because the four
+routes were measured against ``prefix_scan.dense_exact_oracle`` in fp64 on an
+H100 (jobs **440122** correctness and **440135** cost):
+
+===================  =====================  ==============================
+route                fp64 err vs oracle     full-model step vs chunked
+===================  =====================  ==============================
+chunked              0.92 - 1.52            1.00x  (the baseline)
+prefix_scan ref      <= 4.7e-13             160x at 4m
+prefix_scan fused    fp32 only, 1e-5        1.01x, rank 24 + width 64 ONLY
+inverse_cholesky     <= 5.1e-13             0.92x at 4m, 1.41x at 50m
+exact_intrachunk     <= 5.0e-13             57x at 4m, 87x at 50m
+===================  =====================  ==============================
+
+Three consequences, each of which shaped the list above.
+
+*``exact_invchol`` is the default because exactness is free.* Routes 2, 3 and 4
+are the same function to 1e-13; route 3 is the one that costs what the
+approximation costs. Nothing has to be traded.
+
+*``exact_auto`` is a cliff, not a slope.* ``cuda_prefix_scan.is_supported``
+requires rank **exactly** 24, and this space samples ``{8, 16, 24, 32}``. So
+inside a single study ``exact_auto`` measured 0.0043 s at rank 24 and 0.72-3.19 s
+at the other three -- a **167x-738x discontinuity correlated with a searched
+variable**. A sampler comparing trials on wall-clock is being told rank 24 is
+free. It is kept as an explicit slow-reference option, not as a default.
+
+*Do not mix routes inside one study.* ``chunk_stats`` and ``exact_stats`` add a
+``1e-4 * I`` jitter on top of ``ska_ridge``; ``ska_prefix_scan`` does not. Since
+``ska_ridge`` is *sampled* over [3e-3, 3e-2], switching route between trials
+perturbs the effective ridge by 0.3%-10% -- measured as 0.13%-2.9% in the output
+and 0.25%-6% in the gradients. It is not a bug in either route, and it is exactly
+why a policy resolves to ONE route for the whole study rather than picking per
+trial.
+
+**Backend hazard.** Two of the three policies here set
 ``ska_prefix_scan=True``, and per `run/train_argv.py` that architecture does not
 tolerate ``torch.compile`` or gradient checkpointing: cudagraph capture plus
 activation-checkpoint recomputation re-entering ``_SKAPrefixScanFn`` raises
@@ -57,7 +97,29 @@ from experimentation.sweep.search.geometry import (
 __all__ = ["BACKEND_POLICIES", "default_base_lr", "search_space",
            "params_to_overrides"]
 
-BACKEND_POLICIES = ("exact_auto", "fused_only", "proxy_chunked")
+# Ordered by what a study should reach for first. See the module docstring for
+# the measurement (jobs 440122 / 440135) that put inverse_cholesky at the front.
+BACKEND_POLICIES = ("exact_invchol", "fused_only", "exact_auto")
+
+# Policies that existed, were measured, and lost. Kept as named rejections
+# rather than deleted, because the caller most likely to pass one is someone
+# re-running an archived config -- and "unknown backend policy 'proxy_chunked'"
+# reads as a rename when it was a retraction.
+_RETIRED_POLICIES = {
+    "proxy_chunked": (
+        "backend policy 'proxy_chunked' is retired: it was never a cheap "
+        "screen. Measured against prefix_scan.dense_exact_oracle in fp64 (job "
+        "440122, H100) the chunked route is 92%-152% wrong in the FORWARD and "
+        "93%-101% wrong in the GRADIENTS, at both the 4m and 50m geometries, "
+        "on random inputs and on a lag-3 recall task, with no dependence on "
+        "sequence length, ridge or power_K. It is not an approximation of the "
+        "exact operator, it is a different operator -- and ska_rank, ska_ridge "
+        "and ska_norm_clip_c reach the model ONLY through it, so it cannot "
+        "screen the parameters this space samples. Its one remaining argument "
+        "was speed, and that is gone too: at the 4m geometry 'exact_invchol' "
+        "measured 0.0224 s per full-model micro-step against chunked's 0.0244 s "
+        "(job 440135). Use 'exact_invchol'."),
+}
 
 # The fused SM100 prefix-scan kernel is specialised to this rank (and value
 # width 64); see configs/50m.yaml's header.
@@ -152,14 +214,23 @@ def search_space(base_model: KoopmanLMConfig, *,
 
 def _backend_overrides(policy: str, rank: int, *,
                        head_dim: Optional[int] = None) -> Dict[str, Any]:
+    if policy in _RETIRED_POLICIES:
+        raise ValueError(_RETIRED_POLICIES[policy])
     if policy not in BACKEND_POLICIES:
         raise ValueError(
             f"unknown backend policy {policy!r}; expected one of {list(BACKEND_POLICIES)}")
-    if policy == "proxy_chunked":
-        # The cheap approximate screen: no exact prefix scan.
+    if policy == "exact_invchol":
+        # Exact, and free. Route 3 agrees with the reference prefix scan to
+        # 5.1e-13 in fp64 and costs 0.92x the chunked approximation at 4m /
+        # 1.41x at 50m per full-model micro-step.
+        #
+        # No `model.ska_backend` here on purpose. That string is read by exactly
+        # one route: ska.py passes the RAW value to ska_prefix_scan and the
+        # resolved one feeds only extra_repr(). Emitting it under a policy that
+        # does not run the prefix scan would put a setting in spec.yaml that
+        # looks like it selected something and did not.
         return {"model.ska_prefix_scan": False,
-                "model.ska_backend": "auto",
-                "model.ska_inverse_cholesky": False,
+                "model.ska_inverse_cholesky": True,
                 "model.ska_exact_intrachunk": False}
     if policy == "fused_only":
         # Rank AND value width. This checked rank alone, and value width is the
@@ -180,9 +251,10 @@ def _backend_overrides(policy: str, rank: int, *,
             raise ValueError(
                 "backend policy 'fused_only' pins the fused SM100 kernel, which "
                 "is specialised to one geometry: " + "; ".join(problems)
-                + ". Use 'exact_auto' for the exact reference scan at any "
-                  "geometry -- but note it is ~137x slower when the fused "
-                  "kernel does not apply.")
+                + ". Use 'exact_invchol', which is exact at ANY geometry and "
+                  "measured 0.92x-1.41x the chunked cost; 'exact_auto' is also "
+                  "exact here but falls back to the Python reference scan at "
+                  "160x when the fused kernel does not apply.")
     return {"model.ska_prefix_scan": True,
             "model.ska_backend": "cuda_prefix" if policy == "fused_only" else "auto",
             "model.ska_inverse_cholesky": False,
@@ -194,7 +266,7 @@ def _backend_overrides(policy: str, rank: int, *,
 def params_to_overrides(params: Mapping[str, Any], base_model: KoopmanLMConfig, *,
                         max_steps: int,
                         seq_len: int | None = None,
-                        backend_policy: str = "exact_auto") -> Dict[str, Any]:
+                        backend_policy: str = "exact_invchol") -> Dict[str, Any]:
     """One sampled point -> `{"<section>.<field>": value}`, ready for
     `sweep/spec.py::build_cell_run_spec`.
 

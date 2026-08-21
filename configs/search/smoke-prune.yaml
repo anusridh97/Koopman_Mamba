@@ -20,6 +20,8 @@ max_steps: 200
 prune_after_step: 30
 logging_steps: 10
 launcher: local
-backend_policy: proxy_chunked
+# Exact and ~free at this geometry; see smoke-4m.yaml's header for the two
+# wrong answers that preceded it.
+backend_policy: exact_invchol
 run_root: /scratch/m000151-pm06/jkli/study-prune
 eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val

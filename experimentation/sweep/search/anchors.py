@@ -162,7 +162,7 @@ def designs_to_cells(designs, base_model: KoopmanLMConfig,
                      space: Mapping[str, Mapping[str, Any]], *,
                      base_lr: float,
                      max_steps: int,
-                     backend_policy: str = "exact_auto",
+                     backend_policy: str = "exact_invchol",
                      seq_len: int | None = None) -> List[Dict[str, Any]]:
     """A design set -> a `cells:` list for configs/sweeps/<name>.yaml.
 

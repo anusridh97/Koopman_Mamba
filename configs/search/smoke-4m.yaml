@@ -19,27 +19,33 @@
 #                   n_startup_trials = min(6, max(3, 4//3)) = 3 -- so realistically
 #                   only trial 4 is prunable here. That is expected, not a bug.
 #
-# backend_policy: proxy_chunked, and this is the one setting that was NOT obvious.
+# backend_policy: exact_invchol. This setting has been wrong twice; the history
+# is worth reading before changing it a third time.
 #
-# MEASURED (job 439754, cancelled): with the default exact_auto, this study built
-# its model, printed "Training: 400 steps", and then sat at 99% CPU for 21 minutes
-# without logging a single step. One trainer, one attempt in attempts.jsonl, and
-# --no_compile set, so neither a collision nor torch.compile. The only difference
-# from the identical config trained standalone in ~2 minutes (job 439516) is that
-# exact_auto overrides the base spec's `ska_backend: pytorch` and
-# `ska_prefix_scan: false` with `auto` + `prefix_scan: true`, which here lands in a
-# pathologically slow path -- silently, with no error and no warning.
+# MEASURED (job 439754, cancelled): under the then-default exact_auto this study
+# built its model, printed "Training: 400 steps", and then sat at 99% CPU for 21
+# minutes without logging a step. One trainer, one attempt in attempts.jsonl,
+# --no_compile set -- so neither a collision nor torch.compile. exact_auto
+# overrides the base spec's `ska_prefix_scan: false` with `true`, and at the 4m
+# geometry (value width 32) the fused kernel does not apply, so every forward took
+# the Python reference scan. Measured at 160x the chunked cost in job 440135.
 #
-# exact_auto pinning the backend is CORRECT and should not change: trials have to
-# be comparable, so a search must not inherit whatever kernel the base spec
-# happened to choose. The mistake was mine, pointing a wiring test at the heavy
-# exact path. proxy_chunked is what space.py's own docstring calls "the cheap
-# approximate screen: no exact prefix scan", which is exactly what a wiring test
-# wants.
+# I then pointed this at proxy_chunked, quoting space.py's own "cheap approximate
+# screen" without checking what approximate meant. Job 440122 measured it: the
+# chunked route is 92%-152% wrong in the forward and 93%-101% wrong in the
+# gradients. That made this wiring test fast and its numbers meaningless, and
+# `proxy_chunked` no longer exists as a policy.
 #
-# The finding is recorded in REVIEW.md: a real study on exact_auto would look like
-# a hang rather than a slow path, and that deserves investigation on its own.
-backend_policy: proxy_chunked
+# exact_invchol is the resolution and it costs nothing: measured 0.0224 s per
+# full-model micro-step at this exact geometry against chunked's 0.0244 s (job
+# 440135), while agreeing with the reference scan to 5.1e-13 in fp64. A wiring
+# test does not need approximate numbers -- it needed a route that is neither
+# 160x nor wrong, and that route exists.
+#
+# Pinning the backend at all is still CORRECT and should not change: trials have
+# to be comparable, so a search must not inherit whatever kernel the base spec
+# happened to choose.
+backend_policy: exact_invchol
 
 # design_file gives it the four example anchors, so enqueue_anchors / is_anchor /
 # the driver's anchor-exemption are exercised too. With 4 anchors and n_trials 4,

@@ -209,7 +209,8 @@ def test_rank_must_be_a_multiple_of_eight():
 @pytest.mark.parametrize("policy,expected", [
     ("exact_auto", {"model.ska_prefix_scan": True, "model.ska_backend": "auto"}),
     ("fused_only", {"model.ska_prefix_scan": True, "model.ska_backend": "cuda_prefix"}),
-    ("proxy_chunked", {"model.ska_prefix_scan": False, "model.ska_backend": "auto"}),
+    ("exact_invchol", {"model.ska_prefix_scan": False,
+                       "model.ska_inverse_cholesky": True}),
 ])
 def test_backend_policy_sets_the_expected_fields(policy, expected):
     from experimentation.sweep.search.space import params_to_overrides
@@ -243,7 +244,7 @@ def test_gradient_checkpointing_hazard_is_documented_next_to_prefix_scan():
     """train_argv.py:91-106 records that ska_prefix_scan=True with
     torch.compile/gradient-checkpointing dies with
     cudaErrorStreamCaptureInvalidated on H100 (job 415208). Every backend policy
-    here except proxy_chunked sets prefix_scan, so the warning has to be
+    here except exact_invchol sets prefix_scan, so the warning has to be
     reachable from this module rather than only from the run layer."""
     import experimentation.sweep.search.space as space
 
@@ -299,3 +300,114 @@ def test_space_imports_without_optuna():
     import experimentation.sweep.search.space as space
 
     assert "optuna" not in space.__dict__
+
+# ------------------------------------------- what the measurement decided ----
+#
+# Jobs 440122 / 440135 measured all four SKA routes on an H100 against
+# prefix_scan.dense_exact_oracle in fp64. The result changed which policy can be
+# a default, so it is pinned here rather than left in a report:
+#
+#   route            fp64 error vs oracle   full-model micro-step vs chunked
+#   chunked           0.92 - 1.52 (!)        1.00x   (the baseline)
+#   prefix_scan ref   <= 4.7e-13             160x at 4m; fused 1.01x at rank 24
+#   inverse_cholesky  <= 5.1e-13             0.92x at 4m, 1.41x at 50m
+#   exact_intrachunk  <= 5.0e-13             57x at 4m, 87x at 50m
+#
+# Two consequences, and each has a test below.
+
+def test_inverse_cholesky_is_the_default_policy_everywhere():
+    """The measurement removed the reason for any other default: route 3 is exact
+    to 1e-13 in fp64 and costs 0.92x the approximation at the 4m geometry. A
+    default of `exact_auto` bought 160x for the same answer; a default of
+    `proxy_chunked` bought a 92%-152% wrong operator for nothing.
+
+    Checked at every signature that carries the default rather than only at
+    space.py's, because a study's policy can enter from five places and four
+    agreeing with one disagreeing is how the old default survived.
+    """
+    import dataclasses
+    import inspect
+    import pathlib
+    import re
+
+    from experimentation.sweep.search import anchors, space, studyspec
+
+    assert space.BACKEND_POLICIES[0] == "exact_invchol", \
+        "the first policy is what a reader takes as canonical"
+    for fn in (space.params_to_overrides, anchors.designs_to_cells):
+        got = inspect.signature(fn).parameters["backend_policy"].default
+        assert got == "exact_invchol", f"{fn.__qualname__} still defaults to {got!r}"
+    # Read the field default rather than constructing: StudySpec has required
+    # fields on purpose (a study with no name or base config is not a study).
+    fields = {f.name: f for f in dataclasses.fields(studyspec.StudySpec)}
+    assert fields["backend_policy"].default == "exact_invchol"
+
+    # driver.py and report.py import optuna, which the CPU env deliberately does
+    # not have (pyproject keeps it in [lab] so a space can be authored without
+    # it). Read their defaults out of the source rather than skipping them --
+    # they are two of the five sites, and a skipped assertion is not one.
+    root = pathlib.Path(__file__).resolve().parents[1] / "experimentation/sweep/search"
+    for name in ("driver.py", "report.py"):
+        src = (root / name).read_text()
+        # Matches both spellings that occur: `backend_policy: str = "..."` (a
+        # signature default) and `backend_policy="..."` (a forced call site).
+        found = re.findall(r'backend_policy(?:\s*:\s*str)?\s*=\s*"([a-z_]+)"', src)
+        assert found, f"{name} names no backend policy at all any more"
+        assert set(found) == {"exact_invchol"}, f"{name} still names {sorted(set(found))}"
+
+
+@pytest.mark.parametrize("policy", ["exact_invchol", "fused_only", "exact_auto"])
+def test_every_policy_selects_exactly_one_route(policy):
+    """ska.py dispatches on three independent booleans in an if/elif chain, so
+    two set at once silently runs whichever comes first. Every policy must pin
+    all three -- including the two it turns off -- or the base spec's value
+    leaks in and decides which of two exact routes ran.
+    """
+    from experimentation.sweep.search.space import params_to_overrides
+
+    overrides = params_to_overrides(dict(_baseline_params(), ska_rank=24),
+                                    _base_model(), max_steps=15000,
+                                    backend_policy=policy)
+    flags = ("model.ska_prefix_scan", "model.ska_inverse_cholesky",
+             "model.ska_exact_intrachunk")
+    for flag in flags:
+        assert flag in overrides, f"{policy} leaves {flag} to the base spec"
+    assert sum(bool(overrides[f]) for f in flags) == 1, \
+        f"{policy} sets {[f for f in flags if overrides[f]]} -- not exactly one route"
+
+
+def test_the_chunked_policy_is_retired_by_name():
+    """`proxy_chunked` was not a cheap screen. It is 92%-152% wrong in the
+    forward and 93%-101% wrong in the gradients, at both geometries, on random
+    and structured inputs, with no dependence on T / ridge / K -- and
+    `ska_rank`, `ska_ridge` and `ska_norm_clip_c` enter the model ONLY through
+    the operator it gets wrong, so it cannot screen the things the search
+    samples.
+
+    Rejected with its own message rather than falling through to
+    'unknown policy', because the caller most likely to hit this is someone
+    re-running an archived config and they need to know it was measured, not
+    renamed.
+    """
+    from experimentation.sweep.search.space import params_to_overrides
+
+    with pytest.raises(ValueError, match="exact_invchol") as exc:
+        params_to_overrides(_baseline_params(), _base_model(), max_steps=15000,
+                            backend_policy="proxy_chunked")
+    msg = str(exc.value)
+    assert "440122" in msg, "cite the job that measured it"
+    assert "exact_invchol" in msg, "name the replacement"
+
+
+def test_exact_auto_warns_about_the_rank_cliff_not_a_constant_slowdown():
+    """The '137x' figure reads as a fixed tax. It is not: the fused kernel needs
+    rank EXACTLY 24, and the search samples {8, 16, 24, 32}, so within one study
+    exact_auto is 0.0043 s at rank 24 and 0.72-3.19 s at the other three -- a
+    167x-738x discontinuity correlated with a searched variable. A sampler
+    reading wall-clock across that cliff is being told rank 24 is free.
+    """
+    import experimentation.sweep.search.space as space
+
+    doc = space.__doc__
+    assert "cliff" in doc.lower(), "the discontinuity has to be named as one"
+    assert "440122" in doc or "440135" in doc, "cite the measurement"
