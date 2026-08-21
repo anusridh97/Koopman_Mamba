@@ -1,0 +1,65 @@
+# EXAMPLE anchor designs -- NOT a curated research set.
+#
+# ============================ READ THIS FIRST ============================
+# These four points were chosen MECHANICALLY, to exercise the anchor code path
+# end to end: enqueue_anchors, is_anchor, designs_to_cells, and the driver's
+# anchor-exemption from pruning. They are the corners of the space, not
+# hypotheses. Nobody selected them on scientific merit and nothing should be
+# concluded from how they score.
+#
+# The real file is `configs/search/curated_15.yaml`, which does not exist yet
+# because it requires a human to choose fifteen points they actually believe in.
+# An agent inventing those and committing them would imply a judgement that was
+# never made -- so this file is deliberately named `example_`, kept to four
+# entries, and says so in every place someone might read.
+#
+# `load_designs(path, minimum=N)` takes its floor from the caller, so the real
+# file drops in with no code change: point --design-file at it instead.
+# =========================================================================
+#
+# How to read a design: every factor defaults to 1.0 and every `baseline` field
+# means "whatever the base run spec says", so a design that sets nothing IS the
+# base config. Each entry below is therefore readable as its diff from baseline.
+#
+# The factors are relative, not absolute, so these designs stay meaningful if the
+# base spec changes -- `ridge_factor: 4.0` means "four times whatever the base
+# uses", not "0.04".
+#
+# They are also CLAMPED into the declared space, which is why the resolved values
+# do not always equal factor x base. Measured against configs/50m.yaml:
+# ridge_factor 4.0 asks for 0.04 and resolves to 0.03, the space's ceiling; and
+# lr_factor 0.5 asks for 2.0e-4 and resolves to 2.6e-4, its floor. That is
+# resolve_design working as documented -- the space, not the design file, is what
+# bounds a trial -- but it means a design cannot reach past the space, and a
+# factor chosen without checking the bounds may quietly become a smaller move
+# than intended.
+
+designs:
+  # The reference. Sets nothing, so it reproduces the base spec exactly. Its
+  # purpose is to make every other anchor's score readable as a delta, and to
+  # give the median pruner a completed trial early -- nothing prunes until
+  # n_startup_trials trials have COMPLETED, so a fast known-good point is worth
+  # having first.
+  - name: baseline
+
+  # Low rank, few layers: the cheap corner. If this scores near baseline, the
+  # extra capacity in the base config is not paying for itself.
+  - name: example-lean
+    rank: 8
+    layer_factor: 0.5
+
+  # High rank, more layers: the expensive corner. Exists to bracket the other
+  # side, and to surface an OOM early if the batch ladder is going to be needed
+  # at all -- better on a labelled example than on trial 9 of a real study.
+  - name: example-wide
+    rank: 32
+    layer_factor: 1.5
+
+  # Same capacity as baseline, different conditioning: a heavier ridge and a
+  # larger layerscale init. Included because it varies the numerics rather than
+  # the size, which is the axis the whitened SKA core is most sensitive to and
+  # the one a rank/depth sweep alone would never move.
+  - name: example-conditioned
+    ridge_factor: 4.0
+    layerscale_factor: 4.0
+    lr_factor: 0.5
