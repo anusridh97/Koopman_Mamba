@@ -52,6 +52,7 @@ from torch.utils.data import Dataset, DataLoader
 from koopman_lm.config import build_config, config_hash
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from experimentation.training.amp import amp_for
+from experimentation.training.repro import enable_determinism
 from experimentation.training.optim import param_groups
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
@@ -404,6 +405,7 @@ def build_cell_command(args, model_type, num_kv_pairs, distractor_gap):
         "--save_steps",      str(args.save_steps),
         "--eval_every",      str(args.eval_every),
         "--log_every",       str(args.log_every),
+        *(["--deterministic"] if args.deterministic else []),
         "--warmup_steps",    str(args.warmup_steps),
         "--output_dir",      str(out),
         "--seed",            str(args.seed),
@@ -516,6 +518,11 @@ def parse_args():
 
     # Logging
     p.add_argument("--log_every", type=int, default=100)
+    p.add_argument("--deterministic", action="store_true", default=False,
+                   help="enable torch deterministic algorithms "
+                        "(reproducible loss curves; lower throughput). "
+                        "Without it two runs at the same seed diverge to "
+                        "~0.5 in loss by step 400 -- see main()")
     p.add_argument("--wandb_project", type=str, default=None)
     p.add_argument("--wandb_group", type=str, default=None)
 
@@ -539,6 +546,25 @@ def parse_args():
 def main():
     args = parse_args()
     torch.manual_seed(args.seed)
+    if args.deterministic:
+        # MEASURED (job 439605): without this, two runs of this trainer at the
+        # SAME seed diverge to |A-B| = 0.53 in loss by step 400 -- 2700x the
+        # shard trainer's 0.0002. They start identical (0.0002 at step 10, which
+        # is the log format's precision) and separate progressively: 0.003 by
+        # step 50, 0.018 by 100, 0.53 by 400. So the cause is not seeding or data
+        # order -- both are correct, base_seed is tied to args.seed at :234 --
+        # but ordinary GPU nondeterminism compounding through the optimizer.
+        #
+        # It bites here and not on the shard path because MQAR supervises only a
+        # handful of positions per sequence (8 answer tokens in ~96) at lr 1e-3,
+        # so the objective is sparse and sharp and sits in a regime where tiny
+        # perturbations amplify rather than wash out.
+        #
+        # train.py has had this flag since the exact-resume work; this trainer
+        # never did, which meant its results were not reproducible run-to-run and
+        # nothing said so.
+        enable_determinism(warn_only=True)
+        print("  Determinism mode ON (cudnn.benchmark off; throughput will drop)")
     if args.sweep:
         run_sweep(args)
     else:

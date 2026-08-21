@@ -29,6 +29,12 @@
 #                       carries the same convention and must survive the refactor
 #   log_every 10        40 logged points, same density as the 4m golden
 #
+# --deterministic is REQUIRED here, not optional. Job 439605 ran this without it:
+# two runs at the same seed diverged to |A-B| = 0.53 by step 400, starting from
+# 0.0002 at step 10 and separating progressively. A noise floor that large makes
+# the golden useless -- it cannot distinguish a refactor from a Tuesday. The
+# earlier version of this file predicted exactly this case and named the remedy.
+#
 # As with the 4m job, this runs TWICE at the same seed and reports the divergence.
 # A single curve has no threshold, so it cannot answer "did the refactor change
 # this?" -- only "here is a number". The measured A-vs-B spread IS the threshold.
@@ -77,6 +83,7 @@ for REP in A B; do
         --eval_every 200 \
         --save_steps 400 \
         --seed 42 \
+        --deterministic \
         --output_dir "$OUT/$REP/run" \
         2>&1 | tee "$OUT/$REP/train.log"
     echo "STATUS replicate_${REP}=${PIPESTATUS[0]}"
@@ -127,7 +134,8 @@ payload = {
     "path": "synthetic",
     "args": {"model_type": "mamba_ska_swiglu", "model_size": "1m",
              "num_kv_pairs": 8, "distractor_gap": 64, "batch_size": 32,
-             "max_steps": 400, "warmup_steps": 40, "seed": 42},
+             "max_steps": 400, "warmup_steps": 40, "seed": 42,
+             "deterministic": True},
     "commit": os.popen("git rev-parse HEAD").read().strip(),
     "replicates": curves,
     "noise_floor": {"mean_abs_delta": mean, "max_abs_delta": worst,
