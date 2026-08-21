@@ -140,3 +140,32 @@ def test_the_two_replicates_actually_agree_to_the_recorded_floor(path):
     assert max(deltas) == pytest.approx(recorded, abs=1e-9), (
         f"{path.name} records max_abs_delta={recorded} but its replicates "
         f"actually differ by {max(deltas)}")
+
+
+@pytest.mark.parametrize("path", GOLDENS, ids=lambda p: p.name)
+def test_the_args_record_can_actually_reproduce_the_step_grid(path):
+    """`args` claims to say how to re-capture the curve. For the CLI-driven
+    goldens it did not: the step grid is set by --log_every, whose defaults are
+    100 (mqar_finetune) and 200 (table2), while both goldens log every 10. So
+    "reproduce from the recorded args" would have produced 4 points and compared
+    them against 40, and the comparator would have reported 36 missing steps as
+    though the run were broken.
+
+    Skipped for spec-driven goldens: their logging cadence lives in the run spec,
+    not in an args dict.
+    """
+    payload = json.loads(path.read_text())
+    args = payload.get("args")
+    if not args:
+        pytest.skip(f"{path.name} is spec-driven ({payload.get('spec')})")
+
+    steps = sorted(int(k) for k in payload["replicates"]["A"])
+    strides = {b - a for a, b in zip(steps, steps[1:])}
+    assert len(strides) == 1, f"{path.name} has an uneven step grid: {sorted(strides)}"
+    stride = strides.pop()
+
+    assert args.get("log_every") == stride, (
+        f"{path.name} logs every {stride} steps but its args record "
+        f"log_every={args.get('log_every')!r}. The args are what a re-capture "
+        f"is driven from, so an omitted one silently changes the grid.")
+

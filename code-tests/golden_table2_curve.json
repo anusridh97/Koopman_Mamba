@@ -2,6 +2,7 @@
   "args": {
     "curriculum": "batch_mixed",
     "deterministic": true,
+    "log_every": 10,
     "max_steps": 400,
     "model_size": "1m",
     "seed": 42
