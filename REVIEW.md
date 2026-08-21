@@ -132,7 +132,7 @@ matters is which of them would catch a real mistake:
 | `test_module_import_health.py` | a `NameError` in a module no test imports. Found two real ones on first run |
 | `test_ska_precision_wiring.py` | the precision refactor is bit-identical at its defaults, against a golden captured **before** the change |
 | `test_identity_baseline.py` | no config hash moved that shouldn't have |
-| `golden_4m_curve.json` + comparator | the shard loop still trains identically. Noise floor 0.0002 -- log-format precision, not numerical |
+| `golden_4m_curve.json` + comparator | the shard loop still trains identically. Noise floor 0.0002 -- log-format precision, not numerical. **Used as a gate:** job 439919 re-ran it after `train.py`'s loss moved into `ShardTask` and MATCHED at worst delta 0.0001 |
 | `golden_mqar_curve.json` | the synthetic loop, the path whose shift convention differs. Noise floor **0.0** with `--deterministic`; **0.53 without it**, which is how that missing flag was found |
 | `test_train_task.py` | each task's `step_loss` is bit-identical to the inline code it replaces. Mutation-checked against all three mistakes the refactor can make |
 | `test_progress_log_format.py` | a trainer whose log the pruner cannot parse, which made synthetic trials silently unprunable |

@@ -53,6 +53,7 @@ from koopman_lm.config import build_config, config_hash
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from experimentation.training.amp import amp_for
 from experimentation.training.repro import enable_determinism
+from experimentation.training.task import SyntheticTask
 from experimentation.training.optim import param_groups
 from koopman_lm.models.baselines import (
     build_mamba_only, build_mamba_attention, build_mamba_ska_swiglu)
@@ -284,6 +285,10 @@ def train(args):
     # uses. Not a vanity metric: sweep.search.metrics.TRAIN_RE requires that
     # field, and without it nothing downstream can read this trainer's log.
     tokens_seen = 0
+    # Which loss convention this loop runs. SyntheticTask means "the data is
+    # aligned, so the loss applies the offset" -- the opposite of ShardTask, and
+    # the distinction the whole TrainTask design exists to keep explicit.
+    task = SyntheticTask(model_type=args.model_type)
     last_acc = None
 
     while step < args.max_steps:
@@ -296,15 +301,20 @@ def train(args):
             labels = labels.to(device, non_blocking=True)
 
             with autocast:
-                out    = model(input_ids=inputs)
-                logits = out["logits"]
-                # Shift: logits[t] predicts labels[t+1].
-                # Matches eval_mqar which checks logits[:,:-1] vs labels[:,1:].
-                loss = F.cross_entropy(
-                    logits[:, :-1].reshape(-1, logits.size(-1)),
-                    labels[:, 1:].reshape(-1),
-                    ignore_index=-100,
-                )
+                # §6.2 step three, mirroring what train.py now does with
+                # ShardTask. The offset stays HERE rather than moving into the
+                # model: make_mqar emits ALIGNED pairs, so labels[p] is the
+                # answer belonging at position p, and the loss scores
+                # logits[:, :-1] against labels[:, 1:]. eval_mqar
+                # (curricula.py:99) offsets identically and must keep doing so.
+                #
+                # SyntheticTask.step_loss is pinned bit-identical to the six
+                # lines it replaces by code-tests/test_train_task.py, which also
+                # mutation-checks the mistake this refactor invites: routing this
+                # data through the model's positional CE, where a one-hot
+                # input-copier scores <1e-4 because at every supervised position
+                # the label IS the input there.
+                loss = task.step_loss(model, (inputs, labels))
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
