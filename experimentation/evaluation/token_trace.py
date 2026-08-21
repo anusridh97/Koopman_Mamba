@@ -30,6 +30,28 @@ says the searcher holds "no subprocess handle or pipe" precisely so a result can
 be read hours later on another machine. `spec.yaml` is the recipe,
 `attempts.jsonl` the ledger, `quick_eval.json` the score. This is the detail.
 
+## What the first real checkpoint showed
+
+Run against `50m-first-real` (30 steps) and six 200-step 5.2M trials, over
+4 x 512 tokens of the held-out fineweb shard:
+
+  * `ska_ablation.loss_delta = 1.45e-05` is a **cancellation**, not an absence.
+    93-96% of tokens move by more than 1e-4 when the SKA branch is zeroed, and
+    26-84% by more than 1e-3, in both directions; mean|delta| exceeds
+    |mean delta| by 12-18x. The scalar is small because the signed per-token
+    deltas nearly cancel, which is exactly the distinction an aggregate cannot
+    draw and this file exists to draw.
+  * The delta is **exactly zero for the whole first chunk** of every sequence on
+    a checkpoint using the chunked SKA approximation -- first nonzero at
+    position 16 with `ska_chunk_size=16`, in all four sequences of all four
+    such trials -- and nonzero from position 2 on the one checkpoint using
+    `ska_prefix_scan` (exact). So a trace tells you from the outside, off a
+    checkpoint alone, which SKA route the run took. It also means a short
+    `--max_seq_len` spends its first chunk measuring a structural zero.
+  * Mean logprob reproduces `quick_eval`'s loss to five decimals over the same
+    token count (-7.723848 vs 7.723806), which is the cheapest available check
+    that this reads the model the way the trainer's loss does.
+
 ## Size
 
 A trace is bounded on purpose. `--sequences` and `--top_k` default low because
