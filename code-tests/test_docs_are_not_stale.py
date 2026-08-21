@@ -295,6 +295,16 @@ _ALLOWED_DEAD_POINTERS = {
     # The comment records where ska_core used to live and why the __main__
     # block no longer loads it from there.
     ("koopman_lm/kernels/chunk_stats_exact.py", "koopman_lm/ska_core_torch.py"),
+    # A FORWARD reference, not a dead one -- the only entry here that points at
+    # something not yet written rather than something deleted. example_anchors
+    # exists precisely to stand in for curated_15.yaml until a human chooses
+    # fifteen designs they believe in, and its header has to name the file it
+    # substitutes for or nobody knows it is a substitute.
+    #
+    # test_the_dead_pointer_allowlist_is_not_stale is what makes this safe to
+    # leave: the moment curated_15.yaml lands, that test demands this entry be
+    # removed, which is also the prompt to switch --design-file's default.
+    ("configs/search/example_anchors.yaml", "configs/search/curated_15.yaml"),
 }
 
 
