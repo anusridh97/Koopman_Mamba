@@ -29,7 +29,7 @@ Then read §3's table and §6. Everything else is depth.
 |---|---|---|
 | **A** | Precision policy: `compute_precision` / `ska_precision` / `mlp_precision`, threaded into the SKA core, the Koopman rotation, and all five trainers via one `amp_for` helper | GPU job 436063: real 30-step H100 training, loss 10.08 → 8.26 |
 | **B** | Provenance: `code_id` + `dirty` in all four checkpoint writers; `harness.py` stops overwriting a recorded `cfg_hash` | GPU 436063 step 3b: `meta.pt` carries `code_id=3be37b7` |
-| **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **runnable** — `python -m experimentation.sweep.search`; wiring verified on CPU (4 anchors enqueued, 4 trials driven, reports written). End-to-end on GPU still open, see §6 |
+| **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **works end to end.** GPU job 439883: 4 trials COMPLETE with real objectives (7.18–7.64), 4 `quick_eval.json`, 20 reported steps each, all reports written. Caveat in §6 |
 | **D** | `per_device_batch_size` moved `OptimSpec` → `RuntimeSpec`, so an OOM-ladder rung no longer renames the experiment | 0 of 11 config hashes moved |
 | **E** | Test infrastructure: import gate, static undefined-name check, `param_groups` characterization, loss-alignment conformance, a golden training curve | see §4 |
 | **F** | Cleanup: both documented training commands were broken; `load_model` deduplicated; dangling in-tree pointers | §4 |
@@ -158,13 +158,23 @@ notice.
 
 Read this section before trusting anything above it.
 
-**The adaptive search runs, but has never completed a study on GPU.** Its wiring
-is verified on CPU -- anchors enqueued, trials driven, `trials.csv` and
-`top_trials.md` written -- and `train.py --eval_on_final` now writes the
-`quick_eval.json` a trial is scored from, which was the hard blocker. What has not
-happened is a study finishing on real hardware with real scores. Job 439754 was
-that attempt and was cancelled (see the `exact_auto` note below); the rerun is
-`sbatch scripts/verify_study_e2e.sbatch`.
+**A study closes its loop; a pruning DECISION has never been observed.** GPU job
+439883 passed all five checks: 4 trials COMPLETE with real objectives (7.1819,
+7.1934, 7.2203, 7.6398), 4 `quick_eval.json` files, **20 reported intermediate
+steps per trial**, `trials.csv` / `top_trials.md` / `best_trial.json` written, and
+each trial's `spec.yaml` stamped with study/trial/anchor.
+
+What that proves is the *prerequisite* for pruning — that progress is parsed and
+reported to optuna. It does **not** prove `should_prune()` ever returned True.
+Nothing was pruned in that study and nothing could have been: all four trials were
+anchors, which the driver exempts, and `n_startup_trials = min(6, max(3, 4//3)) = 3`
+means nothing prunes until three trials COMPLETE. A study with non-anchor trials
+and a clearly-losing config is still needed to see a prune actually fire.
+
+It took four attempts, and each failure was different and real: a trial-budget bug
+(25x overspend against a 15000-step base), an `exact_auto` stall, two bugs in my own
+verification harness, and then two independent reasons pruning could not fire. None
+were findable by reading.
 
 **Also missing for a *good* study:** `configs/search/curated_15.yaml` — 15
 hand-chosen anchor designs. A study runs without it, but the first four trials are
