@@ -56,6 +56,17 @@ lab = [
     # dropped outright because transformers' save/load paths can reach for it.
     "safetensors",
     "wandb",
+    # experimentation/sweep/search/. 4.x is a HARD floor, not caution:
+    # study.py::make_storage raises on optuna 3's JournalFileStorage spelling
+    # (renamed to journal.JournalFileBackend in 4.0), and constant_liar --
+    # which is what keeps N parallel workers from proposing identical points --
+    # is 3.2+. Confirmed working against 4.9.0.
+    #
+    # Only study.py, driver.py and report.py import it. geometry/space/anchors,
+    # and StudySpec, stay importable without it, which is what lets a curated
+    # anchor set ship as an ordinary `cells:` sweep and a study be authored on a
+    # machine that has never installed optuna.
+    "optuna>=4.0",
 ]
 # CUDA-only, version-sensitive: pip cannot resolve the CUDA match reliably, so these
 # are an explicit extra. Required to instantiate the Mamba2 backbone (model.py) and
