@@ -1,0 +1,37 @@
+# The first study that can actually close its loop.
+#
+# Deliberately throwaway-cheap: 4 trials of 200 steps on the 5.2M-parameter
+# 4m-golden config. The point is not to learn anything about SKA -- it is to prove
+# ask -> params_to_overrides -> build_cell_run_spec -> materialize -> submit ->
+# quick_eval -> tell actually closes, on real hardware, with a real score rather
+# than a FAIL.
+#
+# Everything here is sized so a wrong answer costs minutes:
+#   base            4m-golden.yaml, 5.2M params, ~2 min for 400 steps
+#   n_trials 4      enough for the sampler to leave its startup phase (4)
+#   max_steps 200   half the golden's budget; a trial is ~1 min
+#   launcher local  one held allocation running trials back-to-back, so the
+#                   study does not pay a queue wait per trial. This is also the
+#                   mode whose pruning was silently dead until LocalLauncher
+#                   learned not to block, so it is the mode worth exercising.
+#   prune_after 60  low enough that pruning can actually fire inside 200 steps.
+#                   Note MedianPruner still needs COMPLETED trials first --
+#                   n_startup_trials = min(6, max(3, 4//3)) = 3 -- so realistically
+#                   only trial 4 is prunable here. That is expected, not a bug.
+#
+# design_file gives it the four example anchors, so enqueue_anchors / is_anchor /
+# the driver's anchor-exemption are exercised too. With 4 anchors and n_trials 4,
+# every trial IS an anchor, which is fine for a wiring test and useless as a
+# search -- a real study wants n_trials well above its anchor count.
+name: smoke-4m
+base: configs/runs/4m-golden.yaml
+n_trials: 4
+max_steps: 200
+prune_after_step: 60
+logging_steps: 10
+launcher: local
+run_root: /scratch/m000151-pm06/jkli/study-smoke
+design_file: configs/search/example_anchors.yaml
+# Held out from training, unlike the default. The shard the 4m golden trains on is
+# fineweb_small_train; scoring on it would measure memorisation as much as skill.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
