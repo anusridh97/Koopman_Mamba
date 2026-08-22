@@ -235,13 +235,23 @@ from `docs/superpowers/specs/2026-08-21-traintask-design.md` §10:
   unchanged and verified **bit-identical to the committed golden** (job 440500,
   max |delta| 0.000000 -- identity, not tolerance). It has a `GradScaler` path,
   which table2 needs and which nothing else exercises.
-- **mqar_finetune and table2 have NOT adopted it yet.** That is what remains of
-  the unification, and it is the part that carries the capability: only
-  `train.py` writes `quick_eval.json`, which
-  `sweep/search/metrics.py::read_quick_eval_objective` reads, so **neither
-  synthetic trainer can be driven by the adaptive search at all** --
-  `run/train_argv.py` refuses `data.kind='synthetic'` for exactly this reason.
-  Only `train.py` has gradient accumulation, too.
+- **DONE: all three trainers now run it.** mqar lost 76 lines of loop, table2 82,
+  each verified bit-identical against its own golden (jobs 440574 / 440608, both
+  0.000000). The duplication the design is about is gone.
+- **The table2 migration failed its golden once, and the failure was real.** Worst
+  |delta| 8e-4 over 26 of 40 steps -- small, bidirectional, non-compounding, which
+  is a REPORTING signature rather than a training one. Cause: the original
+  computes `loss` inside `with autocast:` but the per-task split outside it, and
+  autocast promotes `cross_entropy` to fp32, so moving the split into `step_loss`
+  reported at a precision that trainer never used. Training was never affected.
+  Nothing in the 1379-test CPU suite could see it.
+- **What remains is the capability, not the loop:** only `train.py` writes
+  `quick_eval.json`, which `sweep/search/metrics.py::read_quick_eval_objective`
+  reads, so neither synthetic trainer produces a search objective yet and
+  `run/train_argv.py` still refuses `data.kind='synthetic'`. Wiring `on_final` for
+  them is now a small change, and it is what would let a study rank on **MQAR
+  recall** instead of a short-horizon LM loss that may not distinguish an exact
+  SKA from a broken one.
 - **The loop is now executed by the CPU suite** (`test_training_loop.py`), for
   the first time. It was at 29% line coverage, which is why this work needed four
   GPU goldens to say anything at all.
