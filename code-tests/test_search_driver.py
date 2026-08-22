@@ -62,7 +62,7 @@ class _FakeLauncher:
         self.submitted = []
         self.fail_on = set(fail_on)
 
-    def submit(self, spec, run_dir, dry_run=False, resume=False):
+    def submit(self, spec, run_dir, dry_run=False, resume=False, wait=False):
         self.submitted.append((spec, run_dir))
         if len(self.submitted) in self.fail_on:
             raise RuntimeError("simulated launch failure")

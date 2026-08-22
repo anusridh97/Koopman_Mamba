@@ -195,7 +195,7 @@ class _OomThenSucceedLauncher:
         self.oom_attempts = oom_attempts
         self.marker = marker
 
-    def submit(self, spec, run_dir, dry_run=False, resume=False):
+    def submit(self, spec, run_dir, dry_run=False, resume=False, wait=False):
         self.attempts.append((spec.runtime.per_device_batch_size, run_dir))
         if len(self.attempts) <= self.oom_attempts:
             (run_dir / "slurm-1.out").write_text(f"{self.marker}\n")

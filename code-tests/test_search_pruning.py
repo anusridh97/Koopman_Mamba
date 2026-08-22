@@ -342,7 +342,7 @@ def test_the_driver_records_a_pruned_trial_as_pruned(tmp_path):
     }
 
     class _Launcher:
-        def submit(self, spec, run_dir, dry_run=False, resume=False):
+        def submit(self, spec, run_dir, dry_run=False, resume=False, wait=False):
             return ["ok"]
 
     def _prune(run_dir):
