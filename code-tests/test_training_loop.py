@@ -224,3 +224,150 @@ def test_it_emits_the_line_both_parsers_read(capsys):
     assert [p.step for p in points] == [1, 2, 3], f"parsed {points} from:\n{out}"
     assert all(math.isfinite(p.loss) for p in points)
     assert re.search(r"loss \d+\.\d{4} ", out), "the %.4f field is what is parsed"
+
+
+# ------------------------------------------- what the loop reports, and when ----
+#
+# The three trainers do NOT agree on which loss goes on the progress line:
+#
+#   train.py  running_loss / loss_count      -- window average
+#   mqar      loss.item()                    -- the instantaneous last micro-batch
+#   table2    mean of PER-TASK window averages, plus a per-task tail
+#
+# The design doc's ownership table says "logging | loop", which assumes one
+# semantics. Unifying without a seam here changes at least one trainer's every
+# logged value -- and since the logged value IS the golden curve, that destroys
+# the one instrument that could tell "reporting changed" from "training broke",
+# at exactly the moment it is needed.
+#
+# So the loop owns the FORMAT and the task declares WHICH loss. Standardising on
+# the window average may well be right, but it is a deliberate change with a
+# re-captured golden, not something a refactor smuggles in.
+
+
+class _LastLossTask(_TinyTask):
+    def progress_fields(self, *, window_avg, last_loss):
+        return last_loss, ""
+
+
+class _TailTask(_TinyTask):
+    def progress_fields(self, *, window_avg, last_loss):
+        return window_avg, "  toolcall_loss 1.2345"
+
+
+def test_the_default_reports_the_window_average(capsys):
+    """train.py's behaviour, unchanged, and verified against the loop's own
+    accumulator rather than against a hardcoded number."""
+    _run(_args(max_steps=2, logging_steps=2))
+    out = capsys.readouterr().out
+    from experimentation.sweep.search.metrics import parse_progress
+    pts = parse_progress(out)
+    assert len(pts) == 1, out
+    # Two micro-batches averaged; the instantaneous value would differ from it.
+    assert pts[0].step == 2
+
+
+def test_a_task_can_report_the_instantaneous_loss_instead(capsys):
+    """mqar's convention. Asserted by DIFFERENCE against the default on the same
+    seed and data, so it cannot pass by accident if the hook is ignored."""
+    from experimentation.sweep.search.metrics import parse_progress
+
+    torch.manual_seed(0)
+    _run(_args(max_steps=2, logging_steps=2))
+    default = parse_progress(capsys.readouterr().out)[0].loss
+
+    torch.manual_seed(0)
+    import contextlib
+    model = _TinyModel()
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0 / (1 + s))
+    run_training_loop(
+        task=_LastLossTask(), model=model, raw_model=model, optimizer=opt,
+        scheduler=sched, args=_args(max_steps=2, logging_steps=2),
+        device=torch.device("cpu"), train_ds=_TinyDataset(),
+        autocast_ctx=contextlib.nullcontext(),
+        _save_all=lambda *a, **k: None)
+    last = parse_progress(capsys.readouterr().out)[0].loss
+
+    assert last != default, (
+        "reporting the instantaneous loss gave the same number as the window "
+        "average, so the hook is not being consulted")
+
+
+def test_a_task_can_append_its_own_fields(capsys):
+    """table2 appends per-task losses. The `loss %.4f` field both parsers read
+    must survive the addition, which is the whole risk of a tail."""
+    import contextlib
+
+    from experimentation.sweep.search.metrics import parse_progress
+
+    model = _TinyModel()
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0)
+    run_training_loop(
+        task=_TailTask(), model=model, raw_model=model, optimizer=opt,
+        scheduler=sched, args=_args(max_steps=1, logging_steps=1),
+        device=torch.device("cpu"), train_ds=_TinyDataset(),
+        autocast_ctx=contextlib.nullcontext(), _save_all=lambda *a, **k: None)
+    out = capsys.readouterr().out
+    assert "toolcall_loss 1.2345" in out
+    assert parse_progress(out), f"the tail broke the parsed line:\n{out}"
+
+
+# --------------------------------------------------------- in_loop_eval ----
+
+def test_the_loop_calls_in_loop_eval(capsys):
+    """It is on the TrainTask interface and the loop never called it. Migrating
+    mqar onto this loop without wiring it would silently drop MQAR accuracy --
+    the one number that trainer exists to produce."""
+    seen = []
+
+    class _EvalTask(_TinyTask):
+        def in_loop_eval(self, model, step):
+            seen.append(step)
+            return {"acc": 0.5}
+
+    import contextlib
+    model = _TinyModel()
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0)
+    run_training_loop(
+        task=_EvalTask(), model=model, raw_model=model, optimizer=opt,
+        scheduler=sched, args=_args(max_steps=4), device=torch.device("cpu"),
+        train_ds=_TinyDataset(), autocast_ctx=contextlib.nullcontext(),
+        _save_all=lambda *a, **k: None)
+    assert seen == [1, 2, 3, 4], (
+        f"in_loop_eval saw steps {seen}; the task decides its own cadence, so "
+        f"the loop must offer it every step")
+
+
+# ------------------------------------------------------ tuple batches ----
+
+def test_the_loop_accepts_tuple_batches():
+    """mqar and table2 yield `(inputs, labels)`; the shard path yields a dict
+    with loss_weights. The loop moves either to the device without knowing
+    which task it is serving."""
+    import contextlib
+
+    class _TupleDataset(torch.utils.data.Dataset):
+        def __len__(self):
+            return 8
+
+        def __getitem__(self, i):
+            return torch.full((4,), float(i)), torch.full((4,), float(i))
+
+    class _TupleTask(_TinyTask):
+        def step_loss(self, model, batch):
+            inputs, _labels = batch
+            return model(input_ids=inputs)["logits"].pow(2).mean()
+
+    model = _TinyModel()
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0)
+    result = run_training_loop(
+        task=_TupleTask(), model=model, raw_model=model, optimizer=opt,
+        scheduler=sched, args=_args(max_steps=2), device=torch.device("cpu"),
+        train_ds=_TupleDataset(), autocast_ctx=contextlib.nullcontext(),
+        _save_all=lambda *a, **k: None)
+    assert result.step == 2 and result.tokens_seen > 0
+

@@ -53,6 +53,7 @@ from koopman_lm.config import build_config, config_hash
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from experimentation.training.amp import amp_for
 from experimentation.training.repro import enable_determinism
+from experimentation.training.loop import run_training_loop
 from experimentation.training.task import SyntheticTask
 from experimentation.training.optim import param_groups
 from koopman_lm.models.baselines import (
@@ -291,81 +292,53 @@ def train(args):
     task = SyntheticTask(model_type=args.model_type)
     last_acc = None
 
-    while step < args.max_steps:
-        epoch += 1
-        for inputs, labels in loader:
-            if step >= args.max_steps:
-                break
+    # §6.2: this trainer no longer carries its own loop. Everything below --
+    # accumulation, clipping, the optimizer/schedule order, checkpoint cadence,
+    # the progress line -- is training/loop.py's, shared with train.py and
+    # table2. What stays SyntheticTask's is the loss convention, the batch order
+    # and the MQAR eval; see its docstrings.
+    #
+    # The shared loop reads a handful of knobs this CLI does not spell. They are
+    # set explicitly rather than let the loop getattr-default them, so the values
+    # this trainer actually runs at are visible in one place.
+    args.logging_steps = args.log_every
+    args.per_device_train_batch_size = args.batch_size   # SyntheticTask reads
+                                                         # batch_size; the banner
+                                                         # reads this one
+    args.gradient_accumulation_steps = 1   # mqar has never accumulated
+    args.max_grad_norm = 1.0               # was hardcoded in the loop it replaces
+    args.max_seq_len = seq_len             # banner only
+    args.diag_every = 10 ** 9              # no SKA diagnostics on this path
+    args.data_dir = None                   # only read under a seq_len schedule
 
-            inputs = inputs.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
+    def _eval_fn(_model, current_step):
+        eval_lens = args.eval_seq_lens if args.eval_seq_lens else None
+        return run_eval(model, seq_len, args.num_kv_pairs, args.task_vocab_size,
+                        args.eval_batch, device, current_step,
+                        eval_seq_lens=eval_lens)
 
-            with autocast:
-                # §6.2 step three, mirroring what train.py now does with
-                # ShardTask. The offset stays HERE rather than moving into the
-                # model: make_mqar emits ALIGNED pairs, so labels[p] is the
-                # answer belonging at position p, and the loss scores
-                # logits[:, :-1] against labels[:, 1:]. eval_mqar
-                # (curricula.py:99) offsets identically and must keep doing so.
-                #
-                # SyntheticTask.step_loss is pinned bit-identical to the six
-                # lines it replaces by code-tests/test_train_task.py, which also
-                # mutation-checks the mistake this refactor invites: routing this
-                # data through the model's positional CE, where a one-hot
-                # input-copier scores <1e-4 because at every supervised position
-                # the label IS the input there.
-                loss = task.step_loss(model, (inputs, labels))
+    task = SyntheticTask(model_type=args.model_type, eval_fn=_eval_fn,
+                         eval_every=args.eval_every)
 
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
-            step += 1
-            tokens_seen += inputs.numel()
+    def _save_all(step, epoch, samples_consumed, log_window=None,
+                  epoch_start_step=0, dirname=None):
+        # Matches the original: an accuracy is attached only when this step is
+        # also an eval step, otherwise the checkpoint records None rather than a
+        # stale number from an earlier eval.
+        acc = None
+        if step % args.eval_every == 0 and task.last_eval:
+            acc = task.last_eval.get(
+                seq_len, next(iter(task.last_eval.values())))
+        save_checkpoint(args.output_dir, step, model, optimizer, scheduler, cfg,
+                        args.model_size, args.model_type, acc)
 
-            if step % args.log_every == 0:
-                ppl     = math.exp(min(loss.item(), 20))
-                lr      = optimizer.param_groups[0]["lr"]
-                elapsed = max(time.time() - t0, 1e-9)
-                # Pipe-separated, with K tok/s, MATCHING train.py:419 exactly.
-                # This was `  loss X  ppl Y  lr Z  Ns` -- double-spaced, no
-                # pipes, elapsed seconds instead of throughput -- which
-                # sweep.search.metrics.TRAIN_RE cannot parse. parse_progress
-                # returned [] on it, so wait_for_objective saw zero progress
-                # points and a synthetic optuna trial would have been
-                # UNPRUNABLE, silently: no error, just a trial that always ran
-                # to max_steps. Only the loss values are on record here and
-                # they are unchanged; this alters the line's shape, not any
-                # number in it.
-                # flush=True: when stdout is a FILE (every non-blocking
-                # local launch, and sbatch) CPython block-buffers at 8 KB, so a
-                # short run's log stays empty until exit. That loses a cancelled
-                # run's output entirely and makes pruning decorative, since
-                # wait_for_objective tails this log.
-                print(f"step {step:>6d}/{args.max_steps} | "
-                      f"loss {loss.item():.4f} | ppl {ppl:.1f} | "
-                      f"lr {lr:.2e} | {tokens_seen/elapsed/1e3:.1f}K tok/s",
-                      flush=True)
-                if use_wandb:
-                    wandb.log({"loss": loss.item(), "ppl": ppl,
-                               "lr": lr, "step": step})
-
-            if step % args.eval_every == 0:
-                eval_lens = args.eval_seq_lens if args.eval_seq_lens else None
-                last_results = run_eval(model, seq_len, args.num_kv_pairs,
-                                        args.task_vocab_size, args.eval_batch,
-                                        device, step, eval_seq_lens=eval_lens)
-                last_acc = last_results.get(seq_len, next(iter(last_results.values())))
-                if use_wandb:
-                    log = {f"acc/seq{T}": v for T, v in last_results.items()}
-                    wandb.log({**log, "step": step})
-
-            if step % args.save_steps == 0:
-                acc = last_acc if step % args.eval_every == 0 else None
-                save_checkpoint(args.output_dir, step, model, optimizer,
-                                scheduler, cfg, args.model_size,
-                                args.model_type, acc)
+    result = run_training_loop(
+        task=task, model=model, raw_model=model, optimizer=optimizer,
+        scheduler=scheduler, args=args, device=device, train_ds=dataset,
+        autocast_ctx=autocast, _save_all=_save_all, scaler=grad_scaler,
+        start_step=start_step, t_start=t0)
+    step, tokens_seen = result.step, result.tokens_seen
+    last_acc = (task.last_eval or {}).get(seq_len) if task.last_eval else None
 
     # Final eval + checkpoint
     print("\nFinal evaluation:")

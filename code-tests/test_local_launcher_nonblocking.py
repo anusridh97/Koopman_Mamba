@@ -304,13 +304,31 @@ def test_every_trainer_flushes_its_progress_line():
     """Belt to PYTHONUNBUFFERED's braces. A trainer launched some other way --
     sbatch, by hand, by a future launcher -- still needs its own flush."""
     import ast
-    # training/loop.py rather than train.py: the loop was extracted, so that is
-    # where train.py's progress line lives now. Following the line rather than
-    # the file is the point -- a hardcoded list would have reported the flush as
-    # MISSING when it had merely moved, which reads as a regression.
-    for rel in ("experimentation/training/loop.py",
-                "experimentation/experiments/mqar_finetune.py",
-                "experimentation/experiments/table2.py"):
+    import sys
+
+    sys.path.insert(0, str(REPO / "code-tests"))
+    from test_progress_log_format import (EXEMPT, SEARCH_LAUNCHABLE, SHARED_LOOP,
+                                          _discover_trainers,
+                                          _progress_skeletons)
+
+    # DISCOVERED, not listed. This test has now been edited twice for the same
+    # non-reason: a trainer stopped printing its own line because it moved onto
+    # the shared loop, and a hardcoded roster reported the flush as MISSING when
+    # it had merely relocated -- which reads exactly like a regression. Whoever
+    # prints a progress line today is who must flush it, and the set shrinks by
+    # one on each migration.
+    # Restricted to the lines something PARSES -- the search-launchable trainers
+    # and the shared loop. test_progress_log_format already classifies the two
+    # retrieval entry points as EXEMPT, with the reason: nothing downstream reads
+    # their output, so their lines are for humans and need not carry the
+    # tok/s field this check keys on. Reusing that classification rather than
+    # inventing a second one, because two rosters that must agree eventually
+    # will not.
+    printers = [rel for rel in _discover_trainers()
+                if _progress_skeletons(rel) and rel not in EXEMPT
+                and (rel in SEARCH_LAUNCHABLE or rel == SHARED_LOOP)]
+    assert printers, "discovery found nobody printing a progress line at all"
+    for rel in printers:
         tree = ast.parse((REPO / rel).read_text())
         progress = [n for n in ast.walk(tree)
                     if isinstance(n, ast.Call)

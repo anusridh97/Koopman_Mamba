@@ -37,6 +37,29 @@ from experimentation.training.task import IterContext
 __all__ = ["LoopResult", "run_training_loop"]
 
 
+def _to_device(batch, device):
+    """`(ids, labels, loss_weights, batch_for_the_task)` for either batch shape.
+
+    The shard path yields a dict with `loss_weights`; mqar and table2 yield
+    `(inputs, labels)` tuples. The loop needs `ids` for its own bookkeeping
+    (tokens_seen, samples_consumed, the SKA diagnostics) but must not care which
+    task it is serving, so the shape is normalised here and the task is handed
+    back exactly the shape its `step_loss` expects.
+    """
+    if isinstance(batch, dict):
+        ids = batch["input_ids"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
+        lw = batch.get("loss_weights")
+        if lw is not None:
+            lw = lw.to(device, non_blocking=True)
+        return ids, labels, lw, {"input_ids": ids, "labels": labels,
+                                 "loss_weights": lw}
+    ids, labels = batch
+    ids = ids.to(device, non_blocking=True)
+    labels = labels.to(device, non_blocking=True)
+    return ids, labels, None, (ids, labels)
+
+
 @dataclass
 class LoopResult:
     """What the caller needs after the loop, and nothing more."""
@@ -107,6 +130,7 @@ def run_training_loop(
     # uninterrupted twin and desyncs the resume index arithmetic.
     epoch_start_step = start_epoch_start_step
     sched_values: dict = {}
+    last_loss = None
     effective_seq_len = getattr(train_ds, "max_seq_len", None)
 
     if is_main:
@@ -158,10 +182,7 @@ def run_training_loop(
             is_ddp=is_ddp, local_rank=local_rank))
         for batch in epoch_loader:
             if step >= args.max_steps: break
-            ids = batch["input_ids"].to(device, non_blocking=True)
-            labels = batch["labels"].to(device, non_blocking=True)
-            lw = batch.get("loss_weights")
-            if lw is not None: lw = lw.to(device, non_blocking=True)
+            ids, labels, lw, task_batch = _to_device(batch, device)
             with autocast_ctx:
                 # §6.2 step one: the loss now comes from the TASK rather than
                 # being inlined here. Nothing else changes yet -- ShardTask's
@@ -181,8 +202,7 @@ def run_training_loop(
                 if applier is not None:
                     sched_values = applier.apply(step)
                 # The loop still enters autocast; a task never manages precision.
-                raw_loss = task.step_loss(model, {
-                    "input_ids": ids, "labels": labels, "loss_weights": lw})
+                raw_loss = task.step_loss(model, task_batch)
                 scaled_loss = raw_loss / args.gradient_accumulation_steps
             # fp16 needs the loss scaled before backward, bf16 must not be.
             # `amp_for` returns a scaler iff compute_precision is fp16, so the
@@ -190,6 +210,7 @@ def run_training_loop(
             # that takes it -- and the only one exercising this path at all.
             (scaler.scale(scaled_loss) if scaler is not None else scaled_loss).backward()
             running_loss += raw_loss.detach(); loss_count += 1
+            last_loss = raw_loss.detach()
             tokens_seen += ids.numel(); micro_step += 1
             samples_consumed += ids.size(0)
             if micro_step % args.gradient_accumulation_steps == 0:
@@ -211,7 +232,11 @@ def run_training_loop(
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True); step += 1
                 if is_main and step % args.logging_steps == 0:
-                    avg = running_loss.item() / max(loss_count, 1)
+                    window_avg = running_loss.item() / max(loss_count, 1)
+                    avg, task_tail = task.progress_fields(
+                        window_avg=window_avg,
+                        last_loss=(float(last_loss) if last_loss is not None
+                                   else window_avg))
                     lr = optimizer.param_groups[0]["lr"]; el = time.time() - t_start
                     tps = tokens_seen / el; ppl = math.exp(min(avg, 20))
                     # flush=True is load-bearing, not tidiness. When stdout is
@@ -243,7 +268,7 @@ def run_training_loop(
                         for k, v in sorted(logged.items()))
                     print(f"step {step:>6d}/{args.max_steps} | loss {avg:.4f} | "
                           f"ppl {ppl:.1f} | lr {lr:.2e} | {tps/1e3:.1f}K tok/s"
-                          f"{sched_txt}",
+                          f"{sched_txt}{task_tail}",
                           flush=True)
                     if args.wandb_project:
                         import wandb
@@ -252,6 +277,13 @@ def run_training_loop(
                                    **{f"sched/{k}": v
                                       for k, v in logged.items()}}, step=step)
                     running_loss = torch.tensor(0.0, device=device); loss_count = 0
+
+                # The task owns its own cadence -- only it knows what its eval
+                # costs -- so the loop offers every step and asks nothing about
+                # the result beyond letting the task print it. MQAR accuracy
+                # lives here; without this call, migrating mqar onto the shared
+                # loop would silently drop the one number it exists to produce.
+                task.in_loop_eval(model, step)
 
                 # ---- SKA health diagnostics (separate cheap fwd, amortized) ----
                 if monitor is not None and step % args.diag_every == 0:

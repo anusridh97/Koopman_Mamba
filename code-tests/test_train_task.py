@@ -639,3 +639,73 @@ def test_table2_batches_are_reproducible_from_the_step_alone():
     assert torch.equal(first[0], second[0]) and torch.equal(first[1], second[1]), \
         "step 7's batch depends on history, so a resume cannot reproduce it"
 
+
+# ------------------------------------------- SyntheticTask on the shared loop ----
+
+def test_synthetic_iterates_with_shuffle_not_the_epoch_permutation():
+    """mqar_finetune builds `DataLoader(..., shuffle=True)`, NOT the explicit
+    epoch permutation the shard path uses. Those produce different batch orders,
+    so inheriting the default would move the MQAR golden for a reason that has
+    nothing to do with the refactor.
+
+    Asserted by DIFFERENCE against the default, so it cannot pass by accident.
+    """
+    from experimentation.training.task import IterContext, ShardTask, SyntheticTask
+
+    ds = _CountingDataset(16)
+
+    class _A:
+        batch_size = 2
+        per_device_train_batch_size = 2
+        num_workers = 0
+        seed = 7
+
+    ctx = IterContext(epoch=0, start_step=0, skip_samples=0)
+    torch.manual_seed(0)
+    synth = _order(SyntheticTask().iter_batches(ds, _A(), ctx))
+    shard = _order(ShardTask().iter_batches(ds, _A(), ctx))
+    assert sorted(synth) == sorted(shard), "both must cover the same samples"
+    assert synth != shard, (
+        "SyntheticTask reproduced the shard path's epoch permutation; mqar uses "
+        "DataLoader(shuffle=True) and its golden encodes that order")
+
+
+def test_synthetic_uses_its_own_batch_size_field():
+    """mqar's argparse says `--batch_size`; the shard trainer says
+    `--per_device_train_batch_size`. Reading the wrong one silently changes the
+    effective batch and every number in the curve."""
+    from experimentation.training.task import IterContext, SyntheticTask
+
+    class _A:
+        batch_size = 4
+        per_device_train_batch_size = 999     # must be ignored
+        num_workers = 0
+        seed = 7
+
+    batches = list(SyntheticTask().iter_batches(
+        _CountingDataset(16), _A(), IterContext()))
+    assert batches[0]["input_ids"].shape[0] == 4
+
+
+def test_synthetic_reports_the_instantaneous_loss():
+    """mqar prints `loss.item()`, not a window average. The default would report
+    the average and move every value in the committed golden."""
+    from experimentation.training.task import ShardTask, SyntheticTask
+
+    value, tail = SyntheticTask().progress_fields(window_avg=1.0, last_loss=2.0)
+    assert (value, tail) == (2.0, "")
+    # and the shard path is unchanged
+    assert ShardTask().progress_fields(window_avg=1.0, last_loss=2.0) == (1.0, "")
+
+
+def test_synthetic_remembers_its_last_eval_for_the_checkpoint():
+    """mqar passes the most recent accuracy into save_checkpoint. With the loop
+    owning checkpointing, the task has to carry that value across."""
+    from experimentation.training.task import SyntheticTask
+
+    task = SyntheticTask(eval_fn=lambda m, s: {"acc": 0.25 * s}, eval_every=2)
+    assert task.in_loop_eval(None, 1) is None          # off-cadence
+    assert task.last_eval is None
+    assert task.in_loop_eval(None, 2) == {"acc": 0.5}  # on-cadence
+    assert task.last_eval == {"acc": 0.5}
+

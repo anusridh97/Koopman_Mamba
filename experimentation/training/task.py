@@ -209,8 +209,32 @@ class TrainTask:
             pin_memory=True, drop_last=True, worker_init_fn=seed_worker,
             generator=torch.Generator())
 
+    def progress_fields(self, *, window_avg: float, last_loss: float):
+        """`(loss to report, extra text)` for the progress line.
+
+        The loop owns the FORMAT -- `loss %.4f | ppl | lr | K tok/s` is parsed by
+        both `scripts/compare_golden_curve.py` and the search pruner -- but the
+        three trainers genuinely disagree about WHICH loss belongs in it:
+
+            train.py   running_loss / loss_count      window average
+            mqar       loss.item()                    the instantaneous batch
+            table2     mean of PER-TASK window averages, plus a per-task tail
+
+        Unifying without this seam would change at least one trainer's every
+        logged value. The logged value IS the golden curve, so that destroys the
+        one instrument able to distinguish "reporting changed" from "training
+        broke" at exactly the moment it is needed.
+
+        Standardising on the window average may well be right. It is a deliberate
+        change with a re-captured golden, not something a refactor smuggles in.
+        """
+        return window_avg, ""
+
     def in_loop_eval(self, model, step: int) -> Optional[Mapping[str, Any]]:
-        """Periodic eval during training, or None. MQAR accuracy lives here."""
+        """Periodic eval during training, or None. MQAR accuracy lives here.
+
+        Offered EVERY optimizer step; the task owns its own cadence, because
+        only it knows how expensive its eval is."""
         return None
 
     def on_final(self, model, run_dir, cfg) -> None:
@@ -269,6 +293,10 @@ class SyntheticTask(TrainTask):
         self.model_type = model_type
         self._eval_fn = eval_fn
         self.eval_every = eval_every
+        #: The most recent in-loop eval result. mqar passes its latest accuracy
+        #: into save_checkpoint, and with the loop owning checkpointing the task
+        #: is what carries that value across.
+        self.last_eval = None
 
     def build_model(self, cfg) -> nn.Module:
         from koopman_lm.models.baselines import (
@@ -306,12 +334,41 @@ class SyntheticTask(TrainTask):
         input_ids, labels = _unpack(batch)
         return synthetic_loss(_logits(model(input_ids=input_ids)), labels)
 
+    def iter_batches(self, dataset, args, ctx: "IterContext"):
+        """`DataLoader(..., shuffle=True)`, exactly as mqar_finetune builds it.
+
+        NOT the base class's epoch permutation. That is a different batch order,
+        and this trainer's golden curve encodes the order it has always used --
+        so inheriting the default would move every value in it for a reason
+        having nothing to do with the refactor.
+
+        Also reads `args.batch_size`, not `args.per_device_train_batch_size`:
+        mqar's argparse spells it the first way and the shard trainer the second.
+        Reading the wrong one silently changes the effective batch.
+
+        No `generator=` and no `worker_init_fn`, again matching the original. The
+        shard path needs both for exact mid-epoch resume; this one re-iterates a
+        loader from the top each epoch, so there is no position to preserve.
+        """
+        from torch.utils.data import DataLoader
+
+        return DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
+                          num_workers=args.num_workers, pin_memory=True,
+                          drop_last=True)
+
+    def progress_fields(self, *, window_avg: float, last_loss: float):
+        """mqar prints `loss.item()` -- the instantaneous batch, not a window
+        average. See TrainTask.progress_fields for why this is a seam rather
+        than something the unification standardises away."""
+        return last_loss, ""
+
     def in_loop_eval(self, model, step: int) -> Optional[Mapping[str, Any]]:
         if not self._eval_fn or not self.eval_every:
             return None
         if step % self.eval_every:
             return None
-        return self._eval_fn(model, step)
+        self.last_eval = self._eval_fn(model, step)
+        return self.last_eval
 
 
 class _StepKeyedBatches(torch.utils.data.Dataset):
