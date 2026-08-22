@@ -29,11 +29,18 @@ rank 24 could never reproduce `configs/50m.yaml`'s `ska_norm_clip_c: 4.0`. A
 space that cannot express the config you already run cannot tell you whether you
 improved on it.
 
-**The eta/gamma policy is pinned, not inherited.** Five tier-2 configs get the
-*old* policy (learnable eta and gamma, clamped) by omission, because the
-`KoopmanLMConfig` field defaults still encode it. A search that inherited
-whatever its base config happened to imply would be comparing across two
-parameterisations, so the modern policy is written explicitly into every trial.
+**The eta/gamma policy is inherited, not pinned.** It used to be pinned: eight
+policy fields were written into every trial's overrides, because the
+`KoopmanLMConfig` field defaults still encoded the *superseded* regime
+(learnable eta and gamma, clamped) and five tier-2 configs picked that up by
+omission. A search that inherited whatever its base happened to imply would
+have been comparing across two parameterisations. But the fix for that belongs
+in the defaults, not here -- pinning eight fields inside a parameter-mapping
+function is config composition in the wrong place, and it silently overrode any
+base config that deliberately chose otherwise. `KoopmanLMConfig` now defaults to
+the modern policy and the five legacy configs state the old one explicitly, so
+a trial simply inherits its base config and this module maps only what the
+search actually samples or derives.
 
 **Which route computes SKA, and what it costs.** ``SKAModule`` dispatches on
 three independent booleans in an ``if/elif`` chain -- ``ska_prefix_scan``,
@@ -318,15 +325,6 @@ def params_to_overrides(params: Mapping[str, Any], base_model: KoopmanLMConfig, 
         "model.ska_norm_clip_c": round(
             math.sqrt(rank) * float(params["norm_clip_multiplier"]), 8),
         "model.ska_gamma_value": float(params["gamma_value"]),
-        # Pinned, not inherited -- see the module docstring on the tier-2 configs.
-        "model.ska_layerscale": True,
-        "model.ska_norm_clip": True,
-        "model.ska_eta_learnable": False,
-        "model.ska_eta_value": 1.0,
-        "model.ska_eta_bounds": None,
-        "model.ska_gamma_learnable": False,
-        "model.ska_gamma_clamp": None,
-        "model.ska_gamma_bounds": None,
         # `.get`, not `[...]`: report.py replays trial.params out of a journal,
         # and trials recorded before this became searchable have no such key.
         # They ran at the pinned value 1 -- so the fallback is 1 and NOT

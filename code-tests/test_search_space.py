@@ -182,18 +182,61 @@ def test_optim_parameters_land_in_the_optim_section():
 
 # ------------------------------------------------------ policy and pins ----
 
-def test_the_modern_eta_gamma_policy_is_pinned_regardless_of_the_base_config():
-    """Five tier-2 configs inherit the OLD eta/gamma policy by omission (learnable
-    eta and gamma, clamped). A search that silently inherited that from whichever
-    base it was pointed at would be comparing across two different
-    parameterisations. Pin it explicitly."""
+_POLICY_FIELDS = (
+    "ska_eta_learnable", "ska_eta_value", "ska_eta_bounds",
+    "ska_gamma_learnable", "ska_gamma_clamp", "ska_gamma_bounds",
+    "ska_layerscale", "ska_norm_clip",
+)
+
+
+def test_the_eta_gamma_policy_is_inherited_not_pinned():
+    """These eight fields used to be written into every trial, because the
+    KoopmanLMConfig defaults encoded the SUPERSEDED policy and five tier-2
+    configs picked it up by omission. That fix belongs in the defaults: pinning
+    policy inside a parameter-mapping function is config composition in the
+    wrong place, and it silently overrode a base config that chose otherwise.
+    A trial now inherits its base, so none of them may be emitted here."""
     from experimentation.sweep.search.space import params_to_overrides
 
     overrides = params_to_overrides(_baseline_params(), _base_model(), max_steps=15000)
-    assert overrides["model.ska_eta_learnable"] is False
-    assert overrides["model.ska_gamma_learnable"] is False
-    assert overrides["model.ska_layerscale"] is True
-    assert overrides["model.ska_norm_clip"] is True
+    leaked = [f for f in _POLICY_FIELDS if f"model.{f}" in overrides]
+    assert leaked == [], (
+        f"{leaked} are policy, not sampled parameters: they belong to the base "
+        "config, not to every trial's overrides")
+
+
+def test_the_config_defaults_are_the_modern_policy():
+    """The precondition that makes inheritance safe above. If these defaults
+    ever revert to the old learnable/clamped regime, a search pointed at a
+    config that omits them silently changes parameterisation again."""
+    from koopman_lm.config import KoopmanLMConfig
+
+    cfg = KoopmanLMConfig()
+    assert cfg.ska_eta_learnable is False
+    assert cfg.ska_eta_value == 1.0
+    assert cfg.ska_eta_bounds is None
+    assert cfg.ska_gamma_learnable is False
+    assert cfg.ska_gamma_clamp is None
+    assert cfg.ska_gamma_bounds is None
+    assert cfg.ska_layerscale is True
+    assert cfg.ska_norm_clip is True
+
+
+def test_the_five_legacy_configs_still_state_the_old_policy_explicitly():
+    """1m/370m/180m_dense/180m_gated/180m_v2 predate the fixed-scalar policy and
+    their recorded results depend on the old parameterisation. They must pin it
+    themselves now that the defaults no longer supply it -- 1m especially, whose
+    architecture is frozen by code-tests/golden_table2_curve.json."""
+    from koopman_lm.config import build_config
+
+    for name in ("1m", "370m", "180m_dense", "180m_gated", "180m_v2"):
+        cfg = build_config(name)
+        assert cfg.ska_eta_learnable is True, name
+        assert cfg.ska_eta_value == 1.5, name
+        assert cfg.ska_gamma_learnable is True, name
+        assert cfg.ska_gamma_clamp == (1.0, 1.5), name
+        assert cfg.ska_layerscale is False, name
+        assert cfg.ska_norm_clip is False, name
 
 
 def test_rank_must_be_a_multiple_of_eight():
