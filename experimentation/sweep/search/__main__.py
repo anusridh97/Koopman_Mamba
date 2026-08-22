@@ -240,6 +240,29 @@ def main(argv=None):
     print(f"[search] {len(outcomes)} trial(s): "
           + ", ".join(f"{n} {s}" for s, n in sorted(states.items())))
 
+    # The reason, not just the count. run_trial already records why a trial
+    # failed in trial.user_attrs["failure"], and report.py writes it to
+    # trials.csv as attr_failure -- but the terminal showed only "N failed", so
+    # a systemic wiring fault looked exactly like N unlucky training runs and
+    # you had to open the CSV to tell them apart.
+    #
+    # Grouped, because that is what distinguishes the two: 48 trials failing for
+    # 48 different reasons is a rough study, and 48 failing for ONE reason is a
+    # bug in the harness.
+    # `t.state.name` rather than `optuna.trial.TrialState.FAIL`: this module
+    # never imports optuna, which is what lets --dry_run print a full plan
+    # without it installed (see the gate above). Comparing the enum's name keeps
+    # that property.
+    failures = [t.user_attrs.get("failure") for t in study.trials
+                if getattr(t.state, "name", "") == "FAIL"]
+    if failures:
+        tally = {}
+        for reason in failures:
+            tally[reason or "(no reason recorded)"] = (
+                tally.get(reason or "(no reason recorded)", 0) + 1)
+        for reason, count in sorted(tally.items(), key=lambda kv: -kv[1])[:3]:
+            print(f"[search]   failed {count}x: {reason}")
+
     written = write_report(study, study_dir, base_spec=study_spec.base,
                            base_model=base_model)
     for name, path in sorted(written.items()):
