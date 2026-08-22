@@ -78,7 +78,26 @@ direction: minimize
 design_file: configs/search/example_anchors.yaml
 
 run_root: /scratch/m000151-pm06/jkli/study-4m-adaptive
-storage: /scratch/m000151-pm06/jkli/study-4m-adaptive/optuna_journal.log
+
+# `storage` is deliberately UNSET, and must stay that way unless you have a real
+# RDB. It is passed straight through to optuna as a storage URL -- study.py's
+# make_storage returns an explicit storage_url unchanged -- and optuna 4.9.0
+# rejects a bare filesystem path with "Could not parse SQLAlchemy URL". This
+# file used to set it to
+#     /scratch/m000151-pm06/jkli/study-4m-adaptive/optuna_journal.log
+# which would have crashed every worker at create_study. --dry_run returns
+# before create_study, so the plan printed cleanly and the failure was invisible
+# until GPU time was spent.
+#
+# Unset is also what multi-worker wants. The derived journal is
+#     <run_root>/_studies/<name>.<study_id>/optuna_journal.log
+# and study_id is a content hash of this spec, so every worker launched from
+# this file computes the same path and attaches to the same journal with no
+# coordination. Setting `storage` could only make them disagree.
+#
+# It also fixes the plan output: __main__.py prints the DERIVED path, so with
+# `storage` set the printed journal was not the journal in use -- the same
+# "sent someone to an empty file" bug its own comment there warns about.
 
 # HELD OUT, unlike the default. The default is the base spec's own training
 # shard, which is fine for a proxy but means the score you rank on is training
