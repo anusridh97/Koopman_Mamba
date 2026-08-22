@@ -13,7 +13,13 @@ ska_layer_indices: [8, 16]
 mlp_gated: true
 
 # Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
-# scalar policy and its recorded results depend on the old parameterisation.
+# scalar policy and inherited it by omission until the dataclass defaults were
+# inverted. Pinned to keep that inversion behaviour-preserving -- NOT because
+# results depend on it: no run of this config has ever completed.
+#
+# Keep in step with configs/180m_dense.yaml (its base). test_config.py asserts
+# this variant differs from that one in mlp_gated ALONE, so any policy change
+# here must be made there too or that test fails -- by design.
 ska_eta_learnable: true
 ska_eta_value: 1.5
 ska_gamma_learnable: true

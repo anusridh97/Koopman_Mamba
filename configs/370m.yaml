@@ -8,7 +8,11 @@ ska_layer_indices: [3, 7, 11, 15, 19, 23, 27]
 mlp_gated: false
 
 # Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
-# scalar policy and its recorded results depend on the old parameterisation.
+# scalar policy and inherited it by omission until the dataclass defaults were
+# inverted. Pinned to keep that inversion behaviour-preserving -- NOT because
+# results depend on it: no run record, checkpoint or RunSpec for 370m exists
+# anywhere in the tree or history. So modernising this is a live option, and a
+# cheap one; it just is not a refactor's call to make silently.
 ska_eta_learnable: true
 ska_eta_value: 1.5
 ska_gamma_learnable: true

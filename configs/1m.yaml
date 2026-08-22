@@ -19,7 +19,18 @@ max_seq_len: 4096
 tie_embeddings: true
 
 # Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
-# scalar policy and its recorded results depend on the old parameterisation.
+# scalar policy and its recorded results DO depend on the old parameterisation.
+# Non-negotiable: it is the Echo paper Sec 4.1 config shared by all three
+# Table 2 variants, and it is the ONE config here with real captured runs --
+# golden_table2_curve.json (capture_job 440057) and golden_mqar_curve.json both
+# record model_size "1m". Modernising it turns layerscale on, which changes both
+# the architecture and the param count (737,252 -> 737,504), so those two curves
+# would no longer be reproducible.
+#
+# Note the CPU suite would NOT catch that: test_table2_repro_contract.py's
+# swiglu_total = 933_732 is a hardcoded GPU-confirmed constant feeding a wide
+# [950k, 1050k] band, so it would go silently STALE rather than fail. The
+# goldens are the real gate and they run on GPU.
 ska_eta_learnable: true
 ska_eta_value: 1.5
 ska_gamma_learnable: true

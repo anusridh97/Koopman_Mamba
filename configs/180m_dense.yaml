@@ -26,7 +26,15 @@ ska_layer_indices: [8, 16]
 mlp_gated: false
 
 # Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
-# scalar policy and its recorded results depend on the old parameterisation.
+# scalar policy and inherited it by omission until the dataclass defaults were
+# inverted. Pinned to keep that inversion behaviour-preserving -- NOT because
+# results depend on it: no run of this config has ever completed.
+#
+# It is the v1 arm of the un-run v1-vs-v2 comparison against configs/180m_v2.yaml
+# (which names "180m.yaml" as v1, a stale pointer -- 180m.yaml was overwritten by
+# an unrelated 640x25 design; the 768x24 v1 arm is THIS file). Since neither arm
+# has run, both could move to the modern policy together. They must move
+# TOGETHER or not at all, or the comparison is confounded on this axis.
 ska_eta_learnable: true
 ska_eta_value: 1.5
 ska_gamma_learnable: true

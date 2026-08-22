@@ -193,6 +193,20 @@ Covered: `__init__.py` (the boundary rule) · `run/spec.py` (the four dataclasse
    would silently change all five — measured: `config_hash` moves for exactly
    those five, and `1m`/`370m` parameter counts change.
 
+   > **RESOLVED — and the measurement above was incomplete.** The defaults were
+   > since inverted (they now state the modern policy) and all five tier-2
+   > configs pin the old one explicitly, so nothing depends on a stale default
+   > any more. But "`config_hash` moves for exactly those five" undercounted:
+   > it moves for **nine**. `440m`/`880m`/`1p5b`/`3b` set the eta/gamma policy
+   > explicitly yet never mentioned `ska_norm_clip`, so they inherited the old
+   > L2 default too and flipping it switched the whole scaling ladder to causal
+   > norm-clip. That axis is invisible to a parameter count — norm-clip adds no
+   > parameters — which is exactly why the original check missed it, and why a
+   > resolved-config/`config_hash` diff over all 11 registry configs is the
+   > right instrument rather than `param_count_estimate`. All nine now pin the
+   > field, and `test_config.py` requires every registry config to state its
+   > `ska_norm_clip` choice explicitly rather than inherit one.
+
 7. **The spectral clamp does not strictly guarantee ‖A‖ ≤ 1**, but it does not
    matter. On random Gaussians `spec_w`'s 20 iterations leave the post-clamp norm
    at up to 1.11 (6 iterations: 1.29). On **real** operators captured from a live
