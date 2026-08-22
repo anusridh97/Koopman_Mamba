@@ -15,7 +15,7 @@ run each new thing, and — most importantly — **what is not verified**.
 ## 0. If you only have twenty minutes
 
 ```bash
-cd /users/jkli/Koopman_Mamba/.claude/worktrees/jack+search-and-provenance
+cd <your checkout of jack/search-and-provenance>   # a worktree, or the main repo
 git log --oneline --reverse main..HEAD          # the shape of the work
 git log main..HEAD                              # the reasoning; messages are long on purpose
 /users/jkli/.venvs/koopman-cpu/bin/python -m pytest code-tests/ -q

@@ -41,7 +41,24 @@
 
 set -uo pipefail
 
-export REPO_ROOT=/users/jkli/Koopman_Mamba/.claude/worktrees/gpu-triage
+# NOT hardcoded, so the same script verifies whichever checkout invoked it --
+# the main repo, a worktree, or a subagent's. Hardcoding meant a gate run from a
+# different tree either died on `cd` or, worse, silently built and PASSED the old
+# tree while reporting on changes it never saw.
+#
+# SLURM_SUBMIT_DIR, not BASH_SOURCE: sbatch COPIES the script to a spool dir and
+# runs it there, so ${BASH_SOURCE[0]} is /cm/local/apps/slurm/var/spool/jobNNN/
+# slurm_script and deriving from it yields /cm/local/apps/slurm/var/spool.
+# Measured in job 440764, not assumed. BASH_SOURCE is the fallback for running
+# this file directly; REPO_ROOT=... overrides both.
+export REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
+# Whatever it resolved to must actually BE the repo. Without this a submit from
+# the wrong cwd silently verifies nothing at all.
+if [ ! -d "$REPO_ROOT/experimentation" ] || [ ! -d "$REPO_ROOT/code-tests" ]; then
+    echo "FATAL: REPO_ROOT=$REPO_ROOT is not a Koopman_Mamba checkout."
+    echo "       sbatch from the repo root, or pass REPO_ROOT=/path/to/checkout."
+    exit 1
+fi
 export SCRATCH=/scratch/m000151-pm06/jkli
 export VENV=$SCRATCH/venvs/koopman-cuda
 LOGDIR=$SCRATCH/logs/koopman-tests
