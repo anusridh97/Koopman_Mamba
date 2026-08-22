@@ -491,7 +491,17 @@ class Table2Task(SyntheticTask):
 
         self._step += 1
         curriculum = getattr(self._args, "curriculum", "batch_mixed")
-        with torch.no_grad():
+        # autocast DISABLED, matching where the original computed this: `loss`
+        # is produced inside `with autocast:`, but the per-task split ran after
+        # the optimizer step in a separate torch.no_grad() block OUTSIDE it.
+        #
+        # Not a detail. autocast promotes cross_entropy to fp32, so computing the
+        # split inside it reports at a different precision than this trainer ever
+        # has -- measured in job 440580 as up to 8e-4 across 26 of 40 golden
+        # steps, bidirectional and non-compounding, which is the signature of a
+        # reporting change rather than a training one. The loss that reaches
+        # backward is identical either way; only the reported numbers moved.
+        with torch.no_grad(), torch.autocast(logits.device.type, enabled=False):
             if curriculum in self._TASKS:
                 self._accumulate(curriculum, float(loss))
             elif curriculum == "mixed":

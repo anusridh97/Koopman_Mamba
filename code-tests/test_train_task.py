@@ -810,3 +810,48 @@ def test_the_window_resets_after_each_report():
         "was not reset")
     assert first != second
 
+
+def test_the_per_task_split_is_computed_with_autocast_disabled():
+    """Job 440580 caught this: table2's golden moved by up to 8e-4 at 26 of 40
+    steps, bidirectionally and without compounding -- the signature of a
+    REPORTING change, not a training one.
+
+    Cause: the original computes `loss` inside `with autocast:` but the per-task
+    split AFTER the optimizer step, in a separate torch.no_grad() block outside
+    autocast. Moving the split into step_loss put it inside autocast, which
+    promotes cross_entropy to fp32 -- a different precision than this trainer has
+    ever reported at.
+
+    The loss that reaches backward is unaffected either way. Only the reported
+    numbers moved, which is precisely what a golden is for.
+    """
+    from experimentation.training.task import Table2Task
+
+    seen = {}
+
+    class _Probe(nn.Module):
+        def forward(self, input_ids=None, **kw):
+            seen["autocast_at_forward"] = torch.is_autocast_enabled("cpu")
+            return {"logits": torch.randn(4, 6, 11)}
+
+    task, _ = _t2_task("batch_mixed", batch_size=4)
+
+    real = Table2Task._accumulate
+
+    def _spy(self, name, value):
+        seen.setdefault("autocast_at_accumulate", torch.is_autocast_enabled("cpu"))
+        return real(self, name, value)
+
+    Table2Task._accumulate = _spy
+    try:
+        labels = torch.randint(0, 11, (4, 6))
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            task.step_loss(_Probe(), (torch.zeros_like(labels), labels))
+    finally:
+        Table2Task._accumulate = real
+
+    assert seen["autocast_at_forward"] is True, "the forward must stay in autocast"
+    assert seen["autocast_at_accumulate"] is False, (
+        "the per-task split ran under autocast; the original computes it outside, "
+        "and the precision difference moves every reported value")
+
