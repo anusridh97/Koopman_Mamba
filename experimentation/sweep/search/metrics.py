@@ -5,8 +5,9 @@ deliberately the whole interface -- nothing here holds a subprocess handle or a
 pipe, so the same code works whether the run finished a second ago on this machine
 or four hours ago on a compute node.
 
-`read_quick_eval_objective` is the default `read_objective` for the driver: it
-finds the run's newest quick_eval result and scalarises it. It returns None rather
+`read_quick_eval_objective` scores a FINISHED run: it finds the newest quick_eval
+result and scalarises it. It stays a pure `(run_dir) -> float|None`; wrap it in
+`fixed_reader` to satisfy the driver's factory-shaped `objective_reader_for`. It returns None rather
 than a number when there is nothing to read, because the driver turns None into a
 FAIL and any stand-in value would be a fiction that steers every later proposal.
 
@@ -24,9 +25,11 @@ is that `run/launchers.py`'s sbatch template *already* routes training stdout to
 `run_dir/slurm-%j.out` -- so the same regex works against a durable file,
 readable at any time by a process that has never met the training job.
 
-`wait_for_objective` is deliberately shaped to be the `read_objective` the driver
-already accepts, which is why pruning needed no driver change beyond honouring
-`TrialPruned`. It polls the log, reports each newly-seen step, asks the pruner,
+`wait_for_objective` is deliberately shaped to be the reader the driver's
+`objective_reader_for` returns, which is why pruning needed no driver change
+beyond honouring `TrialPruned`. It needs the trial -- pruning IS `trial.report`
+plus `trial.should_prune` -- which is exactly why that parameter is a factory and
+not a plain reader. It polls the log, reports each newly-seen step, asks the pruner,
 cancels and raises when told to, and otherwise returns the objective once the
 eval result lands.
 
@@ -52,6 +55,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 __all__ = ["OOM_MARKERS", "TRAIN_RE", "Progress", "looks_like_oom",
            "objective_from_metrics",
            "parse_progress", "read_progress", "ema_losses",
+           "fixed_reader",
            "read_quick_eval_metrics", "read_quick_eval_objective",
            "wait_for_objective"]
 
@@ -162,6 +166,24 @@ def read_quick_eval_metrics(run_dir) -> Optional[Dict[str, Any]]:
     # The result envelope nests the numbers under "metrics"; tolerate a bare
     # payload so a hand-written file is still readable.
     return envelope.get("metrics", envelope)
+
+
+def fixed_reader(reader):
+    """Adapt a `(run_dir) -> float|None` reader to the driver's factory shape.
+
+    `run_trial` takes one scoring parameter, `objective_reader_for`, of shape
+    `(study, trial) -> (run_dir) -> float|None`. Pruning needs the trial, so the
+    factory is the general shape; a reader that does not care simply ignores both
+    arguments. This is that adapter, so `read_quick_eval_objective` and friends
+    stay exactly the pure "score a finished run" function they are documented to
+    be, with no second signature to maintain.
+
+    Deliberately NOT the reverse: widening the pure reader to
+    `(run_dir, study, trial)` would force `read_quick_eval_objective` to accept
+    two arguments it ignores and drag optuna into this module's scope, where the
+    import is lazy on purpose (see `wait_for_objective`).
+    """
+    return lambda _study, _trial: reader
 
 
 def read_quick_eval_objective(run_dir, **weights) -> Optional[float]:

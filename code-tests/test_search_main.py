@@ -213,3 +213,57 @@ def test_the_plan_prints_the_journal_filename_the_code_actually_writes(tmp_path)
     assert r.returncode == 0
     assert "optuna_journal.log" in r.stdout, (
         "the plan must name the file make_storage actually creates")
+
+
+# ------------------------------------------------- the entry point's kwargs ----
+
+def test_every_keyword_the_cli_hands_drive_is_one_drive_accepts():
+    """The CLI's `drive(...)` call is not executed by any test.
+
+    `--dry_run` returns before reaching it, and
+    test_a_real_launch_now_proceeds_past_the_gate only asserts the run gets as
+    far as needing optuna. So a keyword renamed in driver.py leaves this call
+    site stale and the whole suite stays green -- which is exactly what happened
+    when `read_objective_factory` was collapsed into `objective_reader_for`: the
+    dry run reported success while a real study would have died at trial 0 on a
+    TypeError.
+
+    Same drift that made 22 tests fail on this branch when `launcher.submit`
+    grew `wait`: a signature moved and its callers did not.
+
+    Read from the SOURCE rather than by importing driver.py, which needs optuna
+    at module scope. The mismatch is a static property, so the guard should hold
+    in the CPU environment too -- and this file's whole point is that the CLI's
+    plan is inspectable without optuna installed.
+    """
+    import ast
+
+    def _signature_names(tree, func):
+        node = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == func)
+        a = node.args
+        names = {p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+        return names, a.kwarg is not None
+
+    driver = ast.parse(
+        (REPO / "experimentation/sweep/search/driver.py").read_text())
+    drive_names, drive_takes_kwargs = _signature_names(driver, "drive")
+    run_trial_names, _ = _signature_names(driver, "run_trial")
+    assert drive_takes_kwargs, (
+        "drive() no longer takes **kwargs; this test's union with run_trial's "
+        "parameters is now the wrong model of how the CLI reaches it")
+    accepted = drive_names | run_trial_names
+
+    src = (REPO / "experimentation/sweep/search/__main__.py").read_text()
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) == "drive"]
+    assert calls, "__main__.py no longer calls drive() -- has the CLI moved?"
+
+    for call in calls:
+        passed = {k.arg for k in call.keywords if k.arg}
+        unknown = sorted(passed - accepted)
+        assert not unknown, (
+            f"__main__.py passes {unknown} to drive(), which accepts "
+            f"{sorted(accepted)}. A real study would fail at trial 0; --dry_run "
+            f"returns before this call and would not notice.")

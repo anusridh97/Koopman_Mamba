@@ -237,6 +237,7 @@ def _context(tmp_path):
 def test_an_oom_descends_one_rung_and_succeeds(tmp_path):
     optuna = pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
@@ -245,7 +246,7 @@ def test_an_oom_descends_one_rung_and_succeeds(tmp_path):
     launcher = _OomThenSucceedLauncher(oom_attempts=1)
 
     outcome = run_trial(study, trial, launcher=launcher,
-                        read_objective=lambda run_dir: 2.0,
+                        objective_reader_for=fixed_reader(lambda run_dir: 2.0),
                         batch_ladder=True, **context)
 
     assert outcome.state == "complete"
@@ -260,13 +261,14 @@ def test_every_rung_shares_one_run_directory(tmp_path):
     than forking a second identity."""
     optuna = pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     trial = study.ask(to_distributions(context["space"]))
     launcher = _OomThenSucceedLauncher(oom_attempts=1)
-    run_trial(study, trial, launcher=launcher, read_objective=lambda run_dir: 2.0,
+    run_trial(study, trial, launcher=launcher, objective_reader_for=fixed_reader(lambda run_dir: 2.0),
               batch_ladder=True, **context)
 
     directories = {run_dir for _, run_dir in launcher.attempts}
@@ -278,6 +280,7 @@ def test_every_rung_shares_one_run_directory(tmp_path):
 def test_a_non_oom_failure_does_not_descend(tmp_path):
     optuna = pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
@@ -286,7 +289,7 @@ def test_a_non_oom_failure_does_not_descend(tmp_path):
     launcher = _OomThenSucceedLauncher(oom_attempts=1, marker="shapes cannot be multiplied")
 
     outcome = run_trial(study, trial, launcher=launcher,
-                        read_objective=lambda run_dir: 2.0,
+                        objective_reader_for=fixed_reader(lambda run_dir: 2.0),
                         batch_ladder=True, **context)
     assert outcome.state == "failed"
     assert len(launcher.attempts) == 1
@@ -295,6 +298,7 @@ def test_a_non_oom_failure_does_not_descend(tmp_path):
 def test_the_ladder_gives_up_after_exhausting_every_rung(tmp_path):
     optuna = pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
@@ -303,7 +307,7 @@ def test_the_ladder_gives_up_after_exhausting_every_rung(tmp_path):
     launcher = _OomThenSucceedLauncher(oom_attempts=99)
 
     outcome = run_trial(study, trial, launcher=launcher,
-                        read_objective=lambda run_dir: 2.0,
+                        objective_reader_for=fixed_reader(lambda run_dir: 2.0),
                         batch_ladder=True, **context)
     assert outcome.state == "failed"
     assert [pdbs for pdbs, _ in launcher.attempts] == [16, 8, 4, 2, 1]
@@ -314,6 +318,7 @@ def test_without_the_ladder_an_oom_fails_immediately(tmp_path):
     than silently spend four more queue slots."""
     optuna = pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
@@ -322,6 +327,6 @@ def test_without_the_ladder_an_oom_fails_immediately(tmp_path):
     launcher = _OomThenSucceedLauncher(oom_attempts=1)
 
     outcome = run_trial(study, trial, launcher=launcher,
-                        read_objective=lambda run_dir: 2.0, **context)
+                        objective_reader_for=fixed_reader(lambda run_dir: 2.0), **context)
     assert outcome.state == "failed"
     assert len(launcher.attempts) == 1

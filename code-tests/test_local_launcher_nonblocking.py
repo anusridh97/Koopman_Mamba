@@ -5,7 +5,8 @@ That works for the Slurm launcher because `submit` returns as soon as `sbatch`
 does, leaving the job running and cancellable by job id.
 
 `LocalLauncher.submit` used `subprocess.run`, which blocks until training
-finishes. The driver's sequence is `submit(...)` then `read_objective(run_dir)`,
+finishes. The driver's sequence is `submit(...)` then the reader from
+`objective_reader_for(study, trial)`,
 so with a blocking submit the reader only started AFTER training ended -- nothing
 to watch, nothing to prune. Every locally-launched trial ran to `max_steps`,
 silently. No error, no warning.

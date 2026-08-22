@@ -37,7 +37,7 @@ rather than on architecture, which is not a claim a paper can make.
 missing metric must never be replaced with a plausible number -- a fabricated
 objective would steer every later proposal.
 
-**Pruning arrives through `read_objective`.** A reader that polls a running job
+**Pruning arrives through `objective_reader_for`.** A reader that polls a running job
 raises `optuna.TrialPruned` when the pruner says stop; this records the trial as
 PRUNED and moves on. Nothing else here changes, which is the payoff of having made
 the reader injectable in the first place -- see
@@ -90,9 +90,8 @@ def run_trial(study: optuna.study.Study, trial, *,
               run_root,
               study_name: str,
               launcher,
-              read_objective: Optional[Callable[[Path], Optional[float]]] = None,
-              read_objective_factory: Optional[
-                  Callable[[Any, Any], Callable[[Path], Optional[float]]]] = None,
+              objective_reader_for: Callable[
+                  [Any, Any], Callable[[Path], Optional[float]]],
               base_lr: float = 4e-4,
               backend_policy: str = "exact_invchol",
               seq_len: Optional[int] = None,
@@ -187,36 +186,34 @@ def run_trial(study: optuna.study.Study, trial, *,
         return TrialOutcome(state="failed", objective=None, **identity)
 
     run_dir = identity["run_dir"]
-    # `read_objective` reads a FINISHED run: (run_dir) -> float|None, pure, and
-    # it is the whole interface for scoring after the fact.
+    # ONE scoring parameter, of the factory shape (study, trial) -> (run_dir) ->
+    # float|None. A pure "score a finished run" reader is expressed by ignoring
+    # both arguments -- `metrics.fixed_reader` is that adapter.
     #
-    # Pruning cannot use that shape. metrics.wait_for_objective needs
-    # (study, trial, run_dir) -- the trial, because pruning IS trial.report()
-    # followed by trial.should_prune(). And `drive` builds one **kwargs dict
-    # before any trial exists, so it could only ever pass a fixed reader. The
-    # result was that pruning was UNREACHABLE through drive() despite this
-    # module's docstring claiming it "arrives through the read_objective seam":
-    # reachable by calling run_trial directly, not by the entry point anyone
-    # would use.
+    # Why the factory is the general shape and not the pure reader: pruning IS
+    # trial.report() followed by trial.should_prune(), so a reader that polls a
+    # running job must see the trial it is scoring. `drive` builds one **kwargs
+    # dict before any trial exists, so a fixed reader could never prune -- which
+    # is exactly the bug this seam was added to close, where pruning was
+    # unreachable through drive() despite the docstring claiming otherwise.
     #
-    # A factory closes it without widening the pure reader's contract. The
-    # rejected alternatives: making read_objective take (run_dir, study, trial)
-    # forces read_quick_eval_objective to accept two arguments it ignores and
-    # drags optuna into metrics.py's module scope, where it is lazy on purpose;
-    # and sniffing with inspect.signature fails silently the moment a signature
-    # drifts, which is the failure mode this file is full of guards against.
-    reader = (read_objective_factory(study, trial)
-              if read_objective_factory is not None else read_objective)
-    if reader is None:
-        raise TypeError(
-            "run_trial needs read_objective or read_objective_factory; got "
-            "neither. A trial with no way to be scored would FAIL after paying "
-            "for its training.")
+    # The rejected alternatives, unchanged: widening the pure reader to
+    # (run_dir, study, trial) forces read_quick_eval_objective to accept two
+    # arguments it ignores and drags optuna into metrics.py's module scope, where
+    # the import is lazy on purpose; and sniffing with inspect.signature fails
+    # silently the moment a signature drifts, which is the failure mode this file
+    # is full of guards against.
+    #
+    # Previously this was TWO optional parameters resolved by a ternary, with a
+    # hand-written TypeError for the neither-given case and a silent tie-break
+    # for both-given. Four states where there is one. A required keyword argument
+    # gets Python's own error for free.
+    reader = objective_reader_for(study, trial)
     try:
         objective = reader(run_dir)
     except optuna.TrialPruned as pruned:
         # metrics.wait_for_objective raises this after cancelling the job. It
-        # arrives through the read_objective seam rather than through a driver
+        # arrives through the objective_reader_for seam rather than a driver
         # flag, which is why pruning needed no structural change here.
         trial.set_user_attr("pruned", str(pruned))
         study.tell(trial, state=optuna.trial.TrialState.PRUNED)

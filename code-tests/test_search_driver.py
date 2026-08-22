@@ -163,6 +163,7 @@ def test_a_throughput_penalty_charges_for_missing_the_target():
 
 def test_run_trial_materializes_a_real_run_directory(tmp_path):
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
@@ -171,7 +172,7 @@ def test_run_trial_materializes_a_real_run_directory(tmp_path):
     launcher = _FakeLauncher()
 
     outcome = run_trial(study, trial, launcher=launcher,
-                        read_objective=lambda run_dir: 2.5, **context)
+                        objective_reader_for=fixed_reader(lambda run_dir: 2.5), **context)
 
     assert outcome.state == "complete"
     assert outcome.objective == pytest.approx(2.5)
@@ -185,13 +186,14 @@ def test_the_run_directory_records_which_study_and_trial_produced_it(tmp_path):
     through materialize_cell's extra=; a study stamps its own identifiers through
     the same door."""
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     trial = study.ask(to_distributions(context["space"]))
     outcome = run_trial(study, trial, launcher=_FakeLauncher(),
-                        read_objective=lambda run_dir: 1.0, **context)
+                        objective_reader_for=fixed_reader(lambda run_dir: 1.0), **context)
 
     spec = yaml.safe_load((outcome.run_dir / "spec.yaml").read_text())
     assert spec["study_name"] == "ska-depth"
@@ -203,13 +205,14 @@ def test_the_run_directory_records_which_study_and_trial_produced_it(tmp_path):
 
 def test_the_trial_result_reaches_the_study(tmp_path):
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     trial = study.ask(to_distributions(context["space"]))
     run_trial(study, trial, launcher=_FakeLauncher(),
-              read_objective=lambda run_dir: 1.75, **context)
+              objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
 
     assert study.best_value == pytest.approx(1.75)
     assert study.trials[0].state.name == "COMPLETE"
@@ -218,6 +221,7 @@ def test_the_trial_result_reaches_the_study(tmp_path):
 def test_run_trial_records_the_run_id_and_the_anchor_name(tmp_path):
     from experimentation.sweep.search.anchors import Design
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import (
         create_study, enqueue_anchors, to_distributions)
 
@@ -227,7 +231,7 @@ def test_run_trial_records_the_run_id_and_the_anchor_name(tmp_path):
                     context["space"], base_lr=4e-4)
     trial = study.ask(to_distributions(context["space"]))
     outcome = run_trial(study, trial, launcher=_FakeLauncher(),
-                        read_objective=lambda run_dir: 1.0, **context)
+                        objective_reader_for=fixed_reader(lambda run_dir: 1.0), **context)
 
     assert outcome.anchor == "baseline"
     assert len(outcome.run_id) == 8
@@ -238,13 +242,14 @@ def test_a_failed_launch_marks_the_trial_failed_without_raising(tmp_path):
     """One bad config must not end the study. A search that dies on its first
     OOM has wasted every trial before it."""
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     trial = study.ask(to_distributions(context["space"]))
     outcome = run_trial(study, trial, launcher=_FakeLauncher(fail_on=(1,)),
-                        read_objective=lambda run_dir: 1.0, **context)
+                        objective_reader_for=fixed_reader(lambda run_dir: 1.0), **context)
 
     assert outcome.state == "failed"
     assert outcome.objective is None
@@ -256,13 +261,14 @@ def test_an_unreadable_objective_marks_the_trial_failed(tmp_path):
     preemption between the save and the eval. Telling optuna a fabricated number
     would poison every later proposal."""
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     trial = study.ask(to_distributions(context["space"]))
     outcome = run_trial(study, trial, launcher=_FakeLauncher(),
-                        read_objective=lambda run_dir: None, **context)
+                        objective_reader_for=fixed_reader(lambda run_dir: None), **context)
 
     assert outcome.state == "failed"
     assert study.trials[0].state.name == "FAIL"
@@ -272,13 +278,14 @@ def test_an_unreadable_objective_marks_the_trial_failed(tmp_path):
 
 def test_drive_runs_the_requested_number_of_trials(tmp_path):
     from experimentation.sweep.search.driver import drive
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     launcher = _FakeLauncher()
     outcomes = drive(study, n_trials=3, launcher=launcher,
-                     read_objective=lambda run_dir: 2.0, **context)
+                     objective_reader_for=fixed_reader(lambda run_dir: 2.0), **context)
 
     assert len(outcomes) == 3
     assert len(launcher.submitted) == 3
@@ -289,17 +296,18 @@ def test_drive_counts_trials_already_completed_when_resuming(tmp_path):
     """n_trials is the study's target size, not "run this many more". Resuming a
     15-trial study that finished 10 should run 5."""
     from experimentation.sweep.search.driver import drive
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     drive(study, n_trials=2, launcher=_FakeLauncher(),
-          read_objective=lambda run_dir: 2.0, **context)
+          objective_reader_for=fixed_reader(lambda run_dir: 2.0), **context)
 
     reopened = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     launcher = _FakeLauncher()
     outcomes = drive(reopened, n_trials=3, launcher=launcher,
-                     read_objective=lambda run_dir: 2.0, **context)
+                     objective_reader_for=fixed_reader(lambda run_dir: 2.0), **context)
     assert len(launcher.submitted) == 1
     assert len(outcomes) == 1
 
@@ -307,6 +315,7 @@ def test_drive_counts_trials_already_completed_when_resuming(tmp_path):
 def test_drive_runs_the_anchors_first(tmp_path):
     from experimentation.sweep.search.anchors import Design
     from experimentation.sweep.search.driver import drive
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, enqueue_anchors
 
     context = _context(tmp_path)
@@ -314,7 +323,7 @@ def test_drive_runs_the_anchors_first(tmp_path):
     enqueue_anchors(study, [Design(name="first"), Design(name="second", rank=8)],
                     context["base_model"], context["space"], base_lr=4e-4)
     outcomes = drive(study, n_trials=3, launcher=_FakeLauncher(),
-                     read_objective=lambda run_dir: 2.0, **context)
+                     objective_reader_for=fixed_reader(lambda run_dir: 2.0), **context)
 
     assert [o.anchor for o in outcomes[:2]] == ["first", "second"]
     assert outcomes[2].anchor is None, "the third is sampled, not curated"
@@ -322,12 +331,13 @@ def test_drive_runs_the_anchors_first(tmp_path):
 
 def test_drive_keeps_going_after_a_failure(tmp_path):
     from experimentation.sweep.search.driver import drive
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study
 
     context = _context(tmp_path)
     study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
     outcomes = drive(study, n_trials=3, launcher=_FakeLauncher(fail_on=(2,)),
-                     read_objective=lambda run_dir: 2.0, **context)
+                     objective_reader_for=fixed_reader(lambda run_dir: 2.0), **context)
 
     assert [o.state for o in outcomes] == ["complete", "failed", "complete"]
     assert study.best_value == pytest.approx(2.0)

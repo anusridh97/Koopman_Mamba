@@ -40,6 +40,7 @@ optuna = pytest.importorskip("optuna")
 from test_search_driver import _FakeLauncher, _context  # noqa: E402
 
 from experimentation.sweep.search.driver import run_trial  # noqa: E402
+from experimentation.sweep.search.metrics import fixed_reader  # noqa: E402
 from experimentation.sweep.search.space import (  # noqa: E402
     params_to_overrides, search_space)
 
@@ -57,7 +58,7 @@ def _drive_one(tmp_path, max_steps):
     trial = study.ask(to_distributions(context["space"]))
     launcher = _FakeLauncher()
     outcome = run_trial(study, trial, launcher=launcher,
-                        read_objective=lambda rd: 1.0, **context)
+                        objective_reader_for=fixed_reader(lambda rd: 1.0), **context)
     assert launcher.submitted, "nothing was submitted"
     return outcome, launcher.submitted[-1][0], trial, context
 

@@ -10,7 +10,8 @@ regex works against a durable file, readable from anywhere, at any time, by a
 process that has never met the training job. No pipe, no parent-child
 relationship, no long-lived owner.
 
-`wait_for_objective` is therefore shaped to be the `read_objective` the driver
+`wait_for_objective` is therefore shaped to be the reader the driver's
+`objective_reader_for` returns,
 already accepts -- the injected seam from the driver commit pays for itself here,
 because pruning needed no driver change at all. It polls the log, reports each
 parsed step to the trial, asks the pruner, cancels and raises `TrialPruned` when
@@ -311,11 +312,13 @@ def test_the_same_step_is_never_reported_twice(tmp_path):
 
 def test_the_driver_records_a_pruned_trial_as_pruned(tmp_path):
     """No driver change was needed for any of this -- pruning arrives through the
-    read_objective seam. This pins that the outcome is reported honestly."""
+    objective_reader_for seam. This pins that the outcome is reported
+    honestly."""
     import dataclasses
 
     from koopman_lm.config import build_config
     from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
     from experimentation.sweep.search.study import create_study, to_distributions
 
     shard = tmp_path / "shard"
@@ -351,7 +354,7 @@ def test_the_driver_records_a_pruned_trial_as_pruned(tmp_path):
     study = create_study(study_name="prune", study_dir=tmp_path, seed=1)
     trial = study.ask(to_distributions(context["space"]))
     outcome = run_trial(study, trial, launcher=_Launcher(),
-                        read_objective=_prune, **context)
+                        objective_reader_for=fixed_reader(_prune), **context)
 
     assert outcome.state == "pruned"
     assert outcome.objective is None

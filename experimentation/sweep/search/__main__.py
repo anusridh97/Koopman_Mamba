@@ -229,7 +229,7 @@ def main(argv=None):
         study, n_trials=n_trials,
         base_sections=base_sections, base_model=base_model, space=space,
         max_steps=study_spec.max_steps, run_root=run_root, study_name=study_spec.name,
-        launcher=launcher, read_objective_factory=objective_reader_for,
+        launcher=launcher, objective_reader_for=objective_reader_for,
         base_lr=base_sections["optim"].get("lr", 4e-4),
         backend_policy=study_spec.backend_policy, seq_len=study_spec.seq_len,
         force=args.force, dirty=dirty, batch_ladder=study_spec.batch_ladder)
