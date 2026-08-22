@@ -71,7 +71,8 @@ from koopman_lm.config import build_config, config_hash
 from experimentation.training.optim import param_groups
 from experimentation.training.repro import enable_determinism
 from experimentation.training.amp import amp_for
-from experimentation.training.task import Table2Task, synthetic_loss
+from experimentation.training.loop import run_training_loop
+from experimentation.training.task import Table2Task
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from koopman_lm.models.baselines import (
     build_mamba_attention,
@@ -285,87 +286,49 @@ def train(args) -> None:
     tokens_seen = 0
     half = args.batch_size // 2
 
-    # Batches come through the task's dataset rather than from a bare
-    # make_train_batch call. Same function underneath, but the STEP-KEYED
-    # indexing is now the thing under test (task.py::_StepKeyedBatches), so the
-    # unified loop inherits a wrapper this trainer's own golden has validated.
-    batches = train_task.dataset(cfg, args)
+    # §6.2: this trainer no longer carries its own loop. accumulation, the
+    # scaler sequence, clipping, checkpoint cadence and the progress line are
+    # training/loop.py's now, shared with train.py and mqar_finetune. What stays
+    # Table2Task's is the step-keyed data, the loss convention, and the per-task
+    # attribution -- which it computes by slicing the training forward's logits,
+    # so it must live where the logits are.
+    #
+    # Knobs the shared loop reads that this CLI does not spell, set explicitly
+    # rather than getattr-defaulted inside the loop.
+    args.logging_steps = args.log_every
+    args.per_device_train_batch_size = args.batch_size   # banner only
+    args.gradient_accumulation_steps = 1   # table2 has never accumulated
+    args.max_grad_norm = 1.0               # was hardcoded in the loop it replaces
+    args.max_seq_len = TRAIN_SEQ_LEN       # banner only
+    args.diag_every = 10 ** 9              # no SKA diagnostics on this path
+    args.data_dir = None                   # only read under a seq_len schedule
+    args.wandb_project = None              # table2 has never logged to wandb
+    # Its checkpoints have always been written on the EVAL cadence, carrying
+    # that eval's results -- not on a separate save_steps.
+    args.save_steps = args.eval_every
 
-    for step in range(start_step + 1, args.max_steps + 1):
-        inputs, labels = batches[step]
-        inputs = inputs.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True)
-        tokens_seen += inputs.numel()
+    def _eval_fn(_model, current_step):
+        return run_table2_eval(model, device, args.eval_batch,
+                               args.task_vocab_size, current_step)
 
-        with autocast:
-            out = model(input_ids=inputs)
-            logits = out["logits"]
-            # ONE definition of this expression, in task.py::synthetic_loss,
-            # shared with mqar_finetune via SyntheticTask. The forward stays
-            # HERE rather than going through Table2Task.step_loss, because the
-            # per-task eval below deliberately reuses these logits instead of
-            # paying for a second pass -- see synthetic_loss's docstring.
-            loss = synthetic_loss(logits, labels)
+    train_task = Table2Task(max_steps=args.max_steps, eval_fn=_eval_fn,
+                            eval_every=args.eval_every)
+    assert train_task.compute_precision == "fp16", (
+        "Table2Task declares the precision this loop has always used; if that "
+        "no longer says fp16 the scaler is the wrong tool")
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
-        scheduler.step()
+    def _save_all(step, epoch, samples_consumed, log_window=None,
+                  epoch_start_step=0, dirname=None):
+        save_checkpoint(args.output_dir, step, model, optimizer, scheduler, cfg,
+                        args.model_type, train_task.last_eval)
 
-        with torch.no_grad():
-            if args.curriculum == "toolcall":
-                loss_sum["toolcall"] += loss.item(); loss_count["toolcall"] += 1
-            elif args.curriculum == "sysprompt":
-                loss_sum["sysprompt"] += loss.item(); loss_count["sysprompt"] += 1
-            elif args.curriculum == "mixed":
-                task = "toolcall" if step % 2 == 0 else "sysprompt"
-                loss_sum[task] += loss.item(); loss_count[task] += 1
-            else:  # batch_mixed: slice the already-computed logits, no extra forward pass
-                tc_loss = synthetic_loss(logits[:half], labels[:half])
-                sp_loss = synthetic_loss(logits[half:], labels[half:])
-                loss_sum["toolcall"] += tc_loss.item(); loss_count["toolcall"] += 1
-                loss_sum["sysprompt"] += sp_loss.item(); loss_count["sysprompt"] += 1
-
-        if step % args.log_every == 0:
-            lr = optimizer.param_groups[0]["lr"]
-            elapsed = time.time() - t0
-            means = [loss_sum[n] / loss_count[n]
-                     for n in ("toolcall", "sysprompt") if loss_count[n] > 0]
-            parts = [f"{n}_loss {loss_sum[n] / loss_count[n]:.4f}"
-                     for n in ("toolcall", "sysprompt") if loss_count[n] > 0]
-            # A canonical `loss` field ADDED, not substituted. The per-task
-            # breakdown above stays because the comment on loss_sum says it
-            # caught two real bugs that a single number would have hidden.
-            #
-            # The canonical prefix exists because sweep/search/metrics.py's
-            # TRAIN_RE requires `step N/M | loss X | ppl Y | lr Z | W K tok/s`,
-            # and this line was `step N/M  <parts>  lr Z  Ns` -- double-spaced, no
-            # pipes, elapsed seconds. parse_progress returned [] on it, so a
-            # table2 trial would be UNPRUNABLE the moment SyntheticDataSpec can
-            # launch, exactly as mqar_finetune.py was. The per-task fields trail
-            # the canonical ones because TRAIN_RE uses .search, so a suffix is
-            # free.
-            combined = sum(means) / len(means) if means else float("nan")
-            ppl = math.exp(min(combined, 20)) if means else float("nan")
-            tail = ("  " + "  ".join(parts)) if parts else ""
-                # flush=True: when stdout is a FILE (every non-blocking
-                # local launch, and sbatch) CPython block-buffers at 8 KB, so a
-                # short run's log stays empty until exit. That loses a cancelled
-                # run's output entirely and makes pruning decorative, since
-                # wait_for_objective tails this log.
-            print(f"step {step:>5d}/{args.max_steps} | loss {combined:.4f} | "
-                  f"ppl {ppl:.1f} | lr {lr:.2e} | "
-                  f"{tokens_seen / max(elapsed, 1e-9) / 1e3:.1f}K tok/s" + tail,
-                  flush=True)
-            loss_sum = {"toolcall": 0.0, "sysprompt": 0.0}
-            loss_count = {"toolcall": 0, "sysprompt": 0}
-
-        if step % args.eval_every == 0 or step == args.max_steps:
-            results = run_table2_eval(model, device, args.eval_batch, args.task_vocab_size, step)
-            save_checkpoint(args.output_dir, step, model, optimizer, scheduler, cfg, args.model_type, results)
+    result = run_training_loop(
+        task=train_task, model=model, raw_model=model, optimizer=optimizer,
+        scheduler=scheduler, args=args, device=device,
+        train_ds=train_task.dataset(cfg, args), autocast_ctx=autocast,
+        _save_all=_save_all, scaler=scaler, start_step=start_step, t_start=t0)
+    step = result.step
+    results = train_task.last_eval
 
     final_dir = Path(args.output_dir) / "final"
     final_dir.mkdir(parents=True, exist_ok=True)

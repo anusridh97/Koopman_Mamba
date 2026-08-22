@@ -709,3 +709,104 @@ def test_synthetic_remembers_its_last_eval_for_the_checkpoint():
     assert task.in_loop_eval(None, 2) == {"acc": 0.5}  # on-cadence
     assert task.last_eval == {"acc": 0.5}
 
+
+# ------------------------------------- Table2Task's per-task accounting ----
+#
+# table2's progress line carries `toolcall_loss X  sysprompt_loss Y` alongside
+# the combined loss, and it computes them by SLICING THE TRAINING FORWARD'S
+# LOGITS -- "no extra forward pass". The shared loop calls step_loss and keeps
+# only the scalar, so the split has to be accounted where the logits exist.
+#
+# That is the task, not the loop: which curriculum ran, and how to attribute a
+# batch to a task, is table2-specific in a way the loop must not learn.
+
+
+def _t2_task(curriculum="batch_mixed", batch_size=8, start_step=0):
+    from experimentation.training.task import IterContext, Table2Task
+
+    args = _Table2Args(curriculum=curriculum, batch_size=batch_size)
+    args.max_steps = 8
+    task = Table2Task(max_steps=8)
+    # iter_batches is what binds args and the starting step, exactly as the loop
+    # calls it.
+    list(task.iter_batches(task.dataset(None, args), args,
+                           IterContext(start_step=start_step)))
+    return task, args
+
+
+def test_batch_mixed_attributes_each_half_to_its_own_task():
+    """Both halves come off ONE forward. Averaged over the window they are what
+    the combined loss is a mean of."""
+    task, _ = _t2_task("batch_mixed", batch_size=4)
+
+    torch.manual_seed(0)
+    logits = torch.randn(4, 6, 11)
+    labels = torch.randint(0, 11, (4, 6))
+    task.step_loss(_FixedLogits(logits), (torch.zeros_like(labels), labels))
+
+    value, tail = task.progress_fields(window_avg=99.0, last_loss=99.0)
+    assert "toolcall_loss" in tail and "sysprompt_loss" in tail, tail
+    assert value != 99.0, "table2 reports its own combined loss, not the window"
+
+    from experimentation.training.task import synthetic_loss
+    tc = float(synthetic_loss(logits[:2], labels[:2]))
+    sp = float(synthetic_loss(logits[2:], labels[2:]))
+    assert value == pytest.approx((tc + sp) / 2, abs=1e-6)
+
+
+@pytest.mark.parametrize("start,first_task", [(0, "sysprompt"), (1, "toolcall")])
+def test_mixed_attributes_by_step_parity(start, first_task):
+    """`--curriculum mixed` alternates whole batches on `step % 2`, so
+    attribution depends on WHICH step this batch is -- which the task must track,
+    because step_loss is not told. Off by one and every batch is credited to the
+    wrong task."""
+    task, _ = _t2_task("mixed", start_step=start)
+
+    torch.manual_seed(0)
+    logits = torch.randn(2, 5, 9)
+    labels = torch.randint(0, 9, (2, 5))
+    task.step_loss(_FixedLogits(logits), (torch.zeros_like(labels), labels))
+
+    _value, tail = task.progress_fields(window_avg=0.0, last_loss=0.0)
+    assert f"{first_task}_loss" in tail, (
+        f"first batch after start_step={start} was credited to the wrong task: "
+        f"{tail!r}")
+    other = "toolcall" if first_task == "sysprompt" else "sysprompt"
+    assert f"{other}_loss" not in tail
+
+
+@pytest.mark.parametrize("curriculum", ["toolcall", "sysprompt"])
+def test_a_single_task_curriculum_reports_only_that_task(curriculum):
+    task, _ = _t2_task(curriculum)
+    torch.manual_seed(0)
+    logits = torch.randn(2, 5, 9)
+    labels = torch.randint(0, 9, (2, 5))
+    task.step_loss(_FixedLogits(logits), (torch.zeros_like(labels), labels))
+
+    value, tail = task.progress_fields(window_avg=0.0, last_loss=0.0)
+    assert f"{curriculum}_loss" in tail
+    from experimentation.training.task import synthetic_loss
+    assert value == pytest.approx(float(synthetic_loss(logits, labels)), abs=1e-6)
+
+
+def test_the_window_resets_after_each_report():
+    """table2 clears loss_sum/loss_count at every log, so each line reports the
+    window since the last one. Without the reset the average drifts toward the
+    run mean and every value after the first is wrong."""
+    task, _ = _t2_task("toolcall")
+    torch.manual_seed(0)
+    big = torch.randn(2, 5, 9) * 10
+    small = torch.randn(2, 5, 9) * 0.01
+    labels = torch.randint(0, 9, (2, 5))
+
+    task.step_loss(_FixedLogits(big), (torch.zeros_like(labels), labels))
+    first, _ = task.progress_fields(window_avg=0.0, last_loss=0.0)
+    task.step_loss(_FixedLogits(small), (torch.zeros_like(labels), labels))
+    second, _ = task.progress_fields(window_avg=0.0, last_loss=0.0)
+
+    from experimentation.training.task import synthetic_loss
+    assert second == pytest.approx(float(synthetic_loss(small, labels)), abs=1e-6), (
+        "the second report still includes the first window, so the accumulator "
+        "was not reset")
+    assert first != second
+

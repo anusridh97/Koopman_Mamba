@@ -439,9 +439,22 @@ class Table2Task(SyntheticTask):
     #: and nothing else exercises the loop's scaler path.
     compute_precision = "fp16"
 
+    #: Names in the order table2 prints them, so the tail's field order is
+    #: stable rather than dict-insertion dependent.
+    _TASKS = ("toolcall", "sysprompt")
+
     def __init__(self, *, max_steps: int = 400, **kwargs):
         super().__init__(**kwargs)
         self._max_steps = max_steps
+        self._args = None
+        # The step this task is ABOUT to run. `--curriculum mixed` alternates on
+        # `step % 2`, so attribution needs the step number -- and step_loss is
+        # not told one. iter_batches seeds it from the loop's IterContext and
+        # step_loss advances it, which is exact because iter_batches yields
+        # exactly one batch per step, in order.
+        self._step = 0
+        self._loss_sum = {n: 0.0 for n in self._TASKS}
+        self._loss_count = {n: 0 for n in self._TASKS}
 
     def dataset(self, cfg, args) -> torch.utils.data.Dataset:
         from experimentation.experiments.table2 import make_train_batch
@@ -459,7 +472,66 @@ class Table2Task(SyntheticTask):
         is also what makes its resume exact with no position to recover.
         """
         last = getattr(args, "max_steps", self._max_steps)
+        self._args = args
+        self._step = int(ctx.start_step)
         return (dataset[step] for step in range(ctx.start_step + 1, last + 1))
+
+    def step_loss(self, model, batch) -> torch.Tensor:
+        """The combined loss, plus this batch's per-task attribution.
+
+        The attribution is computed HERE because it slices the training
+        forward's logits -- table2 has always done it with "no extra forward
+        pass", and the shared loop keeps only the scalar step_loss returns. Which
+        curriculum ran, and how a batch maps to a task, is table2-specific in a
+        way the loop must not learn.
+        """
+        input_ids, labels = _unpack(batch)
+        logits = _logits(model(input_ids=input_ids))
+        loss = synthetic_loss(logits, labels)
+
+        self._step += 1
+        curriculum = getattr(self._args, "curriculum", "batch_mixed")
+        with torch.no_grad():
+            if curriculum in self._TASKS:
+                self._accumulate(curriculum, float(loss))
+            elif curriculum == "mixed":
+                # Mirrors table2: even steps are toolcall, odd are sysprompt.
+                self._accumulate(
+                    "toolcall" if self._step % 2 == 0 else "sysprompt",
+                    float(loss))
+            else:  # batch_mixed: slice the already-computed logits
+                half = int(getattr(self._args, "batch_size", logits.size(0))) // 2
+                self._accumulate("toolcall",
+                                 float(synthetic_loss(logits[:half], labels[:half])))
+                self._accumulate("sysprompt",
+                                 float(synthetic_loss(logits[half:], labels[half:])))
+        return loss
+
+    def _accumulate(self, name: str, value: float) -> None:
+        self._loss_sum[name] += value
+        self._loss_count[name] += 1
+
+    def progress_fields(self, *, window_avg: float, last_loss: float):
+        """table2's own line: a combined loss that is the MEAN OF THE PER-TASK
+        MEANS, not a plain window average, plus the per-task tail.
+
+        Those coincide under `batch_mixed` with equal halves and diverge under
+        every other curriculum, which is why this is the task's arithmetic and
+        not the loop's.
+
+        Resets the window, exactly as the loop it replaces did at every log --
+        without which each line reports the run mean rather than the interval
+        since the last one.
+        """
+        means = [self._loss_sum[n] / self._loss_count[n]
+                 for n in self._TASKS if self._loss_count[n]]
+        parts = [f"{n}_loss {self._loss_sum[n] / self._loss_count[n]:.4f}"
+                 for n in self._TASKS if self._loss_count[n]]
+        combined = sum(means) / len(means) if means else float("nan")
+        tail = ("  " + "  ".join(parts)) if parts else ""
+        self._loss_sum = {n: 0.0 for n in self._TASKS}
+        self._loss_count = {n: 0 for n in self._TASKS}
+        return combined, tail
 
 
 def _unpack(batch):
