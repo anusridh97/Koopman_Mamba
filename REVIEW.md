@@ -231,10 +231,20 @@ bit-identical on GPU. `table2` and `mqar` were re-run at **worst |delta| =
 have a 0.000000 noise floor, so that is exact and not a tolerance). What remains,
 from `docs/superpowers/specs/2026-08-21-traintask-design.md` §10:
 
-- **One loop still does not exist.** All three trainers delegate their loss and
-  now their data iteration (`TrainTask.iter_batches`), but none shares a loop
-  BODY -- accumulation, DDP, checkpointing and logging still live only in
-  `train.py`. The duplication the design is about is still there.
+- **The loop body is now `training/loop.py`**, extracted from `train.py`
+  unchanged and verified **bit-identical to the committed golden** (job 440500,
+  max |delta| 0.000000 -- identity, not tolerance). It has a `GradScaler` path,
+  which table2 needs and which nothing else exercises.
+- **mqar_finetune and table2 have NOT adopted it yet.** That is what remains of
+  the unification, and it is the part that carries the capability: only
+  `train.py` writes `quick_eval.json`, which
+  `sweep/search/metrics.py::read_quick_eval_objective` reads, so **neither
+  synthetic trainer can be driven by the adaptive search at all** --
+  `run/train_argv.py` refuses `data.kind='synthetic'` for exactly this reason.
+  Only `train.py` has gradient accumulation, too.
+- **The loop is now executed by the CPU suite** (`test_training_loop.py`), for
+  the first time. It was at 29% line coverage, which is why this work needed four
+  GPU goldens to say anything at all.
 - **A decision the doc did not make, now made.** Its ownership table puts
   `dataset` on the task and `resume` on the loop; §3 says the two are entangled,
   and they are. train.py and mqar iterate an epoch permutation and resume by
@@ -293,8 +303,22 @@ the reporting was not. Fixed in `train.py::_save_all`.
   `run/data_verify.py:53` still refuse `kind: synthetic` by name, so MQAR is not
   yet an ordinary run with a run directory and a result envelope.
 
+**§6 schedules and §7 per-group optimizer settings are back and WIRED.** The
+stranded PR B work (`7bec8ad`, 1997 lines) reached this tree as a `git stash pop`
+of a half-resolved cherry-pick and had to be re-applied from the commit itself at
+post-split paths. Verified: `4m-golden.yaml` still hashes to `run_id 2e63f16e` /
+`group_id d812e412`, because an absent `schedules`/`optim.groups` is omitted from
+the hashed payload -- so no existing run is renumbered.
+
+It arrived INERT (read and validated, never applied) with 93 tests passing, the
+third instance of that shape on this branch after `ska_backend` and the dead
+`chunk_strategy` fields. `code-tests/test_extensions_are_wired.py` now makes
+inertness a test failure.
+
 **Never exercised:** multi-GPU / DDP. Which SKA backend a run actually selected
-(nothing asserts it). `ska_precision='fp64'` on GPU.
+(nothing asserts it). `ska_precision='fp64'` on GPU. A schedule actually
+annealing anything end-to-end on GPU -- the mechanism is wired and unit-tested,
+but no golden covers a run WITH a schedule active.
 
 **An optuna study CAN now drive real training** -- jobs 440183 (wiring) and
 440184 (pruning) both pass on the `exact_invchol` default: 4 trials COMPLETE with
