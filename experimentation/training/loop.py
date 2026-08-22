@@ -76,6 +76,7 @@ def run_training_loop(
     t_start: Optional[float] = None,
     applier: Any = None,
     start_epoch_start_step: int = 0,
+    scaler: Any = None,
 ) -> LoopResult:
     """Run to `args.max_steps`, or until preempted.
 
@@ -183,13 +184,31 @@ def run_training_loop(
                 raw_loss = task.step_loss(model, {
                     "input_ids": ids, "labels": labels, "loss_weights": lw})
                 scaled_loss = raw_loss / args.gradient_accumulation_steps
-            scaled_loss.backward()
+            # fp16 needs the loss scaled before backward, bf16 must not be.
+            # `amp_for` returns a scaler iff compute_precision is fp16, so the
+            # branch is derived, never configured. table2 is the only trainer
+            # that takes it -- and the only one exercising this path at all.
+            (scaler.scale(scaled_loss) if scaler is not None else scaled_loss).backward()
             running_loss += raw_loss.detach(); loss_count += 1
             tokens_seen += ids.numel(); micro_step += 1
             samples_consumed += ids.size(0)
             if micro_step % args.gradient_accumulation_steps == 0:
+                # unscale_ BEFORE the clip, or the gradients are clipped while
+                # still scaled and the effective threshold silently becomes
+                # max_grad_norm * scale. It also may be called at most once per
+                # optimizer per step, which is why it lives in this branch rather
+                # than beside every backward.
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                optimizer.step(); scheduler.step()
+                if scaler is not None:
+                    # scaler.step may SKIP the update when it finds infs; the
+                    # schedule advances regardless, matching what table2 has
+                    # always done.
+                    scaler.step(optimizer); scaler.update()
+                else:
+                    optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad(set_to_none=True); step += 1
                 if is_main and step % args.logging_steps == 0:
                     avg = running_loss.item() / max(loss_count, 1)
