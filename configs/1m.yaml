@@ -17,3 +17,12 @@ ska_layer_indices: [2, 3]
 mlp_gated: false
 max_seq_len: 4096
 tie_embeddings: true
+
+# Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
+# scalar policy and its recorded results depend on the old parameterisation.
+ska_eta_learnable: true
+ska_eta_value: 1.5
+ska_gamma_learnable: true
+ska_gamma_clamp: [1.0, 1.5]
+ska_layerscale: false
+ska_norm_clip: false

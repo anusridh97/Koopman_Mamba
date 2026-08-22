@@ -11,3 +11,12 @@ ska_rank: 48
 # commit, which pulled from a stale pre-merge snapshot. Fixed again here.
 ska_layer_indices: [8, 16]
 mlp_gated: true
+
+# Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
+# scalar policy and its recorded results depend on the old parameterisation.
+ska_eta_learnable: true
+ska_eta_value: 1.5
+ska_gamma_learnable: true
+ska_gamma_clamp: [1.0, 1.5]
+ska_layerscale: false
+ska_norm_clip: false

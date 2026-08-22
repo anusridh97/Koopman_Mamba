@@ -24,3 +24,12 @@ ska_rank: 48
 ska_power_K: 2               # paper K=2; pinned (was implicit dataclass default)
 ska_layer_indices: [8, 16]
 mlp_gated: false
+
+# Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
+# scalar policy and its recorded results depend on the old parameterisation.
+ska_eta_learnable: true
+ska_eta_value: 1.5
+ska_gamma_learnable: true
+ska_gamma_clamp: [1.0, 1.5]
+ska_layerscale: false
+ska_norm_clip: false
