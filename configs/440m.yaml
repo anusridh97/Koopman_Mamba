@@ -18,3 +18,10 @@ ska_chunk_size: 96
 ska_power_K: 2               # paper K=2; pinned (was implicit dataclass default)
 ska_layer_indices: [3, 7, 12, 16, 20, 25, 29, 33]
 mlp_gated: false
+
+# This config chose the fixed-scalar eta/gamma policy explicitly (above) but
+# never opted into causal norm-CLIP, so it inherited the old L2 default. Pinned
+# explicitly now that the default is clip: flipping it is a forward-pass change
+# that adds no parameters, so param counts cannot detect it. Whether the
+# scaling ladder should modernise to clip is a science call, not a refactor.
+ska_norm_clip: false

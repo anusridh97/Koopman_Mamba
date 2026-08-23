@@ -46,6 +46,27 @@ def test_all_registry_entries_build_frozen_configs():
         assert cfg.ska_gamma_clamp is None or isinstance(cfg.ska_gamma_clamp, tuple), name
 
 
+def test_every_registry_config_states_its_norm_clip_choice_explicitly():
+    """ska_norm_clip selects causal norm-CLIP over legacy per-token L2. It is a
+    forward-pass change that adds ZERO parameters, so param_count_estimate
+    cannot detect a config drifting across it -- and when the default flipped to
+    True, 440m/880m/1p5b/3b would each have silently switched, because they set
+    the rest of the eta/gamma policy explicitly but had never mentioned this
+    field. Only a resolved-config comparison caught it. Require every config to
+    say which side it is on rather than inherit one.
+    """
+    import yaml
+    from pathlib import Path
+    from koopman_lm.config import CONFIG_REGISTRY
+
+    root = Path(__file__).resolve().parent.parent / "configs"
+    missing = [n for n, f in CONFIG_REGISTRY.items()
+               if "ska_norm_clip" not in (yaml.safe_load((root / f).read_text()) or {})]
+    assert missing == [], (
+        f"{missing} do not set ska_norm_clip and would follow the dataclass "
+        "default; a flip there changes their forward pass invisibly to param counts")
+
+
 def test_required_phase0_scales_exist():
     for size in ["50m", "180m", "440m", "880m", "1p5b", "3b"]:
         assert size in CONFIG_REGISTRY

@@ -39,27 +39,43 @@ class KoopmanLMConfig:
     ska_n_heads: int = 12
     ska_rank: int = 48          # multiple of 16
     ska_ridge: float = 1e-3
-    ska_scale: float = 1.5      # legacy eta-init; IGNORED when ska_eta_learnable=False
+    # DEAD FIELD. Kept only so config_hash stays stable for the 11 registry
+    # configs (see identity_baseline.json). It was the legacy eta-init, and it
+    # is now unreachable twice over: no YAML in configs/ sets it, and its only
+    # reader -- ska_block.py's `scale=cfg.ska_scale` -> SKAModule(scale=...) --
+    # threads it into a parameter that SKAModule's body never touches (eta is
+    # built from eta_value). Do not use it; do not delete it without a
+    # deliberate identity-baseline regeneration.
+    ska_scale: float = 1.5
     ska_power_K: int = 2
     ska_chunk_size: int = 64    # multiple of 8
     ska_backend: str = 'auto'
 
     # --- SKA scale-parameter policy ---
-    ska_eta_learnable: bool = True
-    ska_eta_value: float = 1.5
+    #
+    # These defaults ARE the modern policy: fixed-scalar eta/gamma, no clamp.
+    # They used to encode the superseded regime (learnable eta init 1.5,
+    # learnable gamma clamped to [1.0, 1.5]), which every production YAML then
+    # overrode in full -- so "fall back to the defaults" was a trap rather than
+    # a sane baseline, and the sweep search compensated by re-pinning all eight
+    # fields into every trial. The five configs that predate this policy now
+    # state the old values explicitly (1m, 370m, 180m_dense, 180m_gated,
+    # 180m_v2), so inheriting by omission is finally safe.
+    ska_eta_learnable: bool = False
+    ska_eta_value: float = 1.0
     # Smooth sigmoid-squash bounds (echo_jax.py parity), distinct from the
     # hard torch.clamp ska_gamma_clamp below: squash keeps a nonzero gradient
     # at the boundary, clamp kills it. None preserves prior (clamp/fixed)
     # behavior; set both to reproduce the original paper-faithful regime
     # (eta in [1.4, 1.7] init 1.5, gamma in [0.5, 1.5] init 0.7).
     ska_eta_bounds: Optional[tuple] = field(default=None, metadata={"coerce": tuple})
-    ska_gamma_learnable: bool = True
-    ska_gamma_clamp: Optional[tuple] = field(default=(1.0, 1.5), metadata={"coerce": tuple})
+    ska_gamma_learnable: bool = False
+    ska_gamma_clamp: Optional[tuple] = field(default=None, metadata={"coerce": tuple})
     ska_gamma_bounds: Optional[tuple] = field(default=None, metadata={"coerce": tuple})
     ska_gamma_value: float = 1.0
 
-    # Residual injection
-    ska_layerscale: bool = False
+    # Residual injection. On by default (part of the modern policy above).
+    ska_layerscale: bool = True
     ska_layerscale_init: float = 1e-4
     ska_out_proj_std: float = 0.02
 
@@ -96,8 +112,10 @@ class KoopmanLMConfig:
     #   low-norm distractors to unit norm (Appendix E Remark 5 warns L2 does).
     #   Behavior change (not exact) -> its own before/after eval; MUST precede
     #   the Gate-2 gate arms (the gate reads the post-normalization query, so a
-    #   gate trained under L2 does not transfer to clip). Default off.
-    ska_norm_clip: bool = False
+    #   gate trained under L2 does not transfer to clip). Default ON, matching
+    #   what every production YAML already sets; the five configs that predate
+    #   the policy pin `ska_norm_clip: false` explicitly.
+    ska_norm_clip: bool = True
     ska_norm_clip_c: Optional[float] = None   # threshold c; None -> sqrt(rank)
 
     # SKA adaptive chunking

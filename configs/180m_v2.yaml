@@ -35,3 +35,18 @@ mlp_decay_depth_grade: true
 #     would add ~100M). Use 'ortho' for a fixed, zero-parameter mixer instead.
 mlp_pair_mixer: learned
 mlp_mixer_block: 64
+
+# Legacy eta/gamma policy, pinned explicitly: this config predates the fixed-
+# scalar policy and inherited it by omission until the dataclass defaults were
+# inverted. Pinned to keep that inversion behaviour-preserving -- NOT because
+# results depend on it: no run of this config has ever completed.
+#
+# This is the v2 arm; configs/180m_dense.yaml is the v1 arm (see its note).
+# Neither has run, so both could modernise together -- but they must move
+# TOGETHER or not at all, or the v1-vs-v2 comparison gains a second axis.
+ska_eta_learnable: true
+ska_eta_value: 1.5
+ska_gamma_learnable: true
+ska_gamma_clamp: [1.0, 1.5]
+ska_layerscale: false
+ska_norm_clip: false
