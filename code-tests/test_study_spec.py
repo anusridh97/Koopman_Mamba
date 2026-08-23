@@ -92,6 +92,34 @@ def test_an_unknown_key_is_an_error_not_a_shrug(tmp_path):
         load_study_spec(path)
 
 
+def test_the_old_n_jobs_key_names_its_replacement(tmp_path):
+    """`n_jobs` became `workers`, and the two are not synonyms: n_jobs only
+    flipped constant_liar, workers launches the fleet.
+
+    Falling through to the generic "unknown key" error would read like a typo
+    and invite DELETING the line -- which silently drops the parallelism a study
+    asked for -- rather than renaming it.
+    """
+    path = _write(tmp_path, n_jobs=8)
+    with pytest.raises(ValueError, match="renamed to `workers`"):
+        load_study_spec(path)
+
+
+def test_workers_must_be_at_least_one(tmp_path):
+    with pytest.raises(ValueError, match="workers must be >= 1"):
+        load_study_spec(_write(tmp_path, workers=0))
+
+
+def test_workers_is_part_of_study_identity(tmp_path):
+    """study_id hashes the whole spec, so a fleet size change makes a NEW study
+    with its own journal. That is the property that stops two operators running
+    different worker counts from silently sharing one journal."""
+    from experimentation.sweep.search.studyspec import study_id
+    one = study_id(load_study_spec(_write(tmp_path, workers=1)))
+    eight = study_id(load_study_spec(_write(tmp_path, workers=8)))
+    assert one != eight
+
+
 def test_it_is_frozen(tmp_path):
     study_spec = load_study_spec(_write(tmp_path))
     with pytest.raises(Exception):

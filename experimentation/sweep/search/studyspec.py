@@ -60,6 +60,20 @@ _DIRECTIONS = ("minimize", "maximize")
 
 _LAUNCHERS = ("slurm", "local")
 
+#: Keys that existed and no longer do. Named explicitly so a study written
+#: against the old spelling fails with the reason rather than with "unknown
+#: key", which reads like a typo and invites deleting the line instead of
+#: renaming it.
+_RENAMED = {"n_jobs": "workers"}
+_RENAME_REASONS = {
+    "n_jobs": (
+        "`n_jobs` only flipped the sampler's constant_liar and launched nothing, "
+        "so a study could declare n_jobs: 1 while 8 workers ran against it -- all "
+        "8 proposing from the same history. `workers` is the fleet size: it spawns "
+        "the processes AND sets constant_liar, so the two cannot disagree. Rename "
+        "the key and set it to the number of concurrent trials you want."),
+}
+
 
 @dataclass(frozen=True)
 class StudySpec:
@@ -85,9 +99,21 @@ class StudySpec:
     #: are collaborating.
     storage: Optional[str] = None
     seed: int = 2026
-    #: A hint that a fleet exists, not a fleet. It only flips the sampler's
-    #: constant_liar on; launching N workers is the operator's job.
-    n_jobs: int = 1
+    #: How many trials run CONCURRENTLY -- and, unlike the `n_jobs` this
+    #: replaces, an actual fleet rather than a hint. `__main__` spawns this many
+    #: worker processes and the sampler's `constant_liar` follows from it, so the
+    #: two can no longer disagree. Deliberately NOT named `n_jobs`: `study.py`
+    #: rejects optuna's `optimize(n_jobs=N)` thread pool outright, so borrowing
+    #: optuna's name for our processes invited exactly the confusion that this
+    #: field being a hint already caused.
+    #:
+    #: Independent of the GPU count on purpose. At the 4m geometry a trial runs
+    #: at roughly 1% of an H100 (128 GFLOP per micro-step against a measured
+    #: 0.0224 s), so more workers than GPUs is a reasonable setting rather than
+    #: oversubscription; placement is derived, never declared. Workers are
+    #: long-lived and pull the next trial as soon as one ends, so the trial queue
+    #: -- not the GPU assignment -- is what balances the load.
+    workers: int = 1
     prune_after_step: int = 200
     logging_steps: int = 10
     #: Optional anchor designs to enqueue before adaptive sampling starts.
@@ -134,8 +160,8 @@ class StudySpec:
         if self.launcher not in _LAUNCHERS:
             raise ValueError(
                 f"launcher={self.launcher!r}; expected one of {list(_LAUNCHERS)}")
-        if self.n_jobs < 1:
-            raise ValueError(f"n_jobs must be >= 1, got {self.n_jobs}")
+        if self.workers < 1:
+            raise ValueError(f"workers must be >= 1, got {self.workers}")
         if self.prune_after_step < 0:
             raise ValueError("prune_after_step must be >= 0")
         if self.logging_steps < 1:
@@ -164,6 +190,10 @@ def load_study_spec(path) -> StudySpec:
     """
     raw = yaml.safe_load(Path(path).read_text()) or {}
     known = {f for f in StudySpec.__dataclass_fields__}
+    for old, new in _RENAMED.items():
+        if old in raw:
+            raise ValueError(
+                f"{path}: `{old}` was renamed to `{new}`. {_RENAME_REASONS[old]}")
     unknown = sorted(set(raw) - known)
     if unknown:
         raise ValueError(

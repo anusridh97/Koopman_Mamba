@@ -87,7 +87,10 @@ def test_dry_run_prints_a_complete_plan(tmp_path):
 
 def test_dry_run_materializes_nothing(tmp_path):
     run_root = tmp_path / "runs"
-    r = _run(_spec(tmp_path), "--dry_run", "--run_root", run_root)
+    # run_root comes from the spec: it is no longer overridable on the command
+    # line, because a flag that redirects the journal without changing study_id
+    # lets two workers believe they are collaborating when they are not.
+    r = _run(_spec(tmp_path, run_root=str(run_root)), "--dry_run")
     assert r.returncode == 0
     assert not run_root.exists(), "a dry run created a run root"
 
@@ -139,7 +142,7 @@ def test_a_real_launch_now_proceeds_past_the_gate(tmp_path):
     """The end of the search's one hard blocker. It no longer exits 2; it gets
     as far as needing optuna, which is a dependency problem rather than a
     design one."""
-    r = _run(_spec(tmp_path), "--run_root", tmp_path / "runs", "--allow-dirty")
+    r = _run(_spec(tmp_path, run_root=str(tmp_path / "runs")), "--allow-dirty")
     assert r.returncode != 2, (
         f"still refusing at the objective gate:\n{r.stdout}")
     assert "REFUSING TO LAUNCH" not in r.stdout
@@ -168,16 +171,65 @@ def test_no_design_file_says_the_first_trials_are_unprunable(tmp_path):
     assert "unprunable" in r.stdout
 
 
-def test_n_jobs_says_it_spawns_nothing(tmp_path):
-    """The single most misreadable knob in the package -- n_jobs only flips
-    constant_liar; the fleet is the operator's job."""
-    r = _run(_spec(tmp_path, n_jobs=4), "--dry_run")
-    assert "spawns" in r.stdout and "4x" in r.stdout
+def test_the_plan_reports_the_fleet_and_its_placement(tmp_path):
+    """`workers` replaced `n_jobs`, and the difference is that it launches.
+
+    The old test here pinned the OPPOSITE property -- that the knob "spawns
+    nothing" -- which was correct then and is the bug now: a study could declare
+    n_jobs: 1 while eight hand-started workers proposed from one history.
+    """
+    r = _run(_spec(tmp_path, workers=4), "--dry_run")
+    assert "workers" in r.stdout and "4 concurrent" in r.stdout
+    assert "constant_liar ON" in r.stdout
+    assert "placement" in r.stdout
 
 
-def test_cli_overrides_beat_the_spec(tmp_path):
-    r = _run(_spec(tmp_path, n_trials=4), "--dry_run", "--n_trials", "9")
-    assert "9 trials" in r.stdout
+def test_a_single_worker_study_says_nothing_about_a_fleet(tmp_path):
+    """Guard the guard: the fleet lines must be CONDITIONAL, or the assertions
+    above would pass for any spec at all."""
+    r = _run(_spec(tmp_path, workers=1), "--dry_run")
+    assert "concurrent" not in r.stdout
+    assert "placement" not in r.stdout
+
+
+def test_a_fleet_too_wide_for_its_budget_is_warned_about(tmp_path):
+    """8 workers on a 4-trial study is half a wave: nearly every trial is
+    proposed before any finishes, so TPE has nothing to learn from and the study
+    is random search wearing a sampler. Said before the GPU time is spent."""
+    r = _run(_spec(tmp_path, workers=8, n_trials=4), "--dry_run")
+    assert "WARNING" in r.stdout
+    assert "sequential wave" in r.stdout
+
+
+def test_a_well_sized_fleet_is_not_warned_about(tmp_path):
+    """Guard the guard, and a real defect this caught: the first version compared
+    workers against the pruner's n_startup_trials, which CAPS at 6 -- so every
+    fleet of 6+ warned no matter how large the study, including the 150-trial
+    config this feature exists for. A warning that always fires is noise."""
+    r = _run(_spec(tmp_path, workers=8, n_trials=150), "--dry_run")
+    assert "WARNING" not in r.stdout, r.stdout
+    # ...but the unprunable first wave is still stated, because that is always true.
+    assert "cannot be pruned" in r.stdout
+
+
+def test_the_removed_overrides_are_really_gone(tmp_path):
+    """Each of these resolved BEFORE study_id was computed but was not part of
+    it, so the flag changed the study while leaving its identity alone -- two
+    workers, one flagged, sharing a journal and disagreeing. argparse must now
+    reject them rather than the spec silently losing."""
+    for flag, value in (("--n_trials", "9"), ("--launcher", "slurm"),
+                        ("--run_root", "/tmp/whatever")):
+        r = _run(_spec(tmp_path), "--dry_run", flag, value)
+        assert r.returncode != 0, f"{flag} was still accepted"
+        assert "unrecognized arguments" in r.stderr, (
+            f"{flag} failed for the wrong reason:\n{r.stderr}")
+
+
+def test_the_spec_is_what_sets_the_budget(tmp_path):
+    """The positive half of the above: with no flag able to override it, the
+    number in the file is the number in the plan."""
+    r = _run(_spec(tmp_path, n_trials=7), "--dry_run")
+    assert "7 trials" in r.stdout
 
 
 def test_a_bad_spec_fails_before_anything_is_touched(tmp_path):

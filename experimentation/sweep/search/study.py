@@ -12,6 +12,8 @@ Three construction choices, each with a reason.
 be resumed, and several processes can attach to the same study concurrently. That
 last property is the reason to prefer N single-GPU processes over
 `study.optimize(n_jobs=N)`'s thread pool, which modern optuna deprecates.
+The spec field that sizes our fleet is `workers`, deliberately not named
+`n_jobs`, so the two ideas cannot be confused.
 
 **`constant_liar` when running in parallel.** With N workers in flight and none
 finished, every worker proposes from the same history and they converge on nearly
@@ -103,9 +105,16 @@ def to_distributions(space: Mapping[str, Mapping[str, Any]]
     return {name: to_distribution(decl) for name, decl in space.items()}
 
 
-def make_sampler(*, seed: int, n_jobs: int = 1) -> optuna.samplers.BaseSampler:
-    """A seeded TPE sampler, made parallel-safe when more than one worker runs."""
-    if n_jobs <= 1:
+def make_sampler(*, seed: int, workers: int = 1) -> optuna.samplers.BaseSampler:
+    """A seeded TPE sampler, made parallel-safe when more than one worker runs.
+
+    `workers` is the study spec's fleet size, which is also what spawns the
+    processes -- so constant_liar is on exactly when a fleet actually exists.
+    It used to come from `n_jobs`, a field that launched nothing, so a study
+    could run 8 workers with constant_liar off and have all 8 propose from an
+    identical history.
+    """
+    if workers <= 1:
         return optuna.samplers.TPESampler(seed=seed,
                                           n_startup_trials=DEFAULT_STARTUP_TRIALS)
     with warnings.catch_warnings():
@@ -169,7 +178,7 @@ def make_storage(study_dir, storage_url: Optional[str] = None):
 
 
 def create_study(*, study_name: str, study_dir, seed: int = 2026,
-                 n_jobs: int = 1,
+                 workers: int = 1,
                  prune_after_step: int = DEFAULT_PRUNE_AFTER_STEP,
                  prune_startup_trials: Optional[int] = None,
                  n_trials: Optional[int] = None,
@@ -184,7 +193,7 @@ def create_study(*, study_name: str, study_dir, seed: int = 2026,
     return optuna.create_study(
         study_name=study_name,
         storage=make_storage(study_dir, storage_url),
-        sampler=make_sampler(seed=seed, n_jobs=n_jobs),
+        sampler=make_sampler(seed=seed, workers=workers),
         pruner=make_pruner(prune_after_step=prune_after_step,
                            prune_startup_trials=prune_startup_trials,
                            n_trials=n_trials,
