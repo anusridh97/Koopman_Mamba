@@ -61,7 +61,23 @@ from experimentation.sweep.search.study import ANCHOR_ATTR, to_distributions
 from experimentation.sweep.spec import build_cell_run_spec
 from experimentation.run.spec import group_id, run_id
 
-__all__ = ["TrialOutcome", "objective_from_metrics", "run_trial", "drive"]
+__all__ = ["TRIAL_ATTRS", "TrialOutcome", "objective_from_metrics", "run_trial",
+           "drive"]
+
+#: The user-attr keys a trial records at MATERIALIZATION time -- before it is
+#: launched, so they survive a failure and a pruning.
+#:
+#: All of these end up in `trials.csv` as `attr_<key>` columns (report.trial_row
+#: flattens `user_attrs` wholesale), which is the only channel a post-hoc
+#: analysis has: `trial.params` records what the sampler CHOSE, and nothing else
+#: records what that choice resolved to. Without `param_count` there is no
+#: loss-versus-size Pareto front; without `worker_id` and `sampler_seed` a
+#: concurrency artefact cannot be told from a real effect; without
+#: `per_device_batch_size` a trial that descended the OOM ladder is
+#: indistinguishable from one that did not.
+TRIAL_ATTRS = ("param_count", "baseline_param_count", "worker_id",
+               "sampler", "sampler_seed", "per_device_batch_size",
+               "anchor_name")
 
 
 @dataclass(frozen=True)
@@ -98,7 +114,10 @@ def run_trial(study: optuna.study.Study, trial, *,
               dry_run: bool = False,
               force: bool = False,
               dirty: bool = False,
-              batch_ladder: bool = False) -> TrialOutcome:
+              batch_ladder: bool = False,
+              worker_id: Optional[int] = None,
+              sampler_name: Optional[str] = None,
+              sampler_seed: Optional[int] = None) -> TrialOutcome:
     """Turn one asked-for trial into a launched run, and report the result back.
 
     `base_lr` is accepted and unused here -- the sampler has already produced a
@@ -164,6 +183,18 @@ def run_trial(study: optuna.study.Study, trial, *,
         identity = dict(trial_number=trial.number, run_id=run_id(spec),
                         group_id=group_id(spec), run_dir=run_dir, anchor=anchor,
                         per_device_batch_size=spec.runtime.per_device_batch_size)
+        # Recorded HERE -- after the spec exists, before the launch can fail --
+        # so a FAILED or PRUNED trial still carries its resolved parameter count
+        # and its provenance. Recording it after the objective arrives would lose
+        # exactly the trials an underperforming study most needs to explain.
+        #
+        # Re-set on every rung on purpose: `per_device_batch_size` is the one
+        # value that changes when the OOM ladder descends, and the attr has to
+        # say which microbatch actually ran rather than which one was tried first.
+        _record_trial_attrs(
+            trial, spec, base_model,
+            worker_id=worker_id, sampler_name=sampler_name,
+            sampler_seed=sampler_seed, anchor=anchor)
         try:
             # wait=False so the objective reader can WATCH this run rather than
             # only inspect its corpse. With a blocking submit the reader starts
@@ -230,6 +261,43 @@ def run_trial(study: optuna.study.Study, trial, *,
     trial.set_user_attr("run_dir", str(run_dir))
     study.tell(trial, float(objective))
     return TrialOutcome(state="complete", objective=float(objective), **identity)
+
+
+def _record_trial_attrs(trial, spec, base_model: KoopmanLMConfig, *,
+                        worker_id: Optional[int],
+                        sampler_name: Optional[str],
+                        sampler_seed: Optional[int],
+                        anchor: Optional[str]) -> None:
+    """Stamp the resolved facts about this trial onto the trial itself.
+
+    Not onto the run directory. Both would be defensible and the trial is the
+    right one: `report.trial_row` flattens `user_attrs` into `trials.csv`, so a
+    post-hoc analysis gets these for free and for EVERY trial, including the
+    failed and pruned ones whose run directories may not have a readable spec.
+
+    `param_count` is the estimate, not a measurement -- nothing here builds a
+    model. `config.param_count_estimate()` is arithmetic over the config,
+    reconciled against a real GPU instantiation (build 415208: 50,034,044
+    measured against 50,765,216 for the pre-fix formula, which is why the formula
+    was rewritten), so it is exact for the layout it models rather than
+    approximate.
+    """
+    attrs = {
+        "param_count": int(spec.model.param_count_estimate()),
+        "baseline_param_count": int(base_model.param_count_estimate()),
+        "per_device_batch_size": int(spec.runtime.per_device_batch_size),
+    }
+    if worker_id is not None:
+        attrs["worker_id"] = int(worker_id)
+    if sampler_name is not None:
+        attrs["sampler"] = str(sampler_name)
+    if sampler_seed is not None:
+        attrs["sampler_seed"] = int(sampler_seed)
+    # ANCHOR_ATTR is already set by enqueue_anchors; re-stating it would be a
+    # write with no new information. It is listed in TRIAL_ATTRS because a
+    # consumer reading that tuple needs to know the column exists.
+    for key, value in attrs.items():
+        trial.set_user_attr(key, value)
 
 
 def _ladder(base_sections: Mapping[str, Mapping[str, Any]], *,
