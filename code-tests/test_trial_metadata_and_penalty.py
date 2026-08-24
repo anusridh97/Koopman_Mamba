@@ -208,6 +208,12 @@ def test_the_real_anchor_spread_would_move_a_penalised_objective():
 def test_the_recorded_attrs_are_the_ones_the_module_declares():
     """Guards the guard: `TRIAL_ATTRS` is what a consumer reads to know which
     columns exist, so it must not drift from what is written."""
+    # `driver` imports optuna at module scope -- it is one of the two
+    # modules that deliberately do. The penalty tests above must keep
+    # running with optuna ABSENT (metrics.py is optuna-free on purpose,
+    # and the CPU suite is what guards that), so the skip is per-test
+    # rather than module-level.
+    pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import TRIAL_ATTRS
 
     assert set(TRIAL_ATTRS) == {
@@ -223,6 +229,12 @@ def _spec_and_base():
 
 
 def test_record_trial_attrs_writes_every_declared_key():
+    # `driver` imports optuna at module scope -- it is one of the two
+    # modules that deliberately do. The penalty tests above must keep
+    # running with optuna ABSENT (metrics.py is optuna-free on purpose,
+    # and the CPU suite is what guards that), so the skip is per-test
+    # rather than module-level.
+    pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import _record_trial_attrs
 
     spec, base_model = _spec_and_base()
@@ -244,6 +256,12 @@ def test_the_recorded_count_is_the_TRIALS_count_not_the_bases():
     ranking with an extra column."""
     import dataclasses
 
+    # `driver` imports optuna at module scope -- it is one of the two
+    # modules that deliberately do. The penalty tests above must keep
+    # running with optuna ABSENT (metrics.py is optuna-free on purpose,
+    # and the CPU suite is what guards that), so the skip is per-test
+    # rather than module-level.
+    pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import _record_trial_attrs
 
     spec, base_model = _spec_and_base()
@@ -262,6 +280,12 @@ def test_absent_provenance_is_omitted_rather_than_recorded_as_none():
     """A single-process study has no worker id. `attr_worker_id` as an empty CSV
     cell reads as "worker unknown"; as the string "None" it reads as a worker
     called None."""
+    # `driver` imports optuna at module scope -- it is one of the two
+    # modules that deliberately do. The penalty tests above must keep
+    # running with optuna ABSENT (metrics.py is optuna-free on purpose,
+    # and the CPU suite is what guards that), so the skip is per-test
+    # rather than module-level.
+    pytest.importorskip("optuna")
     from experimentation.sweep.search.driver import _record_trial_attrs
 
     spec, base_model = _spec_and_base()

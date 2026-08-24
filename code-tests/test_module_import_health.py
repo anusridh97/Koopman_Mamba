@@ -51,6 +51,13 @@ ALLOWED_OPTIONAL_DEPENDENTS = {
     "experimentation.sweep.search.driver": "optuna",
     "experimentation.sweep.search.report": "optuna",
     "experimentation.sweep.search.study": "optuna",
+    # Its input IS an optuna journal -- there is no version of "analyse a
+    # finished study" that does not read one, so a lazy import would only move
+    # the failure from import time to first call. Sits ABOVE the line with
+    # report.py, for the same reason: both consume a Study rather than declaring
+    # one. `studyspec`, `space`, `anchors` and `geometry` stay below it, which is
+    # what keeps `--dry_run` working with optuna absent.
+    "experimentation.sweep.search.analysis": "optuna",
 }
 
 
