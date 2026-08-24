@@ -1,0 +1,252 @@
+# The SKA interaction study: 256x17 proxy, 256 trials, 8 GPUs, one node.
+#
+# ## What question this study answers, and what it does not
+#
+# It asks: **which pairs of SKA hyperparameters interact?** Not "what is the best
+# config" -- 600 steps at 25M parameters cannot answer that, and the ranking here
+# is a hypothesis about the 50m geometry rather than a result at it. The output
+# worth having is a set of prespecified pairwise response surfaces
+# (rank x ridge, rank x norm-clip, rank x K, layers x layerscale,
+# layers x placement, ridge x K, layerscale x lr) plus main-effect importances,
+# from which a much smaller confirmation study at 50m can be designed.
+#
+# That is why the sampler is `tpe_multivariate` and not `tpe`. Independent TPE
+# fits one marginal per parameter, so "rank 32 wants a heavier ridge" appears in
+# neither p(rank | good) nor p(ridge | good) and the study would be structurally
+# incapable of finding the thing it was launched for.
+#
+# ## Why the 256x17 proxy and not 4m-golden
+#
+# `configs/runs/4m-golden.yaml` is four layers with SKA at [2, 3]. `geometry.py`
+# keeps layer 0 and the final layer free, so the usable window is {1, 2}: every
+# legal layer count clamps to 2 and all four placements resolve to the SAME
+# indices. Two of the nine axes below would be DEAD -- trials spent on a
+# difference that does not exist, and a parameter importance computed over it.
+# `test_search_axis_restriction.py` asserts both halves: that 4m-golden's
+# placement axis is dead, and that this one's is not.
+#
+# ## Phases
+#
+# **Phase 1 -- 24 structured anchors** (`design_file`). A one-factor-at-a-time
+# screen around the base config, enqueued by the supervisor before any worker
+# starts, so eight workers do not race to enqueue the same designs. Exempt from
+# pruning by default (`metrics.wait_for_objective`), because they ARE the
+# reference population a median pruner compares against. See the design file's
+# own header for why they are a design and not a set of curated winners.
+#
+# **Phase 2 -- exploratory startup, to 64 completed references.** TPE draws at
+# RANDOM until `sampler_startup_trials` trials have finished. Set to 64: the 24
+# anchors plus ~40 random draws.
+#
+#   Optuna semantics, verified in `test_sampler_and_pruner_startup.py` rather
+#   than assumed, because the two counters do NOT use the same rule:
+#     * TPE's `n_startup_trials` counts trials in states COMPLETE **and PRUNED**.
+#     * MedianPruner's `n_startup_trials` counts **COMPLETE only**.
+#   Enqueued anchors are ordinary trials once run, so they DO count toward both.
+#   The asymmetry matters here: a wave that is mostly pruned advances the sampler
+#   toward its joint model while leaving the pruner's reference population where
+#   it was. Since `prune_startup_trials` is also 64 and anchors are pruning-
+#   exempt, the pruner cannot start before 64 real completions -- which is the
+#   conservative side of the asymmetry, and the side we want.
+#
+# **Phase 3 -- multivariate TPE, 232 remaining trials.** A 9-dimensional joint
+# KDE over 64+ observations is thin but not absurd; 32 sequential waves of 8 mean
+# all but the first are proposed against real completed history.
+#
+# **Pruning -- only after BOTH floors.** 64 completed trials AND step 450 of 600.
+# Step 450 is 75% of the budget, which is late: it saves only the last quarter of
+# a trial. Deliberate. At 600 steps the curve has barely left its warmup
+# transient (warmup is 0.04 x 600 = 24 steps, but the transient outlasts the
+# schedule), and pruning earlier ranks how fast a config warms up rather than
+# how good it is -- which is precisely the confound a short-horizon proxy is
+# already most exposed to. The 24-step warmup and the 450-step floor are the two
+# numbers that keep this study measuring architecture.
+#
+# ## Sizing
+#
+# 256 trials / 8 workers = 32 sequential waves. `__main__._print_plan` warns
+# below 5 waves, so no warning is expected. The waves number, not
+# workers-vs-startup, is the one that matters: `n_startup_trials` is pinned at 64
+# here, so a fleet of 8 is well inside it.
+#
+# **Target-count overshoot under concurrency.** `driver.drive` loops
+# `while _finished(study) < n_trials`, and eight workers evaluate that predicate
+# independently, so up to `concurrent_trials - 1` = 7 extra trials can be in
+# flight when the target is reached: the study can finish with as many as 263. That is
+# BOUNDED and tested (`test_search_fleet_overshoot.py`), not prevented. It could
+# be prevented by counting RUNNING trials toward the budget, and that trade is
+# worse: a study whose trials sometimes FAIL would then stop SHORT of its target,
+# and a study that quietly ran 240 trials when it declared 256 is a worse
+# outcome than one that ran 263. 7 extra trials out of 256 is a 2.7% overspend
+# with no effect on any conclusion; 16 missing trials changes the power of the
+# analysis.
+#
+# ## The axes, and why each is bounded where it is
+#
+# All nine are declared explicitly in `search_axes` rather than inherited from
+# `space.search_space()`. Two reasons. First, `search_space()` widens some axes
+# by folding in the base config's own value (baseline containment) and derives
+# others from the base -- `learning_rate` would come out as
+# 0.65x-1.35x of 4e-4 = [2.6e-4, 5.4e-4], which is wider than an architecture
+# study wants. Second, an interaction study's space is part of its claim, so it
+# should be readable in the study file rather than reconstructible from two
+# modules. `restrict_space` re-validates every declaration against the axis's
+# real domain, and `dropped_base_values` confirms the base config is still
+# reachable on every axis -- so `reference-k1` remains reproducible by the
+# sampler and not only by the anchor.
+#
+# `weight_decay`, `warmup_ratio` and `grad_clip` are FIXED, not searched. They
+# are optimizer regularisation, not architecture, and searching them would spend
+# a 9-dimensional budget on 12 dimensions to answer a question this study is not
+# asking. Fixed becomes a validated singleton categorical rather than a deletion,
+# so `params_to_overrides` still receives them, the journal still records them,
+# and anchors snap onto them.
+name: proxy-256x17-interactions-v1
+base: configs/runs/proxy-256x17.yaml
+
+n_trials: 256
+max_steps: 600
+
+# ------------------------------------------------------------------ sampler
+sampler: tpe_multivariate
+sampler_startup_trials: 64
+prune_startup_trials: 64
+prune_after_step: 450
+logging_steps: 25
+
+# ------------------------------------------------------------------- fleet
+# `concurrent_trials: 8` -- not `n_jobs` and not `workers`. This is the fleet
+# size and it spawns the fleet: the command launches 8 processes, pins each to a visible GPU round-robin, and
+# derives the sampler's `constant_liar` from the same number, so the fleet size
+# and the sampler's belief about it cannot disagree. Each worker also gets its
+# own sampler seed (`seed + worker_index`), because eight samplers sharing one
+# seed draw eight copies of one random stream.
+launcher: local
+concurrent_trials: 8
+seed: 2026
+direction: minimize
+
+# ------------------------------------------------------------------ anchors
+design_file: configs/search/proxy-256x17-anchors.yaml
+
+# ----------------------------------------------------------- the search space
+search_axes:
+  # Capacity. {8, 16, 24, 32} are the four ranks the repo's configs and kernels
+  # actually use; 24 is the base and the one geometry the fused SM100 kernel
+  # supports, which is why it stays in the set even though this study does not
+  # use that kernel.
+  ska_rank:
+    kind: categorical
+    choices: [8, 16, 24, 32]
+  # SKA depth. 17 layers gives a usable window of 15, so 8 is well inside it --
+  # `restrict_space` REFUSES a count past the window, because make_layer_indices
+  # clamps rather than raising and a clamped choice is a dead axis.
+  n_ska_layers:
+    kind: categorical
+    choices: [2, 3, 4, 6, 8]
+  placement:
+    kind: categorical
+    choices: [baseline, even, midlate, late]
+  # Log scale: a ridge is a diagonal loading and its effect is multiplicative.
+  # 0.003-0.03 is one decade centred (in log) near the base's 0.01.
+  ska_ridge:
+    kind: float
+    low: 0.003
+    high: 0.03
+    log: true
+  ska_layerscale_init:
+    kind: float
+    low: 0.002
+    high: 0.03
+    log: true
+  # A MULTIPLIER on sqrt(rank), so the same value means the same thing at every
+  # rank. 0.8164965809277261 is exactly 4/sqrt(24) -- the base spec's
+  # ska_norm_clip_c: 4.0 -- written out in full rather than as an expression
+  # because YAML cannot compute and a rounded 0.8165 would put the reference
+  # point OUTSIDE its own space by 4e-5.
+  norm_clip_multiplier:
+    kind: categorical
+    choices: [0.75, 0.8164965809277261, 1.0, 1.25]
+  gamma_value:
+    kind: categorical
+    choices: [0.90, 1.0, 1.05]
+  # The SKA matrix power. Two values, and not widened: K=3+ is untested here and
+  # monotonically more work. Nearly free to search -- job 440135 measured
+  # 0.00542 s (K=1) vs 0.00559 s (K=2) on the exact route.
+  ska_power_K:
+    kind: categorical
+    choices: [1, 2]
+  # DELIBERATELY NARROW: +/-20% around the base's 4e-4. This is an architecture
+  # study. `space.LR_FACTOR_BOUNDS` would give 0.65x-1.35x, and the extra width
+  # buys nothing here except trials spent re-finding a learning rate that is
+  # already known for this width.
+  learning_rate:
+    kind: float
+    low: 0.00032
+    high: 0.00048
+    log: true
+
+# --------------------------------------------------------- what is NOT searched
+# Optimizer regularisation, held at the base spec's own values. Each becomes a
+# validated singleton categorical, so it still reaches params_to_overrides and
+# still appears in trials.csv -- a fixed axis you cannot see in the output is
+# indistinguishable from one that drifted.
+fixed_params:
+  weight_decay: 0.1
+  warmup_ratio: 0.04
+  grad_clip: 1.0
+
+# ------------------------------------------------------------------- backend
+# The exact inverse-Cholesky route for every trial. Exact to 5.1e-13 against the
+# fp64 oracle and 0.92x-1.41x the chunked cost (jobs 440122 / 440135), so
+# exactness is free. NOT `exact_auto`: the fused kernel needs rank exactly 24 and
+# this space samples four ranks, so three of them fall off a 167x-738x cliff
+# CORRELATED WITH A SEARCHED VARIABLE. NOT the retired `proxy_chunked`: it is a
+# different operator, 92%-152% wrong in the forward.
+backend_policy: exact_invchol
+
+# Stable, and NOT derived from a job id. Resubmitting must reuse the same journal
+# and the same run directories, or a requeue starts a second study that knows
+# nothing about the GPU-hours already spent. `study_id` is a content hash of this
+# file, so every worker computes
+#   <run_root>/_studies/<name>.<study_id>/optuna_journal.log
+# with no coordination.
+run_root: /scratch/m000151-pm06/jkli/study-proxy-256x17-v1
+
+# `storage` is deliberately UNSET and must stay so. It is passed straight to
+# optuna as a storage URL, and optuna 4.9.0 rejects a bare filesystem path with
+# "Could not parse SQLAlchemy URL" -- a failure --dry_run cannot see, because it
+# returns before create_study. Unset is also what multi-worker wants: the derived
+# journal path above is identical for all eight workers, and all eight are on the
+# same host, so a file-backed JournalStorage is safe here in a way it would not
+# be across nodes.
+
+# HELD OUT. The default is the base spec's own training shard, which would make
+# the ranking a training-loss ranking. A ranking you intend to design a 50m
+# confirmation study from must not be one.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# 40 minutes. A 600-step trial at this geometry is minutes, not tens of minutes,
+# so this is generous by roughly an order of magnitude -- and the 2-hour default
+# would idle one of eight GPUs for two hours on a single dead trial.
+trial_timeout_seconds: 2400
+
+# The OOM ladder. Eight concurrent trainers on one node, and rank 32 with 8 SKA
+# layers is the expensive corner of this space. Since per_device_batch_size moved
+# to RuntimeSpec it is not hashed into run_id, so descending a rung reuses the
+# same run directory and appends to attempts.jsonl rather than forking a second
+# identity.
+batch_ladder: true
+
+# EMPTY, on purpose. The objective is pure held-out loss.
+#
+# `parameter_penalty` is available and wired (the driver supplies both parameter
+# counts from the resolved spec), and it is still the wrong thing here. This
+# space spans 8->32 rank and 2->8 SKA layers, so a scalar penalty would encode a
+# specific exchange rate between loss and parameters -- a number nobody has
+# grounds to choose -- and would then be baked into every proposal the sampler
+# made afterwards, unrecoverably. The parameter count is recorded per trial
+# instead (`attr_param_count` in trials.csv) and the loss/parameter Pareto front
+# is computed POST HOC, where the exchange rate is the reader's to choose and can
+# be changed without re-running anything.
+objective: {}
