@@ -55,6 +55,19 @@ class Design:
     lr_factor: float = 1.0
     norm_clip_multiplier: Union[float, str] = _BASELINE
     gamma_value: Union[float, str] = _BASELINE
+    #: The SKA matrix power. `"baseline"` (the default) inherits the base
+    #: config's own `ska_power_K`, which is what every anchor did before this
+    #: field existed -- so no committed design file changes meaning.
+    #:
+    #: An explicit value is treated differently from an inherited one, and
+    #: deliberately: an inherited K SNAPS onto the declared choices (the base
+    #: config's K is always a declared choice, so it never actually moves),
+    #: while an explicit K must be declared EXACTLY or it raises. K is a matrix
+    #: power over a set of two or three small integers, so snapping 3 -> 2 would
+    #: leave a design named `reference-k3` running at K=2 -- a trial whose name
+    #: asserts something its params deny, which is the one failure mode a
+    #: named design set exists to prevent.
+    power_K: Union[int, str] = _BASELINE
     weight_decay: float = 0.1
     warmup_ratio: float = 0.02
     grad_clip: float = 1.0
@@ -155,12 +168,47 @@ def resolve_design(design: Design, base_model: KoopmanLMConfig,
         "weight_decay": nearest(design.weight_decay, space["weight_decay"]["choices"]),
         "warmup_ratio": nearest(design.warmup_ratio, space["warmup_ratio"]["choices"]),
         "grad_clip": nearest(design.grad_clip, space["grad_clip"]["choices"]),
-        # From the base config, not from a factor. An anchor is defined relative
-        # to the config you already run, and `_with_value_int` guarantees that
-        # config's own K is a declared choice, so this never snaps away.
-        "ska_power_K": int(nearest(base_model.ska_power_K,
-                                   space["ska_power_K"]["choices"])),
+        "ska_power_K": _resolve_power_k(design, base_model, space),
     }
+
+
+def _resolve_power_k(design: Design, base_model: KoopmanLMConfig,
+                     space: Mapping[str, Any]) -> int:
+    """`design.power_K` -> a declared choice, or a loud failure.
+
+    Inherited (`"baseline"`) SNAPS: an anchor is defined relative to the config
+    you already run, and `space._with_value_int` guarantees that config's own K
+    is a declared choice, so the snap never actually moves anything.
+
+    Explicit does NOT snap, for the reason `Design.power_K` documents: silently
+    resolving a requested 3 to 2 leaves a design whose NAME claims one thing and
+    whose params say another. Placement is refused the same way, and for the
+    same reason.
+    """
+    choices = list(space["ska_power_K"]["choices"])
+    if design.power_K == _BASELINE:
+        return int(nearest(base_model.ska_power_K, choices))
+    try:
+        as_float = float(design.power_K)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"design {design.name!r} asks for power_K={design.power_K!r}, which "
+            f"is not a number. Use an integer, or 'baseline' to inherit the base "
+            f"config's own ska_power_K.") from None
+    if as_float != int(as_float):
+        raise ValueError(
+            f"design {design.name!r} asks for power_K={design.power_K!r}; K is a "
+            f"MATRIX POWER and must be a whole number -- int({design.power_K!r}) "
+            f"would silently round it")
+    requested = int(as_float)
+    if requested not in choices:
+        raise ValueError(
+            f"design {design.name!r} asks for power_K={requested}; this study "
+            f"declares {choices}. Unlike a ridge or a learning rate, K is not "
+            f"clamped onto the nearest declared value: a design named for the K "
+            f"it runs at must actually run at it. Either widen the ska_power_K "
+            f"axis in the study's search_axes, or name a declared value.")
+    return requested
 
 
 def designs_to_cells(designs, base_model: KoopmanLMConfig,
