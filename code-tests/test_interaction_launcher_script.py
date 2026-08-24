@@ -247,48 +247,65 @@ def test_there_are_sbatch_scripts_to_check():
     assert len(_sbatch_scripts()) > 5
 
 
-def test_the_removed_flag_check_catches_a_known_violation():
-    """The most important test in this file, because it is the one that proves
-    the others are not vacuous.
+def test_the_removed_flag_check_catches_a_known_violation(tmp_path):
+    """The most important test in this file, because it proves the others are not
+    vacuous.
 
-    `verify_study_e2e.sbatch` really does pass `--run_root`, on a line
-    CONTINUED from the invocation:
+    It used to point at `verify_study_e2e.sbatch`, which really did pass
+    `--run_root` on a line CONTINUED from the invocation -- and a
+    per-physical-line check reported that file clean, passing against the exact
+    violation it was written to find.
 
-        python -m experimentation.sweep.search "$STUDY_CONFIG" \\
-            --dry_run --run_root "$RUN_ROOT"
-
-    A per-physical-line check requiring the command and the flag together
-    reported that file as clean -- passing, against the exact violation it was
-    written to find. So the detector is pointed at a known-bad file here, and if
-    that script is ever fixed this test fails and says to pick a new fixture
-    rather than silently going vacuous again.
+    That script is now fixed, so the fixture is CONSTRUCTED here instead of
+    borrowed from the repo. Borrowing was always the weaker choice: it made this
+    test's meaning depend on a bug staying unfixed, so fixing the bug turned the
+    detector vacuous. The continuation is reproduced deliberately, because that
+    is the specific shape that defeated the first version.
     """
-    stale = REPO / "scripts/verify_study_e2e.sbatch"
-    violations = _removed_flag_violations(stale)
+    fixture = tmp_path / "stale.sbatch"
+    fixture.write_text(
+        "#!/bin/bash\n"
+        "# This comment mentions --run_root and must NOT count as a violation.\n"
+        'python -m experimentation.sweep.search "$STUDY" \\\n'
+        '    --dry_run --run_root "$ROOT"\n')
+    violations = _removed_flag_violations(fixture)
     assert violations, (
-        f"{stale.name} no longer passes a removed flag. Good -- but this test "
-        f"was the only proof the detector works. Point it at another script "
-        f"that does, or construct the fixture inline.")
+        "the detector missed a removed flag on a continuation line -- the exact "
+        "bug it was written for")
     assert any(flag == "--run_root" for flag, _ in violations)
+
+
+def test_the_removed_flag_check_ignores_a_comment_only_mention(tmp_path):
+    """The other half. These scripts explain at length WHY a flag is absent, and
+    a detector that flags the explanation makes documenting it impossible."""
+    fixture = tmp_path / "clean.sbatch"
+    fixture.write_text(
+        "#!/bin/bash\n"
+        "# --run_root was removed from this CLI; the run root is in the spec.\n"
+        'python -m experimentation.sweep.search "$STUDY" --dry_run\n')
+    assert _removed_flag_violations(fixture) == []
+
+
+def test_the_previously_broken_gate_script_is_now_clean():
+    """`verify_study_e2e.sbatch` passed `--run_root` twice and would have died at
+    argparse. Now asserted CLEAN rather than xfailed, because it is fixed -- the
+    run root moved into a generated per-job spec, which keeps the per-job journal
+    isolation the flag was providing without letting a flag redefine the study."""
+    stale = REPO / "scripts/verify_study_e2e.sbatch"
+    assert _removed_flag_violations(stale) == []
 
 
 @pytest.mark.parametrize("path", _sbatch_scripts(), ids=lambda p: p.name)
 def test_no_committed_sbatch_script_passes_a_removed_search_flag(path):
     """Asserted for EVERY script, not only the new one.
 
-    `verify_study_e2e.sbatch` is a KNOWN, pre-existing failure: it passes
-    `--run_root` twice and would now die at argparse. It is xfailed rather than
-    fixed, because fixing it means deciding where that verification job's run
-    root should come from now that a flag cannot supply one -- a study-design
-    call, and out of scope here. Left visible rather than silenced so it is
-    found and fixed, which is the entire point of the check.
+    This is how the `verify_study_e2e.sbatch` breakage was found: it passed
+    `--run_root` twice and would have died at argparse on the very gate job whose
+    purpose is catching that class of problem. It is fixed now, and the more
+    general version of this check -- every flag against its CLI's real parser,
+    not just three named ones -- lives in `test_script_cli_flags.py`.
     """
     violations = _removed_flag_violations(path)
-    if path.name == "verify_study_e2e.sbatch":
-        pytest.xfail(
-            "pre-existing: passes --run_root, which the CLI removed. Fixing it "
-            "means choosing where that job's run root comes from instead, which "
-            "is a study-design decision.")
     assert violations == [], (
         f"{path.name} passes a removed flag to the search CLI; the job will die "
         f"at argparse: {violations}")

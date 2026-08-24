@@ -36,7 +36,8 @@ import yaml
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.geometry import clamp, nearest
 
-__all__ = ["Design", "load_designs", "resolve_design", "designs_to_cells"]
+__all__ = ["Design", "check_space_is_resolvable", "load_designs",
+           "resolve_design", "designs_to_cells"]
 
 _BASELINE = "baseline"
 
@@ -122,6 +123,57 @@ def _baseline_norm_clip_multiplier(base_model: KoopmanLMConfig) -> float:
     return float(clip_c) / math.sqrt(base_model.ska_rank)
 
 
+#: Which shape `resolve_design` reads off each axis. It reads `choices` for the
+#: categoricals and `low`/`high` for the floats, so a study that changes an
+#: axis's KIND in `search_axes` breaks it -- and discretising a ridge into a
+#: 3-level grid is an entirely plausible thing for an interaction study to want.
+#:
+#: Declared as data so the failure can name the axis and the shape it needed.
+#: It used to be a bare `KeyError: 'low'` from inside a dict subscript, raised
+#: only when `enqueue_anchors` ran -- which is past `--dry_run`'s return, so the
+#: check that exists to catch this could not see it.
+_AXIS_SHAPE = {
+    "ska_rank": "choices", "n_ska_layers": "choices", "placement": "choices",
+    "norm_clip_multiplier": "choices", "gamma_value": "choices",
+    "ska_power_K": "choices", "weight_decay": "choices",
+    "warmup_ratio": "choices", "grad_clip": "choices",
+    "ska_ridge": "bounds", "ska_layerscale_init": "bounds",
+    "learning_rate": "bounds",
+}
+
+
+def check_space_is_resolvable(space: Mapping[str, Any]) -> None:
+    """Can `resolve_design` read every axis it needs? Raise naming what is wrong.
+
+    Pure and cheap, so `__main__` calls it during `--dry_run`. The alternative --
+    discovering it from `enqueue_anchors` -- happens after the git gate and after
+    `create_study`, i.e. on the cluster, which is precisely what the dry run
+    exists to prevent.
+    """
+    for axis, shape in sorted(_AXIS_SHAPE.items()):
+        declaration = space.get(axis)
+        if declaration is None:
+            raise ValueError(
+                f"the search space declares no {axis!r}, which anchor resolution "
+                f"requires. Restriction can narrow or pin an axis; it cannot "
+                f"remove one.")
+        needed = ("choices",) if shape == "choices" else ("low", "high")
+        missing = [k for k in needed if k not in declaration]
+        if missing:
+            kind = declaration.get("kind", "?")
+            wanted = ("a categorical (choices)" if shape == "choices"
+                      else "a float range (low/high)")
+            raise ValueError(
+                f"anchor resolution reads {list(needed)} off {axis!r}, but this "
+                f"study declares it as kind={kind!r} (missing {missing}). "
+                f"`resolve_design` expects {wanted} for this axis: a categorical "
+                f"snaps to its nearest choice and a float clamps into its "
+                f"bounds, and those are different operations, so changing an "
+                f"axis's kind in `search_axes` changes which one applies. Either "
+                f"keep {axis!r} as {wanted}, or drop `design_file` for this "
+                f"study.")
+
+
 def resolve_design(design: Design, base_model: KoopmanLMConfig,
                    space: Mapping[str, Mapping[str, Any]], *,
                    base_lr: float) -> Dict[str, Any]:
@@ -133,6 +185,7 @@ def resolve_design(design: Design, base_model: KoopmanLMConfig,
     available point rather than an error, since the design was written against
     the base config and not against this particular study's bounds.
     """
+    check_space_is_resolvable(space)
     placements = space["placement"]["choices"]
     if design.placement not in placements:
         raise ValueError(

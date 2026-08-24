@@ -13,8 +13,17 @@ and would do so silently. 7 extra trials out of 256 is a 2.7% overspend that
 changes no conclusion; 16 missing trials changes the power of the analysis. There
 is no atomic reservation available over `JournalStorage` that would give both.
 
-So the overshoot is a documented property with a stated bound, and this file is
-what makes the bound a claim rather than an assertion in a comment. It also pins
+**What this file does and does not establish.** `_simulate_fleet` re-implements
+the loop condition rather than calling `drive`, and it asks exactly `workers`
+trials per round -- so its output is always `ceil(n/W)*W`, and
+`ceil(n/W)*W - n <= W-1` is a theorem about integers that holds regardless of
+what `driver.py` does. Pointed out in review, and it is right: these assertions
+document the ARITHMETIC of the bound and the semantics `drive` is meant to have.
+They are not evidence that `drive` implements them -- for three of the five
+parametrised cases, including the headline (256, 8), the simulated overshoot is
+exactly 0. Establishing the real property needs `drive` run in W threads against
+a lock-protected fake storage, with the runner telling PRUNED and FAIL; that is
+recorded as not done rather than implied. It also pins
 the two properties that make the overshoot harmless:
 
   * a resumed study counts what already finished, so the overshoot does not
@@ -152,7 +161,7 @@ def _simulate_fleet(n_trials, workers):
 
 @pytest.mark.parametrize("n_trials,workers", [(256, 8), (150, 8), (16, 4),
                                               (100, 3), (64, 16)])
-def test_the_overshoot_never_exceeds_workers_minus_one(n_trials, workers):
+def test_the_simulated_overshoot_never_exceeds_workers_minus_one(n_trials, workers):
     study = _simulate_fleet(n_trials, workers)
     recorded = _finished(study)
     assert recorded >= n_trials, "a fleet must not stop SHORT of its target"

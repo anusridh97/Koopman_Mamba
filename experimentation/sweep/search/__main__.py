@@ -321,7 +321,7 @@ def _print_space(study_spec, space, base_model, base_lr, base_optim):
 
 def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher,
                 gpus=(), space=None, base_model=None, base_lr=None,
-                base_optim=None):
+                base_optim=None, designs=None):
     sid = compute_study_id(study_spec)
     print(f"[search] study        {study_spec.name}  (study_id {sid})")
     print(f"[search] base spec    {study_spec.base}")
@@ -363,6 +363,29 @@ def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher,
         _print_space(study_spec, space, base_model, base_lr, base_optim)
     if study_spec.design_file:
         print(f"[search] anchors      {n_anchors} from {study_spec.design_file}")
+        if designs is not None and base_model is not None:
+            # RESOLVE them, not just count them. Resolution is where an axis-kind
+            # change, an undeclared anchor power_K and an undeclared placement all
+            # fail -- and it used to happen only inside `enqueue_anchors`, which
+            # is past this function, past the git gate and past create_study. So
+            # a malformed study passed the check that exists to catch it and died
+            # on the cluster instead. Pure arithmetic over committed files: no
+            # filesystem, no optuna, milliseconds.
+            from experimentation.sweep.search.anchors import resolve_design
+
+            resolved = [resolve_design(d, base_model, space, base_lr=base_lr)
+                        for d in designs]
+            unique = len({tuple(sorted((k, repr(v)) for k, v in p.items()))
+                          for p in resolved})
+            print(f"[search]              {len(resolved)} anchor(s) resolve, "
+                  f"{unique} distinct point(s)")
+            if unique < len(resolved):
+                print(f"[search]              WARNING: "
+                      f"{len(resolved) - unique} anchor(s) resolve onto a point "
+                      f"another anchor already occupies. enqueue_trial's "
+                      f"skip_if_exists drops the duplicate silently, so the "
+                      f"study would have fewer references than its design file "
+                      f"claims.")
     else:
         print("[search] anchors      none -- the first trials are random AND "
               "unprunable (nothing prunes until trials COMPLETE)")
@@ -463,7 +486,7 @@ def main(argv=None):
         _print_plan(study_spec, args, n_anchors=len(designs), study_dir=study_dir,
                     run_root=run_root, launcher=launcher_name, gpus=gpus,
                     space=space, base_model=base_model, base_lr=base_lr,
-                    base_optim=base_sections.get("optim"))
+                    base_optim=base_sections.get("optim"), designs=designs)
 
     no_objective = not _objective_producer_exists(repo_root)
 

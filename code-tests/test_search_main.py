@@ -323,3 +323,106 @@ def test_every_keyword_the_cli_hands_drive_is_one_drive_accepts():
             f"__main__.py passes {unknown} to drive(), which accepts "
             f"{sorted(accepted)}. A real study would fail at trial 0; --dry_run "
             f"returns before this call and would not notice.")
+
+
+# ----------------------------- the dry run resolves the anchors, not just loads ----
+#
+# `--dry_run` exists to catch a misconfigured study before GPU time. It loaded the
+# design file (so a missing file or a duplicate name failed) and never RESOLVED
+# any design -- resolution happens inside `enqueue_anchors`, which is past the
+# dry-run return, past the git gate, and past `create_study`.
+#
+# So a whole class of errors landed on the cluster instead: an axis whose KIND a
+# study changed (`resolve_design` hardcodes `["choices"]` for 8 axes and
+# `["low"]/["high"]` for 3, so a discretised `ska_ridge` raises a bare
+# `KeyError: 'low'`), an explicit anchor `power_K` the space does not declare, an
+# undeclared placement. Every one is pure arithmetic over committed files and
+# costs milliseconds to check.
+
+
+def _study_with(tmp_path, **extra):
+    import yaml
+
+    body = {"name": "dryrun-anchor-probe",
+            "base": "configs/runs/proxy-256x17.yaml",
+            "n_trials": 4, "max_steps": 600, "prune_after_step": 450,
+            "launcher": "local", "run_root": str(tmp_path / "runs"),
+            "design_file": "configs/search/proxy-256x17-anchors.yaml"}
+    body.update(extra)
+    path = tmp_path / "study.yaml"
+    path.write_text(yaml.safe_dump(body, sort_keys=False))
+    return path
+
+
+def test_a_healthy_study_resolves_all_its_anchors_in_the_dry_run(tmp_path):
+    r = _run(_study_with(tmp_path), "--dry_run")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "24 anchor(s) resolve" in r.stdout, r.stdout
+
+
+def test_an_axis_kind_change_fails_during_the_dry_run(tmp_path):
+    """THE case. Discretising a float axis is an entirely plausible thing for an
+    interaction study to want, and `resolve_design` reads `["low"]` off it. This
+    used to pass --dry_run and then raise `KeyError: 'low'` on the cluster, after
+    the git gate and after create_study."""
+    study = _study_with(tmp_path, search_axes={
+        "ska_ridge": {"kind": "categorical", "choices": [0.003, 0.01, 0.03]}})
+    r = _run(study, "--dry_run")
+    assert r.returncode != 0, (
+        "a study whose anchors cannot resolve passed the check that exists to "
+        "catch exactly that:\n" + r.stdout)
+    combined = r.stdout + r.stderr
+    assert "ska_ridge" in combined, combined
+    assert "KeyError" not in combined, (
+        "a bare KeyError names neither the axis nor what was wrong:\n" + combined)
+
+
+def test_the_error_names_the_axis_and_what_it_expected(tmp_path):
+    study = _study_with(tmp_path, search_axes={
+        "learning_rate": {"kind": "categorical", "choices": [0.0004]}})
+    r = _run(study, "--dry_run")
+    assert r.returncode != 0
+    combined = r.stdout + r.stderr
+    assert "learning_rate" in combined
+    # It must say what shape was needed, or the reader cannot act on it.
+    assert "float" in combined.lower() or "low" in combined
+
+
+def test_an_undeclared_anchor_power_k_fails_during_the_dry_run(tmp_path):
+    """`_resolve_power_k` raises strictly by design. That error was equally
+    invisible to the dry run."""
+    designs = tmp_path / "designs.yaml"
+    designs.write_text("designs:\n  - name: reference-k3\n    power_K: 3\n")
+    r = _run(_study_with(tmp_path, design_file=str(designs)), "--dry_run")
+    assert r.returncode != 0, r.stdout
+    assert "reference-k3" in (r.stdout + r.stderr)
+
+
+def test_an_undeclared_placement_fails_during_the_dry_run(tmp_path):
+    designs = tmp_path / "designs.yaml"
+    designs.write_text("designs:\n  - name: early\n    placement: early\n")
+    r = _run(_study_with(tmp_path, design_file=str(designs)), "--dry_run")
+    assert r.returncode != 0
+    assert "early" in (r.stdout + r.stderr)
+
+
+def test_a_study_with_no_design_file_still_dry_runs(tmp_path):
+    """Guards the guard: `design_file` is optional, and the new resolution step
+    must not make it required."""
+    study = _study_with(tmp_path)
+    import yaml
+    body = yaml.safe_load(study.read_text())
+    del body["design_file"]
+    study.write_text(yaml.safe_dump(body, sort_keys=False))
+    r = _run(study, "--dry_run")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_dry_run_still_materializes_nothing(tmp_path):
+    """Resolving a design is pure arithmetic -- no filesystem, no optuna. If the
+    new step wrote anything, --dry_run would have stopped being free."""
+    study = _study_with(tmp_path)
+    r = _run(study, "--dry_run")
+    assert r.returncode == 0
+    assert not (tmp_path / "runs").exists(), (
+        "the dry run created a run root")
