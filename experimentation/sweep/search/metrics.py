@@ -52,12 +52,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-__all__ = ["OOM_MARKERS", "TRAIN_RE", "Progress", "looks_like_oom",
-           "objective_from_metrics",
+__all__ = ["OBJECTIVE_WEIGHTS", "OOM_MARKERS", "TRAIN_RE", "Progress",
+           "looks_like_oom", "objective_from_metrics",
            "parse_progress", "read_progress", "ema_losses",
-           "fixed_reader",
+           "fixed_reader", "weights_for_trial",
            "read_quick_eval_metrics", "read_quick_eval_objective",
            "wait_for_objective"]
+
+#: The weight names `objective_from_metrics` accepts from a study file. Exported
+#: so `studyspec._OBJECTIVE_WEIGHTS` can be pinned against it by test rather than
+#: by hope -- studyspec.py cannot import this module (it must stay importable
+#: with optuna absent, and this one imports optuna lazily but is not free of it
+#: in spirit), so the list is duplicated and the duplication is guarded.
+OBJECTIVE_WEIGHTS = ("parameter_penalty", "throughput_penalty",
+                     "target_tokens_per_sec", "ska_delta_reward",
+                     "ska_delta_cap")
+
+#: Trial user-attr keys the parameter penalty reads. Set by
+#: `driver._record_trial_attrs` at materialization time.
+PARAM_COUNT_ATTR = "param_count"
+BASELINE_PARAM_COUNT_ATTR = "baseline_param_count"
 
 # Lowercase substrings. Broad by design: the same condition is reported by the
 # allocator, by cuBLAS, and by torch's own error type.
@@ -166,6 +180,53 @@ def read_quick_eval_metrics(run_dir) -> Optional[Dict[str, Any]]:
     # The result envelope nests the numbers under "metrics"; tolerate a bare
     # payload so a hand-written file is still readable.
     return envelope.get("metrics", envelope)
+
+
+def weights_for_trial(weights: Mapping[str, Any], trial) -> Dict[str, Any]:
+    """Study weights + THIS trial's parameter counts. The penalty's only wiring.
+
+    `objective_from_metrics` has always accepted `parameter_penalty` alongside
+    `param_count` and `baseline_param_count`, and its own guard is
+    `if parameter_penalty > 0 and param_count and baseline_param_count`. Nothing
+    ever supplied the counts, so the guard was false for every trial ever run and
+    the option was a documented, tested, INERT no-op -- the exact "valid,
+    validated, and read by nothing" shape this codebase keeps producing.
+
+    Why the counts arrive through the TRIAL rather than through the weights dict.
+    A parameter count is a property of the config the sampler proposed, so it
+    cannot be a constant in a study file -- a constant would apply the same count
+    to every trial and turn the penalty into a fixed offset, i.e. no penalty at
+    all (StudySpec refuses to let one be written for that reason). It also cannot
+    be a `drive()` kwarg: `drive` fixes its kwargs before trial 0 exists. The
+    driver stamps both counts onto the trial at materialization time and the
+    reader factory -- which receives the trial -- reads them back. That is the
+    same seam pruning arrives through, and for the same reason.
+
+    Raises rather than silently omitting them when the penalty is on and the
+    counts are missing. A study that declared `parameter_penalty: 0.5` and then
+    optimised pure loss is worse than one that failed at trial 0: it produces a
+    complete, plausible, wrong answer.
+    """
+    resolved = dict(weights)
+    penalty = float(resolved.get("parameter_penalty", 0.0) or 0.0)
+    if penalty <= 0:
+        return resolved
+    attrs = getattr(trial, "user_attrs", None) or {}
+    counts = {key: attrs.get(key)
+              for key in (PARAM_COUNT_ATTR, BASELINE_PARAM_COUNT_ATTR)}
+    missing = sorted(k for k, v in counts.items() if not v)
+    if missing:
+        raise ValueError(
+            f"objective declares parameter_penalty={penalty} but trial "
+            f"{getattr(trial, 'number', '?')} carries no {missing}. Those are "
+            f"stamped by driver._record_trial_attrs at materialization time, so "
+            f"this means the reader was called on a trial the driver did not "
+            f"materialize. REFUSING rather than dropping the penalty: an "
+            f"objective that silently reverts to pure loss produces a complete "
+            f"and wrong answer, which is the failure mode this whole option "
+            f"already had once.")
+    resolved.update(counts)
+    return resolved
 
 
 def fixed_reader(reader):

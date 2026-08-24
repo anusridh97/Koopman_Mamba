@@ -93,30 +93,53 @@ def test_an_unknown_key_is_an_error_not_a_shrug(tmp_path):
 
 
 def test_the_old_n_jobs_key_names_its_replacement(tmp_path):
-    """`n_jobs` became `workers`, and the two are not synonyms: n_jobs only
-    flipped constant_liar, workers launches the fleet.
+    """`n_jobs` became `concurrent_trials`, and the two are not synonyms: n_jobs
+    only flipped constant_liar, `concurrent_trials` launches the fleet.
 
     Falling through to the generic "unknown key" error would read like a typo
     and invite DELETING the line -- which silently drops the parallelism a study
     asked for -- rather than renaming it.
     """
     path = _write(tmp_path, n_jobs=8)
-    with pytest.raises(ValueError, match="renamed to `workers`"):
+    with pytest.raises(ValueError, match="renamed to `concurrent_trials`"):
         load_study_spec(path)
 
 
-def test_workers_must_be_at_least_one(tmp_path):
-    with pytest.raises(ValueError, match="workers must be >= 1"):
-        load_study_spec(_write(tmp_path, workers=0))
+def test_the_briefly_used_workers_key_also_names_its_replacement(tmp_path):
+    """`workers` was this field's spelling for one day, and it collided with
+    `RuntimeSpec.workers` -- the DATALOADER worker count. A study carrying a
+    runtime section would have had two unrelated `workers` a few lines apart,
+    which is the confusion the rename away from `n_jobs` existed to prevent.
+
+    Both old spellings have to keep naming the new one. A generic "unknown key"
+    on `workers:` would be actively misleading here, because `workers` IS a valid
+    key -- just not at this level.
+    """
+    path = _write(tmp_path, workers=8)
+    with pytest.raises(ValueError, match="renamed to `concurrent_trials`"):
+        load_study_spec(path)
 
 
-def test_workers_is_part_of_study_identity(tmp_path):
+def test_the_workers_rename_message_names_the_collision(tmp_path):
+    """The reason, not just the new name: an operator who only sees "renamed"
+    will rename it and never learn why, and the next person to add a fleet-size
+    field will reach for `workers` again."""
+    with pytest.raises(ValueError, match="RuntimeSpec.workers"):
+        load_study_spec(_write(tmp_path, workers=8))
+
+
+def test_concurrent_trials_must_be_at_least_one(tmp_path):
+    with pytest.raises(ValueError, match="concurrent_trials must be >= 1"):
+        load_study_spec(_write(tmp_path, concurrent_trials=0))
+
+
+def test_concurrent_trials_is_part_of_study_identity(tmp_path):
     """study_id hashes the whole spec, so a fleet size change makes a NEW study
     with its own journal. That is the property that stops two operators running
-    different worker counts from silently sharing one journal."""
+    different fleet sizes from silently sharing one journal."""
     from experimentation.sweep.search.studyspec import study_id
-    one = study_id(load_study_spec(_write(tmp_path, workers=1)))
-    eight = study_id(load_study_spec(_write(tmp_path, workers=8)))
+    one = study_id(load_study_spec(_write(tmp_path, concurrent_trials=1)))
+    eight = study_id(load_study_spec(_write(tmp_path, concurrent_trials=8)))
     assert one != eight
 
 
@@ -192,3 +215,17 @@ def test_study_id_is_not_a_run_identity():
         "run/spec.py references study_id -- study membership is provenance, not "
         "a scientific input, and must not perturb run_id or group_id")
     assert hasattr(run_spec, "group_id")
+
+
+def test_maximize_is_refused_rather_than_silently_minimized(tmp_path):
+    """Found in review: `direction` accepted "maximize", was validated, was
+    hashed into study_id -- and `study.py` hardcoded `direction="minimize"`, so a
+    study declaring maximize was silently minimized. Valid, validated, inert."""
+    with pytest.raises(ValueError, match="direction"):
+        load_study_spec(_write(tmp_path, direction="maximize"))
+
+
+def test_minimize_is_still_accepted(tmp_path):
+    """Guards the guard: every committed study says minimize."""
+    assert load_study_spec(_write(tmp_path, direction="minimize")).direction \
+        == "minimize"

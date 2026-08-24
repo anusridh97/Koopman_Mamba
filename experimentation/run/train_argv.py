@@ -94,10 +94,17 @@ def write_model_config(spec: RunSpec, run_dir) -> Path:
 def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
                       resume: bool = False,
                       eval_on_final: bool = False,
-                      eval_data_dir: Optional[str] = None) -> List[str]:
+                      eval_data_dir: Optional[str] = None,
+                      logging_steps: Optional[int] = None) -> List[str]:
     """Map a RunSpec onto experimentation.training.train's existing CLI flags.
     Only kind='shard' is supported: kind='synthetic' needs TrainTask/
     SyntheticTask (§6.2), a separate, later plan."""
+    if logging_steps is not None and int(logging_steps) < 1:
+        raise ValueError(
+            f"logging_steps must be >= 1, got {logging_steps}: train.py computes "
+            f"`step % logging_steps`, and MedianPruner requires interval_steps "
+            f">= 1. This is the number that has to be the SAME on both sides -- "
+            f"see the search package's pruner interval.")
     if not isinstance(spec.data, ShardDataSpec):
         raise ValueError(
             "build_train_argv only supports data.kind='shard' -- synthetic "
@@ -140,6 +147,16 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
         "--seed", str(spec.runtime.seed),
         "--phase_tag", spec.name,
     ]
+    # How often the trainer PRINTS a progress line. Omitted when unset, so a
+    # hand-launched run keeps train.py's own default -- it has no pruner to agree
+    # with. A study MUST set it: `metrics.read_progress` parses those lines and
+    # `make_pruner(interval_steps=...)` is consulted on the same cadence, so the
+    # two being different numbers meant the pruner was asked about steps no trial
+    # ever reported. It reached the pruner and not the trainer, which made the
+    # plan printer's "reporting every 25" false and cut the real prune
+    # opportunities from 7 to 4.
+    if logging_steps is not None:
+        argv += ["--logging_steps", str(int(logging_steps))]
     if eval_on_final:
         # The adaptive searcher's objective. Optuna reads a trial's score from
         # run_dir/eval/<ckpt>/quick_eval.json, and nothing in the launch path

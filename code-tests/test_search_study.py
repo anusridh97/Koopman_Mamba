@@ -92,16 +92,16 @@ def test_sampler_enables_constant_liar_only_when_running_in_parallel():
     compute nearly the same point -- N GPUs producing one answer."""
     from experimentation.sweep.search.study import make_sampler
 
-    assert make_sampler(seed=1, workers=1)._constant_liar is False
-    assert make_sampler(seed=1, workers=4)._constant_liar is True
+    assert make_sampler(seed=1, concurrent_trials=1)._constant_liar is False
+    assert make_sampler(seed=1, concurrent_trials=4)._constant_liar is True
 
 
 def test_sampler_is_seeded_so_a_study_is_reproducible():
     from experimentation.sweep.search.study import make_sampler, to_distributions
 
     space = to_distributions(_space())
-    first = optuna.create_study(sampler=make_sampler(seed=99, workers=1))
-    second = optuna.create_study(sampler=make_sampler(seed=99, workers=1))
+    first = optuna.create_study(sampler=make_sampler(seed=99, concurrent_trials=1))
+    second = optuna.create_study(sampler=make_sampler(seed=99, concurrent_trials=1))
     a = [first.ask(space).params for _ in range(3)]
     b = [second.ask(space).params for _ in range(3)]
     assert a == b

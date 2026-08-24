@@ -36,7 +36,8 @@ import yaml
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.geometry import clamp, nearest
 
-__all__ = ["Design", "load_designs", "resolve_design", "designs_to_cells"]
+__all__ = ["Design", "check_space_is_resolvable", "load_designs",
+           "resolve_design", "designs_to_cells"]
 
 _BASELINE = "baseline"
 
@@ -55,6 +56,19 @@ class Design:
     lr_factor: float = 1.0
     norm_clip_multiplier: Union[float, str] = _BASELINE
     gamma_value: Union[float, str] = _BASELINE
+    #: The SKA matrix power. `"baseline"` (the default) inherits the base
+    #: config's own `ska_power_K`, which is what every anchor did before this
+    #: field existed -- so no committed design file changes meaning.
+    #:
+    #: An explicit value is treated differently from an inherited one, and
+    #: deliberately: an inherited K SNAPS onto the declared choices (the base
+    #: config's K is always a declared choice, so it never actually moves),
+    #: while an explicit K must be declared EXACTLY or it raises. K is a matrix
+    #: power over a set of two or three small integers, so snapping 3 -> 2 would
+    #: leave a design named `reference-k3` running at K=2 -- a trial whose name
+    #: asserts something its params deny, which is the one failure mode a
+    #: named design set exists to prevent.
+    power_K: Union[int, str] = _BASELINE
     weight_decay: float = 0.1
     warmup_ratio: float = 0.02
     grad_clip: float = 1.0
@@ -109,6 +123,57 @@ def _baseline_norm_clip_multiplier(base_model: KoopmanLMConfig) -> float:
     return float(clip_c) / math.sqrt(base_model.ska_rank)
 
 
+#: Which shape `resolve_design` reads off each axis. It reads `choices` for the
+#: categoricals and `low`/`high` for the floats, so a study that changes an
+#: axis's KIND in `search_axes` breaks it -- and discretising a ridge into a
+#: 3-level grid is an entirely plausible thing for an interaction study to want.
+#:
+#: Declared as data so the failure can name the axis and the shape it needed.
+#: It used to be a bare `KeyError: 'low'` from inside a dict subscript, raised
+#: only when `enqueue_anchors` ran -- which is past `--dry_run`'s return, so the
+#: check that exists to catch this could not see it.
+_AXIS_SHAPE = {
+    "ska_rank": "choices", "n_ska_layers": "choices", "placement": "choices",
+    "norm_clip_multiplier": "choices", "gamma_value": "choices",
+    "ska_power_K": "choices", "weight_decay": "choices",
+    "warmup_ratio": "choices", "grad_clip": "choices",
+    "ska_ridge": "bounds", "ska_layerscale_init": "bounds",
+    "learning_rate": "bounds",
+}
+
+
+def check_space_is_resolvable(space: Mapping[str, Any]) -> None:
+    """Can `resolve_design` read every axis it needs? Raise naming what is wrong.
+
+    Pure and cheap, so `__main__` calls it during `--dry_run`. The alternative --
+    discovering it from `enqueue_anchors` -- happens after the git gate and after
+    `create_study`, i.e. on the cluster, which is precisely what the dry run
+    exists to prevent.
+    """
+    for axis, shape in sorted(_AXIS_SHAPE.items()):
+        declaration = space.get(axis)
+        if declaration is None:
+            raise ValueError(
+                f"the search space declares no {axis!r}, which anchor resolution "
+                f"requires. Restriction can narrow or pin an axis; it cannot "
+                f"remove one.")
+        needed = ("choices",) if shape == "choices" else ("low", "high")
+        missing = [k for k in needed if k not in declaration]
+        if missing:
+            kind = declaration.get("kind", "?")
+            wanted = ("a categorical (choices)" if shape == "choices"
+                      else "a float range (low/high)")
+            raise ValueError(
+                f"anchor resolution reads {list(needed)} off {axis!r}, but this "
+                f"study declares it as kind={kind!r} (missing {missing}). "
+                f"`resolve_design` expects {wanted} for this axis: a categorical "
+                f"snaps to its nearest choice and a float clamps into its "
+                f"bounds, and those are different operations, so changing an "
+                f"axis's kind in `search_axes` changes which one applies. Either "
+                f"keep {axis!r} as {wanted}, or drop `design_file` for this "
+                f"study.")
+
+
 def resolve_design(design: Design, base_model: KoopmanLMConfig,
                    space: Mapping[str, Mapping[str, Any]], *,
                    base_lr: float) -> Dict[str, Any]:
@@ -120,6 +185,7 @@ def resolve_design(design: Design, base_model: KoopmanLMConfig,
     available point rather than an error, since the design was written against
     the base config and not against this particular study's bounds.
     """
+    check_space_is_resolvable(space)
     placements = space["placement"]["choices"]
     if design.placement not in placements:
         raise ValueError(
@@ -155,12 +221,47 @@ def resolve_design(design: Design, base_model: KoopmanLMConfig,
         "weight_decay": nearest(design.weight_decay, space["weight_decay"]["choices"]),
         "warmup_ratio": nearest(design.warmup_ratio, space["warmup_ratio"]["choices"]),
         "grad_clip": nearest(design.grad_clip, space["grad_clip"]["choices"]),
-        # From the base config, not from a factor. An anchor is defined relative
-        # to the config you already run, and `_with_value_int` guarantees that
-        # config's own K is a declared choice, so this never snaps away.
-        "ska_power_K": int(nearest(base_model.ska_power_K,
-                                   space["ska_power_K"]["choices"])),
+        "ska_power_K": _resolve_power_k(design, base_model, space),
     }
+
+
+def _resolve_power_k(design: Design, base_model: KoopmanLMConfig,
+                     space: Mapping[str, Any]) -> int:
+    """`design.power_K` -> a declared choice, or a loud failure.
+
+    Inherited (`"baseline"`) SNAPS: an anchor is defined relative to the config
+    you already run, and `space._with_value_int` guarantees that config's own K
+    is a declared choice, so the snap never actually moves anything.
+
+    Explicit does NOT snap, for the reason `Design.power_K` documents: silently
+    resolving a requested 3 to 2 leaves a design whose NAME claims one thing and
+    whose params say another. Placement is refused the same way, and for the
+    same reason.
+    """
+    choices = list(space["ska_power_K"]["choices"])
+    if design.power_K == _BASELINE:
+        return int(nearest(base_model.ska_power_K, choices))
+    try:
+        as_float = float(design.power_K)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"design {design.name!r} asks for power_K={design.power_K!r}, which "
+            f"is not a number. Use an integer, or 'baseline' to inherit the base "
+            f"config's own ska_power_K.") from None
+    if as_float != int(as_float):
+        raise ValueError(
+            f"design {design.name!r} asks for power_K={design.power_K!r}; K is a "
+            f"MATRIX POWER and must be a whole number -- int({design.power_K!r}) "
+            f"would silently round it")
+    requested = int(as_float)
+    if requested not in choices:
+        raise ValueError(
+            f"design {design.name!r} asks for power_K={requested}; this study "
+            f"declares {choices}. Unlike a ridge or a learning rate, K is not "
+            f"clamped onto the nearest declared value: a design named for the K "
+            f"it runs at must actually run at it. Either widen the ska_power_K "
+            f"axis in the study's search_axes, or name a declared value.")
+    return requested
 
 
 def designs_to_cells(designs, base_model: KoopmanLMConfig,

@@ -1,0 +1,186 @@
+# A STRUCTURED EXPERIMENTAL DESIGN for the proxy-256x17 interaction study.
+# 24 anchors: one reference plus a one-factor-at-a-time screen plus three K=2
+# cells.
+#
+# ============================ WHAT THIS IS NOT ============================
+# These are NOT curated winners. Nobody has run any of them. Nothing here
+# encodes a belief that rank 32 beats rank 24 or that a heavier ridge helps.
+# Calling a design set "curated" implies a judgement made from evidence, and the
+# evidence this study exists to produce does not exist yet.
+#
+# What they ARE: a **one-factor-at-a-time screen around a single reference
+# point**, chosen so that (a) every axis of the study's space is moved to both
+# of its extremes by a labelled trial, and (b) the resulting set is a usable
+# reference population for a median pruner and a multivariate TPE.
+#
+# The design is deliberately NOT a fractional factorial. A resolution-III
+# fraction over nine axes would be more efficient at estimating main effects and
+# would alias every two-factor interaction onto a main effect -- and two-factor
+# interactions are the thing this study is for. OFAT gives clean, unaliased main
+# effects for the sampler to start from; the 232 sampled trials that follow are
+# what estimate the interactions. The three `k2-*` cells are the one exception,
+# and they are there because `ska_power_K` is the axis most likely to change the
+# SIGN of another axis's effect (K is a matrix power, so it compounds whatever
+# the ridge is doing) and a sampler that has never seen K=2 off its reference
+# cannot propose into that corner.
+# =========================================================================
+#
+# ## The common reference, and how to read a diff from it
+#
+# Every field not written below stays at the reference, which is
+# `configs/runs/proxy-256x17.yaml`'s own value:
+#
+#     rank 24 | 4 SKA layers, baseline placement -> [3, 7, 11, 15]
+#     ridge 0.01 | layerscale_init 0.01 | norm-clip multiplier 4/sqrt(24)
+#     gamma 1.0 | K 1 | lr 4.0e-4
+#     weight_decay 0.1 | warmup_ratio 0.04 | grad_clip 1.0
+#
+# So `reference-k1`, which sets nothing, reproduces the base spec exactly and
+# every other line below is readable as its own diff.
+#
+# ## The factors are RELATIVE, and that has a consequence worth stating
+#
+# `ridge_factor: 0.3` means "0.3x whatever the base uses", not "0.003". That
+# keeps the intent legible and keeps the file meaningful against a different
+# base -- but it also means a resolved value is factor x base CLAMPED INTO THE
+# STUDY'S SPACE, so a factor chosen without checking the bounds can quietly
+# become a smaller move than intended.
+#
+# For this pairing of base and study the arithmetic is exact and nothing clamps:
+# 0.01*0.3 == 0.003 and 0.01*3.0 == 0.03 are the ridge axis's own endpoints,
+# 0.01*0.2 == 0.002 and 0.01*3.0 == 0.03 are the layerscale axis's, and
+# 4.0e-4*0.8 == 3.2e-4 / 4.0e-4*1.2 == 4.8e-4 are the LR axis's -- all five
+# products are exactly representable in binary floating point, verified by test
+# rather than assumed.
+#
+# **One thing DOES snap, and it is deliberate.** `Design.warmup_ratio` defaults
+# to 0.02, and this study FIXES warmup_ratio at 0.04, so every anchor's 0.02
+# snaps onto the study's singleton 0.04. That is the fixed axis working as
+# designed -- an anchor cannot disagree with the study about a pinned parameter
+# -- and it is visible in the resolved artifact
+# (`test_proxy_anchor_design.py::test_the_resolved_design_artifact_is_written`)
+# rather than hidden.
+#
+# ## Why the norm-clip multiplier and not ska_norm_clip_c
+#
+# The study samples a MULTIPLIER and `params_to_overrides` derives
+# `ska_norm_clip_c = multiplier * sqrt(rank)`. So `rank-8` holds the multiplier
+# at the reference and its absolute clip follows the rank down. That is the
+# intended parameterisation: the clip is a bound on a whitened quantity whose
+# natural scale is sqrt(rank), so holding the ABSOLUTE clip while changing rank
+# would change two things at once and holding the multiplier changes one.
+#
+# ## The pruner depends on these finishing
+#
+# MedianPruner prunes nothing until `prune_startup_trials` trials have COMPLETED,
+# and `driver`/`metrics.wait_for_objective` exempt anchors from pruning for
+# exactly that reason. These 24 are the first 24 completions the reference
+# population is built from -- so an anchor that fails is not just a lost trial,
+# it delays the pruner for every trial after it.
+
+designs:
+  # ------------------------------------------------------------ the reference
+  # Sets nothing, so it reproduces configs/runs/proxy-256x17.yaml exactly. Its
+  # job is to make every other anchor's score readable as a delta, and to be the
+  # one trial whose params a reader can check against the base spec by eye.
+  - name: reference-k1
+
+  # ------------------------------------------------------------- rank, 8 -> 32
+  # The capacity axis. `norm_clip_multiplier` is held at the reference, so the
+  # absolute clip scales as sqrt(rank) with it -- see the header.
+  - name: rank-8
+    rank: 8
+  - name: rank-16
+    rank: 16
+  - name: rank-32
+    rank: 32
+
+  # ------------------------------------------------------- SKA depth, 2 -> 8
+  # `layer_factor` multiplies the base's 4, and the study declares
+  # {2, 3, 4, 6, 8}, so these four factors hit the four non-reference choices
+  # exactly. Placement stays `baseline`, which INTERPOLATES across the base
+  # indices' span when the count does not match -- so these vary how many
+  # adapters there are without also moving where they sit.
+  - name: layers-2
+    layer_factor: 0.5
+  - name: layers-3
+    layer_factor: 0.75
+  - name: layers-6
+    layer_factor: 1.5
+  - name: layers-8
+    layer_factor: 2.0
+
+  # ------------------------------------------------------------- placement
+  # Four adapters, moved. On a 17-layer backbone these are four distinct index
+  # sets ([3,7,11,15] / [1,6,10,15] / [5,8,12,15] / [5,9,12,14]); on the
+  # four-layer 4m base they would all collapse onto the same pair, which is why
+  # this study has its own 17-layer proxy.
+  - name: placement-even
+    placement: even
+  - name: placement-midlate
+    placement: midlate
+  - name: placement-late
+    placement: late
+
+  # ---------------------------------------------------------------- ridge
+  # The conditioning axis, and the one the whitened SKA core is most sensitive
+  # to: it is the diagonal loading on the Gram matrix the core Choleskys. The
+  # study's bounds ARE these two values.
+  - name: ridge-low          # 0.01 x 0.3 = 0.003
+    ridge_factor: 0.3
+  - name: ridge-high         # 0.01 x 3.0 = 0.03
+    ridge_factor: 3.0
+
+  # ------------------------------------------------------------- layerscale
+  # How loudly the SKA branch speaks at step 0. Distinct from ridge: this scales
+  # the branch's OUTPUT, ridge conditions its INTERNAL solve.
+  - name: layerscale-low     # 0.01 x 0.2 = 0.002
+    layerscale_factor: 0.2
+  - name: layerscale-high    # 0.01 x 3.0 = 0.03
+    layerscale_factor: 3.0
+
+  # --------------------------------------------------------- norm-clip multiplier
+  # ABSOLUTE, not a factor, because the reference value 4/sqrt(24) is itself a
+  # derived quantity and a factor on it would be a factor on a factor. 0.75 and
+  # 1.25 bracket the reference 0.8165 asymmetrically for that reason.
+  - name: normclip-low
+    norm_clip_multiplier: 0.75
+  - name: normclip-high
+    norm_clip_multiplier: 1.25
+
+  # ------------------------------------------------------------------- gamma
+  - name: gamma-low
+    gamma_value: 0.90
+  - name: gamma-high
+    gamma_value: 1.05
+
+  # ----------------------------------------------------------------- power K
+  # The reference geometry at K=2. Unlike every other anchor above, an explicit
+  # `power_K` does NOT snap onto the nearest declared choice: a design named for
+  # the K it runs at has to actually run at it, so an undeclared K raises. See
+  # `anchors._resolve_power_k`.
+  - name: reference-k2
+    power_K: 2
+
+  # ------------------------------------------------------------ learning rate
+  # +/-20%. The study's LR axis is [3.2e-4, 4.8e-4], deliberately narrow: this is
+  # an ARCHITECTURE study, and a wide LR range would let the sampler spend its
+  # budget re-discovering the optimizer instead of the interactions.
+  - name: lr-low             # 4.0e-4 x 0.8 = 3.2e-4
+    lr_factor: 0.8
+  - name: lr-high            # 4.0e-4 x 1.2 = 4.8e-4
+    lr_factor: 1.2
+
+  # ------------------------------------------------------------- K x ridge
+  # The only two-factor cells in the set, and the reason is in the header: K is a
+  # matrix power, so it compounds whatever the ridge is doing, and this is the
+  # pair most likely to show a sign change rather than a shift. With
+  # `reference-k2`, `ridge-low` and `ridge-high` these four points are a complete
+  # 2x2 over (K, ridge-extreme) around the reference -- the one interaction this
+  # design set estimates on its own rather than leaving to the sampler.
+  - name: k2-ridge-low
+    power_K: 2
+    ridge_factor: 0.3
+  - name: k2-ridge-high
+    power_K: 2
+    ridge_factor: 3.0

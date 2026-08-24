@@ -101,8 +101,9 @@ from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.geometry import (
     PLACEMENTS, layer_count_choices, make_layer_indices)
 
-__all__ = ["BACKEND_POLICIES", "default_base_lr", "search_space",
-           "params_to_overrides"]
+__all__ = ["BACKEND_POLICIES", "REQUIRED_PARAMS", "base_reference_point",
+           "default_base_lr", "dropped_base_values", "restrict_space",
+           "search_space", "params_to_overrides"]
 
 # Ordered by what a study should reach for first. See the module docstring for
 # the measurement (jobs 440122 / 440135) that put inverse_cholesky at the front.
@@ -244,6 +245,330 @@ def search_space(base_model: KoopmanLMConfig, *,
         "warmup_ratio": {"kind": "categorical", "choices": list(DEFAULT_WARMUP_RATIOS)},
         "grad_clip": {"kind": "categorical", "choices": list(DEFAULT_GRAD_CLIPS)},
     }
+
+
+# --------------------------------------------------------------------------
+# Per-study restriction of the declared space.
+# --------------------------------------------------------------------------
+#
+# `search_space()` is the space the REPO declares; a study may narrow it. Two
+# operations, and only two:
+#
+#   search_axes   replace one axis's declaration outright
+#   fixed_params  pin one axis to a single value
+#
+# There is deliberately no third. A generic "overrides" dict was the obvious
+# design and is the wrong one: `params_to_overrides` requires twelve named
+# parameters and `KoopmanLMConfig` asserts on four of them, so an unvalidated
+# passthrough turns a one-line typo in a YAML file into a failed trial on a GPU,
+# after a run directory has been claimed. Every value that arrives here is
+# checked against the axis's real domain before it can reach a sampler.
+#
+# **Replacement, not intersection.** An entry in `search_axes` discards the base
+# declaration including the baseline containment `search_space()` folds in. That
+# is a decision, not an oversight: an interaction study over
+# ridge in [3e-3, 3e-2] must be able to say exactly that, and a study whose base
+# config sits outside its own declared range is a legitimate thing to want (the
+# base becomes a reference point outside the search rather than a member of it).
+# What is NOT legitimate is doing it by accident, so `restrict_space` reports
+# every axis whose base value it dropped and `__main__` prints that in the plan.
+
+#: Every parameter `params_to_overrides` reads. Named so a restriction can be
+#: checked for completeness rather than discovered incomplete by a KeyError on
+#: trial 0. `ska_power_K` is read with `.get` (report.py replays archived
+#: journals that predate it) but is still required of a live space.
+REQUIRED_PARAMS = (
+    "ska_rank", "n_ska_layers", "placement", "ska_ridge", "ska_layerscale_init",
+    "norm_clip_multiplier", "gamma_value", "ska_power_K", "learning_rate",
+    "weight_decay", "warmup_ratio", "grad_clip",
+)
+
+#: Axes whose values index or count something. Coerced to `int`, for the reason
+#: `_with_value_int` gives: optuna records the sampled value verbatim, so a
+#: choice of 1.0 is a different category from a hand-written 1 in an anchor.
+_INT_AXES = frozenset({"ska_rank", "n_ska_layers", "ska_power_K"})
+#: Axes whose values name something. Left as strings.
+_STR_AXES = frozenset({"placement"})
+
+
+def _coerce(axis: str, value: Any) -> Any:
+    # `bool` first, and before `_STR_AXES`, because Python makes it invisible
+    # otherwise: `bool` IS an `int`, so `float(True)` is 1.0 and `int(1.0)` is 1.
+    # A study writing `ska_power_K: true` would have been silently accepted as
+    # K=1, and `str(True)` is "True", which is not a placement. YAML makes this
+    # reachable rather than theoretical -- `yes`, `on` and `true` all parse to
+    # True. `StudySpec` also rejects a bool in `fixed_params`, but this function
+    # is the public entry point for a caller who did not come through a StudySpec,
+    # and two layers that disagree about what is legal is how the weaker one
+    # becomes the real contract.
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{axis}={value!r} is a boolean. YAML parses `true`, `yes` and `on` "
+            f"that way, and Python's bool is an int -- so this would silently "
+            f"become {int(value)} rather than being rejected. Write the number.")
+    if axis in _STR_AXES:
+        return str(value)
+    if axis in _INT_AXES:
+        as_float = float(value)
+        if as_float != int(as_float):
+            raise ValueError(
+                f"{axis}={value!r} must be a whole number -- it counts or indexes "
+                f"something, and int({value!r}) would silently round it")
+        return int(as_float)
+    return float(value)
+
+
+def _check_rank(value: int, base_model: KoopmanLMConfig) -> None:
+    if value < 8 or value % 8 != 0:
+        raise ValueError(
+            f"ska_rank={value} must be a positive multiple of 8 -- "
+            f"KoopmanLMConfig asserts it, so this would fail on the GPU after a "
+            f"run directory was materialized")
+
+
+def _check_layer_count(value: int, base_model: KoopmanLMConfig) -> None:
+    capacity = max(1, base_model.n_layers - 2)
+    if value < 1:
+        raise ValueError(f"n_ska_layers={value} must be >= 1")
+    if value > capacity:
+        raise ValueError(
+            f"n_ska_layers={value} exceeds the usable window of a "
+            f"{base_model.n_layers}-layer backbone, which is {capacity} "
+            f"(geometry.py keeps layer 0 and the final layer free). "
+            f"make_layer_indices CLAMPS rather than raising, so this would not "
+            f"fail -- it would silently collapse onto the same indices as "
+            f"n_ska_layers={capacity} and give the study a DEAD AXIS: two "
+            f"choices, one resolved config, and a parameter importance computed "
+            f"over a difference that does not exist.")
+
+
+def _check_placement(value: str, base_model: KoopmanLMConfig) -> None:
+    if value not in PLACEMENTS:
+        raise ValueError(
+            f"placement={value!r}; geometry.py declares {list(PLACEMENTS)}")
+
+
+def _positive(name: str):
+    def check(value: float, base_model: KoopmanLMConfig) -> None:
+        if not float(value) > 0.0:
+            raise ValueError(f"{name}={value} must be > 0")
+    return check
+
+
+def _check_warmup_ratio(value: float, base_model: KoopmanLMConfig) -> None:
+    if not 0.0 <= float(value) <= 1.0:
+        raise ValueError(
+            f"warmup_ratio={value} must lie in [0, 1] -- it is multiplied by "
+            f"max_steps to get optim.warmup_steps, so a ratio above 1 warms up "
+            f"for the whole run and never decays")
+
+
+def _check_weight_decay(value: float, base_model: KoopmanLMConfig) -> None:
+    if float(value) < 0.0:
+        raise ValueError(f"weight_decay={value} must be >= 0")
+
+
+#: One domain check per axis. Every axis in `search_space()` has an entry, and
+#: `test_search_axis_restriction.py` asserts the two sets are equal -- so adding
+#: an axis without a validator fails a test rather than creating a hole.
+_AXIS_DOMAINS = {
+    "ska_rank": _check_rank,
+    "n_ska_layers": _check_layer_count,
+    "placement": _check_placement,
+    "ska_ridge": _positive("ska_ridge"),
+    "ska_layerscale_init": _positive("ska_layerscale_init"),
+    "norm_clip_multiplier": _positive("norm_clip_multiplier"),
+    "gamma_value": _positive("gamma_value"),
+    "ska_power_K": _positive("ska_power_K"),
+    "learning_rate": _positive("learning_rate"),
+    "weight_decay": _check_weight_decay,
+    "warmup_ratio": _check_warmup_ratio,
+    "grad_clip": _positive("grad_clip"),
+}
+
+
+def _validated_declaration(axis: str, declaration: Mapping[str, Any],
+                           base_model: KoopmanLMConfig) -> Dict[str, Any]:
+    """One replacement declaration -> the same declaration, coerced and checked.
+
+    `StudySpec` has already checked the SHAPE (kind, required keys, low < high).
+    What it could not check is the DOMAIN, because that needs the base model --
+    the layer-index capacity and `d_model % ska_n_heads` live there. So the two
+    validations are split along the line of what each module can see, and this
+    half is the one that would otherwise surface on a GPU.
+    """
+    check = _AXIS_DOMAINS[axis]
+    kind = declaration["kind"]
+    if kind == "categorical":
+        choices = [_coerce(axis, c) for c in declaration["choices"]]
+        for choice in choices:
+            check(choice, base_model)
+        if len(set(choices)) != len(choices):
+            raise ValueError(
+                f"search_axes[{axis!r}]: choices {choices} contain duplicates "
+                f"after coercion to the axis's own type -- e.g. 1 and 1.0 are "
+                f"one category once coerced, and a duplicate doubles that "
+                f"value's prior weight")
+        return {"kind": "categorical", "choices": choices}
+
+    low, high = float(declaration["low"]), float(declaration["high"])
+    if low >= high:
+        # `StudySpec` rejects this too, with a longer message pointing at
+        # `fixed_params`. Repeated here for the same reason `_coerce` rejects
+        # bools: this is the entry point for a caller who did not come through a
+        # StudySpec, and low == high would otherwise become a degenerate
+        # FloatDistribution -- legal to optuna, `single()`, and indistinguishable
+        # in the journal from an axis the sampler simply never varied.
+        raise ValueError(
+            f"search_axes[{axis!r}]: low={low} must be strictly less than "
+            f"high={high}. low == high is a fixed value, not a range -- put it "
+            f"in fixed_params, where it becomes a validated singleton "
+            f"categorical instead of a degenerate interval.")
+    check(low, base_model)
+    check(high, base_model)
+    if axis in _INT_AXES or axis in _STR_AXES:
+        raise ValueError(
+            f"search_axes[{axis!r}] declares a 'float' range, but {axis} counts "
+            f"or names something and is categorical everywhere else. A "
+            f"FloatDistribution here would put non-integral values in the "
+            f"journal that no anchor could ever match.")
+    out: Dict[str, Any] = {"kind": "float", "low": low, "high": high}
+    if declaration.get("log"):
+        out["log"] = True
+    return out
+
+
+def _contains(declaration: Mapping[str, Any], value: Any) -> bool:
+    if declaration["kind"] == "categorical":
+        return any(choice == value for choice in declaration["choices"])
+    return float(declaration["low"]) <= float(value) <= float(declaration["high"])
+
+
+def _describe(declaration: Mapping[str, Any]) -> str:
+    if declaration["kind"] == "categorical":
+        return f"choices {list(declaration['choices'])}"
+    scale = "log" if declaration.get("log") else "linear"
+    return f"{scale} range [{declaration['low']}, {declaration['high']}]"
+
+
+def restrict_space(space: Mapping[str, Mapping[str, Any]],
+                   base_model: KoopmanLMConfig, *,
+                   axes: Optional[Mapping[str, Mapping[str, Any]]] = None,
+                   fixed: Optional[Mapping[str, Any]] = None,
+                   ) -> Dict[str, Dict[str, Any]]:
+    """`search_space()`'s output, narrowed by a study's own declarations.
+
+    Returns a NEW space; `space` is not mutated. With both arguments empty the
+    result is `dict(space)` -- byte-for-byte the behaviour that existed before
+    this function, which is what lets every committed study keep its current
+    space by saying nothing.
+
+    Raises on: an axis this space does not declare, a declaration whose values
+    fall outside the axis's real domain, a fixed value outside the declaration
+    it is being fixed within, and a restriction that leaves
+    `params_to_overrides` without a parameter it requires.
+    """
+    axes = dict(axes or {})
+    fixed = dict(fixed or {})
+    restricted: Dict[str, Dict[str, Any]] = {
+        name: dict(decl) for name, decl in space.items()}
+
+    unknown = sorted((set(axes) | set(fixed)) - set(restricted))
+    if unknown:
+        raise ValueError(
+            f"unknown search axis/axes {unknown}. This study declares "
+            f"{sorted(restricted)}. Axis names are the SAMPLED parameter names "
+            f"from space.search_space(), not RunSpec field paths -- "
+            f"'model.ska_rank' is a field override and 'ska_rank' is an axis.")
+
+    for name, declaration in sorted(axes.items()):
+        restricted[name] = _validated_declaration(name, declaration, base_model)
+
+    for name, value in sorted(fixed.items()):
+        coerced = _coerce(name, value)
+        _AXIS_DOMAINS[name](coerced, base_model)
+        if not _contains(restricted[name], coerced):
+            raise ValueError(
+                f"fixed_params[{name!r}]={value!r} lies outside this axis's "
+                f"declaration ({_describe(restricted[name])}). Fixing is meant "
+                f"to REMOVE a degree of freedom, not to smuggle in a value the "
+                f"space says is out of range -- if the value is what you want, "
+                f"widen the axis in search_axes and say so where a reader can "
+                f"see it.")
+        # A validated SINGLETON, not a deletion. See StudySpec.fixed_params for
+        # the three properties that depend on the axis still being in the space.
+        restricted[name] = {"kind": "categorical", "choices": [coerced]}
+
+    missing = [name for name in REQUIRED_PARAMS if name not in restricted]
+    if missing:
+        raise ValueError(
+            f"the restricted space is missing {missing}, which "
+            f"params_to_overrides requires. Restriction can narrow an axis or "
+            f"pin it; it cannot delete one, because every trial still has to "
+            f"resolve to a complete RunSpec.")
+    return restricted
+
+
+def base_reference_point(base_model: KoopmanLMConfig, *,
+                         base_lr: Optional[float] = None,
+                         base_optim: Optional[Mapping[str, Any]] = None
+                         ) -> Dict[str, Any]:
+    """The base config expressed in the space's own vocabulary.
+
+    This is what "baseline containment" is containment OF: the point a sampler
+    would have to propose in order to reproduce the config the study is trying
+    to beat. `search_space()` folds these values into its declarations for that
+    reason; a restriction can drop them, and this is what makes the drop visible.
+
+    `warmup_ratio` is deliberately absent. It is a ratio of the STUDY's
+    `max_steps`, which is not the base spec's, so the base has no warmup_ratio to
+    contain -- only a warmup_steps against a different run length.
+    """
+    optim = dict(base_optim or {})
+    multiplier = base_model.ska_norm_clip_c
+    if multiplier is None:
+        multiplier = math.sqrt(base_model.ska_rank)
+    point: Dict[str, Any] = {
+        "ska_rank": int(base_model.ska_rank),
+        "n_ska_layers": len(base_model.ska_layer_indices),
+        "placement": "baseline",
+        "ska_ridge": float(base_model.ska_ridge),
+        "ska_layerscale_init": float(base_model.ska_layerscale_init),
+        "norm_clip_multiplier": float(multiplier) / math.sqrt(base_model.ska_rank),
+        "gamma_value": float(base_model.ska_gamma_value),
+        "ska_power_K": int(base_model.ska_power_K),
+    }
+    lr = base_lr if base_lr is not None else optim.get("lr")
+    if lr is not None:
+        point["learning_rate"] = float(lr)
+    for axis, key in (("weight_decay", "weight_decay"), ("grad_clip", "grad_clip")):
+        if key in optim:
+            point[axis] = float(optim[key])
+    return point
+
+
+def dropped_base_values(restricted: Mapping[str, Mapping[str, Any]],
+                        base_model: KoopmanLMConfig, *,
+                        base_lr: Optional[float] = None,
+                        base_optim: Optional[Mapping[str, Any]] = None
+                        ) -> Dict[str, str]:
+    """Axes on which this space can no longer express the base config.
+
+    Reported rather than rejected. Dropping the baseline is sometimes exactly
+    right -- an interaction study may deliberately search only around, not
+    including, its reference -- and it is always worth printing, because the
+    alternative is a study that quietly cannot reproduce the config it is
+    claiming to improve on.
+    """
+    lost: Dict[str, str] = {}
+    for axis, value in base_reference_point(
+            base_model, base_lr=base_lr, base_optim=base_optim).items():
+        declaration = restricted.get(axis)
+        if declaration is None or _contains(declaration, value):
+            continue
+        lost[axis] = (f"the base config's own {axis}={value!r} is outside "
+                      f"{_describe(declaration)}")
+    return lost
 
 
 def _backend_overrides(policy: str, rank: int, *,
