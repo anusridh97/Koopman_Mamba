@@ -64,6 +64,17 @@ export STUDY_CONFIG="${STUDY_CONFIG:-configs/search/smoke-4m.yaml}"
 export STUDY_NAME="$(basename "$STUDY_CONFIG" .yaml)"
 echo "study config: $STUDY_CONFIG  (study_name $STUDY_NAME)"
 
+# Per-worker logs. Set unconditionally, because it is read by
+# `__main__.WORKER_LOG_DIR_ENV` only when a fanout actually happens -- so a
+# single-worker study ignores it and a fanout study gets separate streams
+# instead of one interleaved one. Without it a child's traceback lands under
+# another child's progress line, which is how a fleet failure becomes
+# unreadable. The name is `KOOPMAN_SEARCH_WORKER_LOG_DIR` and not `WORKER_LOG_DIR`
+# because the latter was exported by `run_proxy_256x17_interactions.sbatch` for a
+# while and read by NOTHING.
+export KOOPMAN_SEARCH_WORKER_LOG_DIR="$RUN_ROOT/worker-logs"
+echo "worker logs:  $KOOPMAN_SEARCH_WORKER_LOG_DIR"
+
 # ---------------------------------------------------------------------------
 # A PER-JOB STUDY SPEC, because the run root can no longer come from a flag.
 # ---------------------------------------------------------------------------
@@ -266,7 +277,87 @@ if not pruned:
     print("      none. Legitimate if no sampled config fell below the median at a")
     print("      reported step, or if every trial was anchor-exempt.")
 
-ok = bool(completed) and bool(found) and bool(reported)
+# 7. THE FANOUT, when this study declares one. Everything above is true of a
+#    single-worker study too; these are the checks that only mean something once
+#    `_fanout` has actually spawned processes -- and until now nothing had ever
+#    run that path under a scheduler. Run with
+#      STUDY_CONFIG=configs/search/smoke-fanout.yaml sbatch scripts/verify_study_e2e.sbatch
+#    and see that file's header for what two workers do and do not prove.
+from experimentation.sweep.search.studyspec import load_study_spec
+
+spec = load_study_spec(os.environ["GENERATED_STUDY"])
+fanout_ok = True
+if spec.concurrent_trials <= 1:
+    print(f"[7] concurrent_trials={spec.concurrent_trials}: no fanout to check. "
+          f"Run with STUDY_CONFIG=configs/search/smoke-fanout.yaml to exercise it.")
+else:
+    print(f"\n[7] FANOUT, concurrent_trials={spec.concurrent_trials}")
+
+    # (a) Two OS processes really appended to one journal without colliding. A
+    #     duplicate trial number means two GPUs trained one config and one result
+    #     overwrote the other's directory.
+    numbers = [t.number for t in study.trials]
+    duplicates = sorted(n for n in set(numbers) if numbers.count(n) > 1)
+    print(f"    (a) {len(numbers)} trials, duplicate numbers: {duplicates or 'none'}")
+    fanout_ok &= not duplicates
+
+    # (b) More than one worker did work, and each sampled from its own stream.
+    #     `sampler_seed_for(seed, worker_index)` is arithmetic the CPU suite
+    #     checks; that two LIVE processes wrote two different values into the
+    #     journal is not.
+    seeds = {t.user_attrs.get("sampler_seed") for t in study.trials}
+    workers = {t.user_attrs.get("worker_id") for t in study.trials}
+    seeds.discard(None)
+    workers.discard(None)
+    expected = set(range(spec.seed, spec.seed + spec.concurrent_trials))
+    print(f"    (b) worker_ids {sorted(workers)}, sampler_seeds {sorted(seeds)} "
+          f"(expected subset of {sorted(expected)})")
+    fanout_ok &= len(workers) >= 2 and len(seeds) >= 2 and seeds <= expected
+
+    # (c) The MODEL seed did not move with the worker. This is the one thing a
+    #     search must never do: a trial whose result depends on which worker
+    #     pulled it is not a measurement of its config.
+    model_seeds = {t.user_attrs.get("model_seed") for t in study.trials}
+    model_seeds.discard(None)
+    print(f"    (c) model_seeds {sorted(model_seeds)} -- must NOT vary with the "
+          f"worker (only designated reference repeats may vary it)")
+    fanout_ok &= len(model_seeds) == 1
+
+    # (d) Every anchor ran exactly once. Two workers racing for one WAITING
+    #     enqueued trial is the fanout-specific way to lose an anchor, and with
+    #     reference replicates sharing one params dict a params-based dedup could
+    #     not detect it.
+    anchors = [t.user_attrs.get("anchor_name") for t in study.trials]
+    anchors = [a for a in anchors if a]
+    repeated = sorted(a for a in set(anchors) if anchors.count(a) > 1)
+    print(f"    (d) {len(anchors)} anchor trial(s), run more than once: "
+          f"{repeated or 'none'}")
+    fanout_ok &= not repeated
+
+    # (e) Per-worker logs are separate files, not one interleaved stream.
+    log_dir = pathlib.Path(os.environ.get("KOOPMAN_SEARCH_WORKER_LOG_DIR", ""))
+    logs = sorted(log_dir.glob("worker-*.log")) if log_dir.is_dir() else []
+    print(f"    (e) worker logs: {[p.name for p in logs] or 'NONE'}")
+    fanout_ok &= len(logs) == spec.concurrent_trials
+    for log in logs:
+        size = log.stat().st_size
+        print(f"        {log.name}: {size} bytes")
+        fanout_ok &= size > 0
+
+    # (f) The report was written AFTER the workers finished, from a REATTACHED
+    #     study. The supervisor's own Study object is a stale snapshot taken
+    #     before any worker ran, so a report describing an empty study is the
+    #     exact bug reattachment exists to fix -- and it needs real child
+    #     processes to occur.
+    import csv as _csv
+    rows = list(_csv.DictReader((sd / "trials.csv").read_text().splitlines()))
+    print(f"    (f) trials.csv rows {len(rows)} vs journal trials "
+          f"{len(study.trials)}")
+    fanout_ok &= len(rows) == len(study.trials) and len(rows) > 0
+
+    print(f"    fanout verdict: {'PASS' if fanout_ok else 'FAIL'}")
+
+ok = bool(completed) and bool(found) and bool(reported) and fanout_ok
 print(f"\nVERDICT: {'PASS' if ok else 'FAIL'}")
 if not ok:
     print("  the loop did not close. FAIL on every trial is exactly what this")
