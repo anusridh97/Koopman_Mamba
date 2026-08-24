@@ -12,8 +12,10 @@ Three construction choices, each with a reason.
 be resumed, and several processes can attach to the same study concurrently. That
 last property is the reason to prefer N single-GPU processes over
 `study.optimize(n_jobs=N)`'s thread pool, which modern optuna deprecates.
-The spec field that sizes our fleet is `workers`, deliberately not named
-`n_jobs`, so the two ideas cannot be confused.
+The spec field that sizes our fleet is `concurrent_trials`, deliberately named
+neither `n_jobs` (optuna's thread pool, which we reject) nor `workers`
+(`RuntimeSpec.workers` is the dataloader count), so the three ideas cannot be
+confused.
 
 **`constant_liar` when running in parallel.** With N workers in flight and none
 finished, every worker proposes from the same history and they converge on nearly
@@ -59,18 +61,21 @@ import optuna
 
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.anchors import resolve_design
+from experimentation.sweep.search.studyspec import (
+    DEFAULT_STARTUP_TRIALS, SAMPLERS, derived_prune_startup_trials)
 
-__all__ = ["to_distribution", "to_distributions", "make_sampler", "make_pruner",
-           "prune_startup_trials_for",
+__all__ = ["SAMPLERS", "to_distribution", "to_distributions", "make_sampler",
+           "make_pruner", "prune_startup_trials_for", "sampler_seed_for",
            "make_storage", "create_study", "enqueue_anchors", "is_anchor",
            "ANCHOR_ATTR"]
 
 ANCHOR_ATTR = "anchor_name"
 
-# TPE samples randomly until this many trials have completed; with a curated
+# TPE samples randomly until this many trials have FINISHED (optuna counts
+# COMPLETE and PRUNED here, not COMPLETE alone -- verified, not assumed); with an
 # anchor set the anchors themselves fill the startup window, so TPE begins
-# modelling from hand-chosen points rather than from noise.
-DEFAULT_STARTUP_TRIALS = 4
+# modelling from chosen points rather than from noise. Re-exported from
+# studyspec, which owns it because __main__ needs it without optuna.
 
 # The trainer's default logging cadence (train.py --logging_steps). The pruner is
 # consulted on this interval because that is when progress reports actually exist.
@@ -105,38 +110,98 @@ def to_distributions(space: Mapping[str, Mapping[str, Any]]
     return {name: to_distribution(decl) for name, decl in space.items()}
 
 
-def make_sampler(*, seed: int, workers: int = 1) -> optuna.samplers.BaseSampler:
-    """A seeded TPE sampler, made parallel-safe when more than one worker runs.
+def sampler_seed_for(seed: int, worker_id: Optional[int]) -> int:
+    """The SAMPLER's seed for one worker. Never the model's or the data's.
 
-    `workers` is the study spec's fleet size, which is also what spawns the
-    processes -- so constant_liar is on exactly when a fleet actually exists.
-    It used to come from `n_jobs`, a field that launched nothing, so a study
-    could run 8 workers with constant_liar off and have all 8 propose from an
-    identical history.
+    The gap this closes. `_fanout` spawns N identical processes and each builds
+    its own sampler; with one seed for all of them, every worker's TPE draws the
+    *same* random stream, so the whole startup window is N copies of one sequence
+    and `constant_liar` is left to repel proposals that were identical by
+    construction. Deriving a distinct stream per worker is what makes N workers
+    explore N times as much rather than N times as often.
+
+    `seed + worker_id` and not a hash, for one reason: a study's provenance
+    should be arithmetic a human can check against `trials.csv`. Worker 3 of the
+    2026-seeded study sampled with 2029, and the trial metadata says so.
+
+    **This must not touch the model or the data.** `runtime.seed` is what seeds
+    initialisation and batch order, it lives on the base run spec, and nothing
+    here writes it -- so two trials with identical params still have identical
+    `run_id`s and are still the same experiment. Varying the model seed per
+    worker would make every trial's result depend on which worker happened to
+    pull it, which is the one thing a search must never do.
     """
-    if workers <= 1:
-        return optuna.samplers.TPESampler(seed=seed,
-                                          n_startup_trials=DEFAULT_STARTUP_TRIALS)
+    return int(seed) + int(worker_id or 0)
+
+
+def make_sampler(*, seed: int, concurrent_trials: int = 1,
+                 sampler: str = "tpe",
+                 startup_trials: Optional[int] = None,
+                 worker_id: Optional[int] = None
+                 ) -> optuna.samplers.BaseSampler:
+    """The sampler this study declares, seeded for this worker.
+
+    `concurrent_trials` is the study spec's fleet size, which is also what
+    spawns the processes -- so constant_liar is on exactly when a fleet actually
+    exists. It used to come from `n_jobs`, a field that launched nothing, so a
+    study could run 8 workers with constant_liar off and have all 8 propose from
+    an identical history.
+
+    `sampler` and `startup_trials` come from the StudySpec, so every worker
+    reconstructs the same sampler. Defaults reproduce exactly what existed
+    before those fields: independent TPE at `DEFAULT_STARTUP_TRIALS`.
+    """
+    if sampler not in SAMPLERS:
+        raise ValueError(
+            f"unknown sampler {sampler!r}; expected one of {list(SAMPLERS)}")
+    resolved_seed = sampler_seed_for(seed, worker_id)
+    if sampler == "random":
+        if startup_trials is not None:
+            raise ValueError(
+                "RandomSampler has no n_startup_trials -- every trial is drawn "
+                "the same way. Passing one would be silently ignored, so it is "
+                "refused instead.")
+        return optuna.samplers.RandomSampler(seed=resolved_seed)
+
+    startup = (DEFAULT_STARTUP_TRIALS if startup_trials is None
+               else int(startup_trials))
+    if startup < 1:
+        raise ValueError(f"sampler startup_trials must be >= 1, got {startup}")
+    kwargs = {"seed": resolved_seed, "n_startup_trials": startup}
+    if sampler == "tpe_multivariate":
+        # `group=False` deliberately. `group=True` partitions the space by which
+        # parameters co-occur, which is the right answer for a DYNAMIC space and
+        # the wrong one here: this space is static and complete, so grouping
+        # would only split the joint estimate `multivariate=True` exists to fit
+        # -- and `sample_relative` drops `single()` distributions under
+        # group=True, which is precisely how our fixed axes are spelled.
+        kwargs["multivariate"] = True
+    if concurrent_trials > 1:
+        kwargs["constant_liar"] = True
+    # BOTH `multivariate` and `constant_liar` are flagged experimental by optuna.
+    # Opting in deliberately -- see the module docstring -- and scoping the filter
+    # to this one construction so no other optuna warning is hidden. Silencing it
+    # at the one opt-in site rather than globally is the whole point: a study that
+    # does not ask for either still sees every warning optuna raises.
+    #
+    # This is unconditional now. It used to wrap only the constant_liar branch,
+    # which meant `sampler: tpe_multivariate` at `concurrent_trials: 1` printed an
+    # ExperimentalWarning per worker per launch -- noise that trains people to
+    # ignore the output the plan printer is trying to be read in.
     with warnings.catch_warnings():
-        # constant_liar is marked experimental. Opting in deliberately -- see the
-        # module docstring -- and scoping the filter to this one call so no other
-        # optuna warning is hidden.
         warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
-        return optuna.samplers.TPESampler(seed=seed,
-                                          n_startup_trials=DEFAULT_STARTUP_TRIALS,
-                                          constant_liar=True)
+        return optuna.samplers.TPESampler(**kwargs)
 
 
 def prune_startup_trials_for(n_trials: Optional[int]) -> int:
     """How many completions to wait for before pruning anything.
 
-    `min(6, max(3, n_trials // 3))`, matching the original harness: scales with
-    the study so a long study does not spend a third of itself unprunable, and
-    floors at 3 so a short one never prunes off a single datapoint.
+    Delegates to `studyspec.derived_prune_startup_trials`, which is where the
+    formula now lives: `__main__`'s plan printer needs the same number and must
+    not import optuna, so the pure arithmetic sits below the optuna line and this
+    stays as the name the rest of this module already used.
     """
-    if not n_trials or n_trials < 1:
-        return DEFAULT_STARTUP_TRIALS
-    return min(6, max(3, n_trials // 3))
+    return derived_prune_startup_trials(n_trials)
 
 
 def make_pruner(*, prune_after_step: int = DEFAULT_PRUNE_AFTER_STEP,
@@ -178,7 +243,10 @@ def make_storage(study_dir, storage_url: Optional[str] = None):
 
 
 def create_study(*, study_name: str, study_dir, seed: int = 2026,
-                 workers: int = 1,
+                 concurrent_trials: int = 1,
+                 sampler: str = "tpe",
+                 sampler_startup_trials: Optional[int] = None,
+                 worker_id: Optional[int] = None,
                  prune_after_step: int = DEFAULT_PRUNE_AFTER_STEP,
                  prune_startup_trials: Optional[int] = None,
                  n_trials: Optional[int] = None,
@@ -189,11 +257,19 @@ def create_study(*, study_name: str, study_dir, seed: int = 2026,
     `load_if_exists` is what makes a search resumable: rerunning the driver
     against the same directory continues the study rather than starting a second
     one that knows nothing about the GPU-hours already spent.
+
+    `worker_id` reaches only the SAMPLER's seed (see `sampler_seed_for`), so two
+    workers attached to this journal agree about the space, the sampler class,
+    the pruner and the model seed, and differ only in which random stream their
+    proposals come from.
     """
     return optuna.create_study(
         study_name=study_name,
         storage=make_storage(study_dir, storage_url),
-        sampler=make_sampler(seed=seed, workers=workers),
+        sampler=make_sampler(seed=seed, concurrent_trials=concurrent_trials,
+                             sampler=sampler,
+                             startup_trials=sampler_startup_trials,
+                             worker_id=worker_id),
         pruner=make_pruner(prune_after_step=prune_after_step,
                            prune_startup_trials=prune_startup_trials,
                            n_trials=n_trials,

@@ -24,8 +24,8 @@
 # model, run the final quick_eval, write the results) plus ~0.12 s/step.
 #
 # So 1500 steps is ~3.5 min per trial. 150 trials is ~8.7 hours SERIAL, which is
-# why this file is not serial: at `workers: 8` it is **~65 minutes**, less once
-# pruning starts killing trials at step 400. Long enough that the loss
+# why this file is not serial: at `concurrent_trials: 8` it is **~65 minutes**,
+# less once pruning starts killing trials at step 400. Long enough that the loss
 # separates, short enough to finish unattended without holding GPUs overnight.
 #
 # max_steps 1500 rather than the golden curve's 400: at 200 steps the smoke
@@ -36,8 +36,8 @@
 #
 # ## Parallel, and it launches itself
 #
-# `workers: 8` means eight concurrent trials. The command spawns them, pins each
-# to a visible GPU round-robin, and writes one report when they finish -- so
+# `concurrent_trials: 8` means eight trials in flight. The command spawns them,
+# pins each to a visible GPU round-robin, and writes one report when they finish -- so
 # `python -m experimentation.sweep.search configs/search/4m-adaptive.yaml` is the
 # whole invocation. This replaces `n_jobs`, which only flipped constant_liar and
 # launched nothing, so a study could say `n_jobs: 1` while eight hand-started
@@ -84,7 +84,7 @@ prune_after_step: 400
 logging_steps: 25
 
 launcher: local
-workers: 8
+concurrent_trials: 8
 seed: 2026
 direction: minimize
 
