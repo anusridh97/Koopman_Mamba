@@ -1,4 +1,4 @@
-"""configs/search/proxy-256x17-anchors.yaml: 24 anchors, resolved and checked.
+"""configs/search/proxy-256x17-anchors.yaml: 28 anchors, resolved and checked.
 
 A design file is written in RELATIVE terms and resolved against both a base
 config and a study's declared space, and resolution both scales AND snaps -- a
@@ -8,14 +8,24 @@ fixed axis collapses onto its singleton. Every one of those is silent, and
 `ridge_factor: 4.0` asking for 0.04, resolving to 0.03, and becoming a smaller
 move than its author intended with nothing saying so.
 
-So this file resolves all 24 against the REAL base and the REAL study space and
+So this file resolves all 28 against the REAL base and the REAL study space and
 asserts what a structured design has to satisfy:
 
-**Uniqueness twice over.** Distinct names (`load_designs` enforces that) AND
-distinct resolved points. Two anchors that snap onto the same params are one
-anchor run twice -- `enqueue_trial(skip_if_exists=True)` would silently drop the
-second, so the study would quietly have 23 references and a gap where a labelled
-factor should be.
+**Uniqueness twice over, EXCEPT inside a replicate set.** Distinct names
+(`load_designs` enforces that) and distinct resolved points -- two anchors that
+snap onto the same params by accident are one anchor run twice, and the study
+would quietly have one fewer reference and a gap where a labelled factor should
+be.
+
+The five members of the `reference` group are the deliberate exception, and the
+inversion is worth stating: they MUST resolve to byte-identical params, because
+they differ only in `runtime.seed`, which is not a search parameter and therefore
+is not in the params dict at all. So this file asserts uniqueness OUTSIDE the
+group and identity WITHIN it, and asserts that they still reach distinct
+`run_id`s -- which they do because `runtime.seed` is inside
+`_scientific_payload(include_seed=True)`. Their spread in held-out loss is the
+study's noise floor, so a design change that collapsed them would silently
+replace a measured floor with zero.
 
 **One factor at a time, verified AFTER resolution.** `rank-8` must differ from
 `reference-k1` in `ska_rank` and nothing else. Checking the design file would
@@ -51,13 +61,28 @@ STUDY = REPO / "configs/search/proxy-256x17-interactions-v1.yaml"
 DESIGNS = REPO / "configs/search/proxy-256x17-anchors.yaml"
 ARTIFACT = REPO / "docs/proxy-256x17-anchors-resolved.md"
 
-EXPECTED_ANCHORS = 24
+EXPECTED_ANCHORS = 28
+
+#: The replicate set: one configuration, five training seeds, and the ONLY group
+#: of anchors permitted to resolve onto the same params. Their spread in held-out
+#: loss is the study's noise floor.
+REPLICATES = ("reference-k1", "reference-seed-43", "reference-seed-44",
+              "reference-seed-45", "reference-seed-46")
+EXPECTED_SEEDS = (42, 43, 44, 45, 46)
 
 #: name -> the ONE resolved param key it is allowed to move away from
 #: `reference-k1`. `None` marks the reference itself; a tuple marks the three
 #: deliberate two-factor cells.
 ONE_FACTOR = {
     "reference-k1": (),
+    # The seed repeats move NO param, by construction: the seed is not a search
+    # axis, so it does not appear in a params dict. They are listed here so the
+    # one-factor sweep below covers them -- an empty tuple is the strongest
+    # statement available, and it is exactly what a replicate has to satisfy.
+    "reference-seed-43": (),
+    "reference-seed-44": (),
+    "reference-seed-45": (),
+    "reference-seed-46": (),
     "rank-8": ("ska_rank",),
     "rank-16": ("ska_rank",),
     "rank-32": ("ska_rank",),
@@ -124,7 +149,7 @@ def overrides_by_name(resolved):
 
 # ------------------------------------------------------------------ the set ----
 
-def test_there_are_exactly_twenty_four(resolved):
+def test_there_are_exactly_twenty_eight(resolved):
     assert len(resolved[5]) == EXPECTED_ANCHORS
 
 
@@ -142,36 +167,93 @@ def test_every_name_is_unique():
     assert len({d.name for d in designs}) == len(designs) == EXPECTED_ANCHORS
 
 
-def test_every_resolved_point_is_unique(by_name):
-    """The failure this prevents: `enqueue_trial(skip_if_exists=True)` silently
-    drops a duplicate, so the study would have 23 references and a gap where a
-    labelled factor should be -- and the gap would be invisible."""
+def test_every_resolved_point_outside_the_replicate_set_is_unique(by_name):
+    """The failure this prevents: two anchors on one point spend two of the
+    study's 256 trials answering one question, so the study has one fewer
+    reference and a gap where a labelled factor should be -- and the gap is
+    invisible in the output."""
     seen = {}
-    for name, params in by_name.items():
+    for name, params in sorted(by_name.items()):
+        if name in REPLICATES:
+            continue
         key = tuple(sorted((k, repr(v)) for k, v in params.items()))
         assert key not in seen, (
-            f"{name!r} resolves to the same point as {seen[key]!r}; one of them "
-            f"would be silently skipped at enqueue time")
+            f"{name!r} resolves to the same point as {seen[key]!r}; two trials "
+            f"would be spent on one question")
         seen[key] = name
-    assert len(seen) == EXPECTED_ANCHORS
+    # `reference-k1` is itself a member of the replicate set, so all five are
+    # skipped and 23 distinct non-reference points remain.
+    assert len(seen) == EXPECTED_ANCHORS - len(REPLICATES) == 23
 
 
-def test_every_resolved_point_has_a_distinct_run_id(resolved, overrides_by_name):
+def test_the_replicate_set_resolves_to_ONE_point(by_name):
+    """The inversion, and it is the property that makes the noise floor a
+    controlled measurement: five designs, one params dict. Anything else means a
+    factor moved and the group is measuring that factor, not the seed."""
+    keys = {tuple(sorted((k, repr(v)) for k, v in by_name[name].items()))
+            for name in REPLICATES}
+    assert len(keys) == 1, (
+        "the reference replicates do NOT resolve to one point, so their spread "
+        "is not a noise floor -- it is that factor's effect, mislabelled")
+
+
+def test_every_anchor_has_a_distinct_run_id(resolved, overrides_by_name):
     """The stronger statement, in the run system's own vocabulary: distinct
-    run_ids means distinct run directories, so no two anchors collide on disk."""
+    run_ids means distinct run directories, so no two anchors collide on disk.
+
+    Holds for the replicate set too, and that is the whole reason the seed is a
+    legitimate way to spell a repeat: `runtime.seed` is inside
+    `_scientific_payload(include_seed=True)`, so five identical param dicts at
+    five seeds are five runs. If it were outside, the five would share a
+    directory and four of them would be lost.
+    """
     sys.path.insert(0, str(REPO / "scripts"))
-    from resolve_anchor_design import _identity
+    from resolve_anchor_design import _designated_seed, _identity
 
     study_spec, base_sections = resolved[0], resolved[1]
+    designs = {d.name: d for d, _, _ in resolved[5]}
     ids = {}
-    for name, overrides in overrides_by_name.items():
-        identity = _identity(study_spec, base_sections, overrides)
+    for name, overrides in sorted(overrides_by_name.items()):
+        identity = _identity(study_spec, base_sections, overrides,
+                             seed=_designated_seed(designs[name]))
         assert "run_id" in identity, f"{name}: {identity}"
         assert identity["run_id"] not in ids, (
             f"{name} and {ids[identity['run_id']]} share run_id "
             f"{identity['run_id']}")
         ids[identity["run_id"]] = name
     assert len(ids) == EXPECTED_ANCHORS
+
+
+def test_the_replicate_set_shares_one_group_id(resolved, overrides_by_name):
+    """`group_id` excludes the seed, so the run system already spells "one
+    experiment, five datapoints" -- which is what lets `results.py` group them
+    without being told to."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    from resolve_anchor_design import _designated_seed, _identity
+
+    study_spec, base_sections = resolved[0], resolved[1]
+    designs = {d.name: d for d, _, _ in resolved[5]}
+    identities = [_identity(study_spec, base_sections, overrides_by_name[name],
+                            seed=_designated_seed(designs[name]))
+                  for name in REPLICATES]
+    assert len({i["group_id"] for i in identities}) == 1
+    assert sorted(i["seed"] for i in identities) == list(EXPECTED_SEEDS)
+
+
+def test_the_replicate_seeds_are_the_ones_the_design_file_declares(resolved):
+    """Pinned so a silent edit that dropped a member -- or duplicated a seed --
+    fails here rather than producing a smaller or degenerate noise floor."""
+    from experimentation.sweep.search.anchors import (
+        check_replicates_resolve, reference_groups, resolved_seed)
+
+    base_seed = int(resolved[1]["runtime"]["seed"])
+    designs = [d for d, _, _ in resolved[5]]
+    groups = reference_groups(designs)
+    assert sorted(groups) == ["reference"]
+    assert sorted(d.name for d in groups["reference"]) == sorted(REPLICATES)
+    assert sorted(resolved_seed(d, base_seed)
+                  for d in groups["reference"]) == list(EXPECTED_SEEDS)
+    check_replicates_resolve(designs, base_seed)
 
 
 # --------------------------------------------------------- the reference point ----
@@ -193,18 +275,27 @@ def test_reference_k1_reproduces_the_base_spec_exactly(resolved,
     assert identity["group_id"] == group_id(base)
 
 
-def test_reference_k1_sets_nothing(resolved):
+def test_reference_k1_sets_no_scientific_factor(resolved):
     """It has to be the all-defaults design, or it is a reference by coincidence
-    rather than by construction."""
+    rather than by construction.
+
+    `reference_group` is exempt and `seed` is not: the group name is BOOKKEEPING
+    (it says which replicate set this trial belongs to and changes no input),
+    while a seed WOULD change the experiment -- so `reference-k1` must keep
+    inheriting the base spec's own seed, which is what makes it the member a
+    reader can check against `configs/runs/proxy-256x17.yaml` by eye.
+    """
     import dataclasses
 
     from experimentation.sweep.search.anchors import Design
 
     design = next(d for d, _, _ in resolved[5] if d.name == "reference-k1")
     for field in dataclasses.fields(Design):
-        if field.name == "name":
+        if field.name in ("name", "reference_group"):
             continue
         assert getattr(design, field.name) == field.default, field.name
+    assert design.reference_group == "reference"
+    assert design.seed == "baseline"
 
 
 # ---------------------------------------------------------- one factor at a time ----

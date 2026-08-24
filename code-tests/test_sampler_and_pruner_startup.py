@@ -282,10 +282,15 @@ def test_a_real_anchor_set_fills_the_window_with_the_studys_own_space(tmp_path,
         n_trials=study_spec.n_trials, logging_steps=study_spec.logging_steps)
     added = enqueue_anchors(study, designs, base_model, space,
                             base_lr=base_sections["optim"]["lr"])
-    assert added == 24
+    n_designs = len(designs)
+    assert added == n_designs == 28, (
+        "28 = 24 screen anchors + 4 extra seeds of the reference. The four are "
+        "the noise floor and they resolve to params IDENTICAL to reference-k1's, "
+        "so a params-keyed enqueue would have dropped them and this count is "
+        "what says it did not.")
 
     distributions = to_distributions(space)
-    for index in range(24):
+    for index in range(n_designs):
         trial = study.ask(distributions)
         assert trial.user_attrs.get("anchor_name") == designs[index].name
         # The fixed axes arrive as their pinned values, through the singleton.
@@ -295,10 +300,10 @@ def test_a_real_anchor_set_fills_the_window_with_the_studys_own_space(tmp_path,
         study.tell(trial, 1.0 + index / 100.0)
 
     states = (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
-    assert len(study.get_trials(deepcopy=False, states=states)) == 24
-    # 24 of the 64 the study declares -- so ~40 exploratory draws remain, which
-    # is exactly what the study file's Phase 2 says.
-    assert study.sampler._n_startup_trials - 24 == 40
+    assert len(study.get_trials(deepcopy=False, states=states)) == n_designs
+    # 28 of the 64 the study declares -- so 36 exploratory draws remain, which is
+    # what the study file's Phase 2 says.
+    assert study.sampler._n_startup_trials - n_designs == 36
 
 
 def test_enqueue_is_idempotent_so_a_resume_does_not_rerun_anchors(tmp_path,
@@ -329,18 +334,27 @@ def test_enqueue_is_idempotent_so_a_resume_does_not_rerun_anchors(tmp_path,
     enqueue_anchors(study, designs, base_model, space,
                     base_lr=base_sections["optim"]["lr"])
     distributions = to_distributions(space)
-    for index in range(24):
+    # EVERY design, not a hardcoded count: leaving some WAITING would make the
+    # assertion below unfalsifiable in the other direction (a WAITING anchor from
+    # the first pass is indistinguishable from a re-enqueued one).
+    for index in range(len(designs)):
         study.tell(study.ask(distributions), 1.0 + index / 100.0)
 
     # Restart: same journal, same designs.
     resumed = create_study(**kwargs)
-    enqueue_anchors(resumed, designs, base_model, space,
-                    base_lr=base_sections["optim"]["lr"])
+    added = enqueue_anchors(resumed, designs, base_model, space,
+                            base_lr=base_sections["optim"]["lr"])
     waiting = resumed.get_trials(deepcopy=False,
-                                states=(optuna.trial.TrialState.WAITING,))
-    assert waiting == [], (
-        f"{len(waiting)} anchor(s) were re-enqueued on resume; "
-        f"skip_if_exists=True is what makes a restart cheap")
+                                 states=(optuna.trial.TrialState.WAITING,))
+    assert added == 0 and waiting == [], (
+        f"{added} anchor(s) were re-enqueued on resume ({len(waiting)} left "
+        f"WAITING); name-keyed idempotency is what makes a restart cheap")
+    # The name-keyed check has to survive the replicate set, whose members share
+    # one params dict -- the case a params-keyed check gets right by accident on
+    # resume and wrong on the FIRST pass.
+    names = [t.user_attrs.get("anchor_name") for t in resumed.trials]
+    assert sorted(n for n in names if n) == sorted(d.name for d in designs)
+    assert len(set(n for n in names if n)) == len(designs)
 
 
 # --------------------------------------------- the per-worker sampler seed ----

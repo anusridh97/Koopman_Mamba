@@ -2,7 +2,7 @@
 
 - base spec: `configs/runs/proxy-256x17.yaml`
 - design file: `configs/search/proxy-256x17-anchors.yaml`
-- anchors: **24**
+- anchors: **28**
 - study max_steps: 600
 - base parameter count: 25,352,736
 
@@ -12,32 +12,42 @@ Fixed axes (singleton categoricals): `grad_clip=1.0`, `warmup_ratio=0.04`, `weig
 
 Every axis can still express the base config's own value, so the reference point is inside the space.
 
-| name | ska_rank | n_ska_layers | placement | ska_power_K | ska_ridge | ska_layerscale_init | norm_clip_multiplier | gamma_value | learning_rate | weight_decay | warmup_ratio | grad_clip | indices | clip_c | params | run_id |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `reference-k1` | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `f2af9b16` |
-| `rank-8` | 8 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 2.3094 | 25,221,664 | `1c8af955` |
-| `rank-16` | 16 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 3.26599 | 25,287,200 | `a37c7689` |
-| `rank-32` | 32 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4.6188 | 25,418,272 | `07780a5e` |
-| `layers-2` | 24 | 2 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,15] | 4 | 24,989,208 | `2f4c9fc0` |
-| `layers-3` | 24 | 3 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,9,15] | 4 | 25,170,972 | `3bb855c2` |
-| `layers-6` | 24 | 6 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,5,8,10,13,15] | 4 | 25,716,264 | `44a582d9` |
-| `layers-8` | 24 | 8 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,5,6,8,10,12,13,15] | 4 | 26,079,792 | `712938ec` |
-| `placement-even` | 24 | 4 | even | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [1,6,10,15] | 4 | 25,352,736 | `203badc4` |
-| `placement-midlate` | 24 | 4 | midlate | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [5,8,12,15] | 4 | 25,352,736 | `e96e5574` |
-| `placement-late` | 24 | 4 | late | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [5,9,12,14] | 4 | 25,352,736 | `c3d1e8be` |
-| `ridge-low` | 24 | 4 | baseline | 1 | 0.003 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `38b909ed` |
-| `ridge-high` | 24 | 4 | baseline | 1 | 0.03 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `30cd3792` |
-| `layerscale-low` | 24 | 4 | baseline | 1 | 0.01 | 0.002 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `2c4caa71` |
-| `layerscale-high` | 24 | 4 | baseline | 1 | 0.01 | 0.03 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `622a31bf` |
-| `normclip-low` | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.75 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 3.67423 | 25,352,736 | `3b3a115c` |
-| `normclip-high` | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 1.25 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 6.12372 | 25,352,736 | `66d30ad2` |
-| `gamma-low` | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 0.9 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `ff83fefb` |
-| `gamma-high` | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1.05 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `e8f8f26d` |
-| `reference-k2` | 24 | 4 | baseline | 2 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `3ef639e4` |
-| `lr-low` | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.00032 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `22327498` |
-| `lr-high` | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.00048 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `68dd8bb6` |
-| `k2-ridge-low` | 24 | 4 | baseline | 2 | 0.003 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `0b4dfef6` |
-| `k2-ridge-high` | 24 | 4 | baseline | 2 | 0.03 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `ac0ac9b9` |
+## Replicate sets (the study's noise floor)
+
+Members of a `reference_group` are identical in every scientific factor and differ only in `runtime.seed`, so the SPREAD of their held-out losses is the smallest effect this study can resolve. `anchors._check_reference_groups` enforces the "identical in everything else" half at load time; `anchors.check_replicates_resolve` enforces distinct resolved seeds at `--dry_run`.
+
+- `reference`: 5 evaluation(s) -- `reference-k1`, `reference-seed-43`, `reference-seed-44`, `reference-seed-45`, `reference-seed-46`
+
+| name | group | seed | ska_rank | n_ska_layers | placement | ska_power_K | ska_ridge | ska_layerscale_init | norm_clip_multiplier | gamma_value | learning_rate | weight_decay | warmup_ratio | grad_clip | indices | clip_c | params | run_id |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `reference-k1` | `reference` | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `f2af9b16` |
+| `rank-8` | - | 42 | 8 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 2.3094 | 25,221,664 | `1c8af955` |
+| `rank-16` | - | 42 | 16 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 3.26599 | 25,287,200 | `a37c7689` |
+| `rank-32` | - | 42 | 32 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4.6188 | 25,418,272 | `07780a5e` |
+| `layers-2` | - | 42 | 24 | 2 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,15] | 4 | 24,989,208 | `2f4c9fc0` |
+| `layers-3` | - | 42 | 24 | 3 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,9,15] | 4 | 25,170,972 | `3bb855c2` |
+| `layers-6` | - | 42 | 24 | 6 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,5,8,10,13,15] | 4 | 25,716,264 | `44a582d9` |
+| `layers-8` | - | 42 | 24 | 8 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,5,6,8,10,12,13,15] | 4 | 26,079,792 | `712938ec` |
+| `placement-even` | - | 42 | 24 | 4 | even | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [1,6,10,15] | 4 | 25,352,736 | `203badc4` |
+| `placement-midlate` | - | 42 | 24 | 4 | midlate | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [5,8,12,15] | 4 | 25,352,736 | `e96e5574` |
+| `placement-late` | - | 42 | 24 | 4 | late | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [5,9,12,14] | 4 | 25,352,736 | `c3d1e8be` |
+| `ridge-low` | - | 42 | 24 | 4 | baseline | 1 | 0.003 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `38b909ed` |
+| `ridge-high` | - | 42 | 24 | 4 | baseline | 1 | 0.03 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `30cd3792` |
+| `layerscale-low` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.002 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `2c4caa71` |
+| `layerscale-high` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.03 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `622a31bf` |
+| `normclip-low` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.75 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 3.67423 | 25,352,736 | `3b3a115c` |
+| `normclip-high` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 1.25 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 6.12372 | 25,352,736 | `66d30ad2` |
+| `gamma-low` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 0.9 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `ff83fefb` |
+| `gamma-high` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1.05 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `e8f8f26d` |
+| `reference-k2` | - | 42 | 24 | 4 | baseline | 2 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `3ef639e4` |
+| `lr-low` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.00032 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `22327498` |
+| `lr-high` | - | 42 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.00048 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `68dd8bb6` |
+| `k2-ridge-low` | - | 42 | 24 | 4 | baseline | 2 | 0.003 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `0b4dfef6` |
+| `k2-ridge-high` | - | 42 | 24 | 4 | baseline | 2 | 0.03 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `ac0ac9b9` |
+| `reference-seed-43` | `reference` | 43 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `c50d6b52` |
+| `reference-seed-44` | `reference` | 44 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `091a23f4` |
+| `reference-seed-45` | `reference` | 45 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `3a672be4` |
+| `reference-seed-46` | `reference` | 46 | 24 | 4 | baseline | 1 | 0.01 | 0.01 | 0.816497 | 1 | 0.0004 | 0.1 | 0.04 | 1 | [3,7,11,15] | 4 | 25,352,736 | `5decd0d7` |
 
 ## Values that SNAPPED during resolution
 
@@ -65,6 +75,10 @@ A design asked for one value and the study's space resolved it to another. Not a
 - `rank-8`: warmup_ratio 0.02 -> 0.04
 - `reference-k1`: warmup_ratio 0.02 -> 0.04
 - `reference-k2`: warmup_ratio 0.02 -> 0.04
+- `reference-seed-43`: warmup_ratio 0.02 -> 0.04
+- `reference-seed-44`: warmup_ratio 0.02 -> 0.04
+- `reference-seed-45`: warmup_ratio 0.02 -> 0.04
+- `reference-seed-46`: warmup_ratio 0.02 -> 0.04
 - `ridge-high`: warmup_ratio 0.02 -> 0.04
 - `ridge-low`: warmup_ratio 0.02 -> 0.04
 

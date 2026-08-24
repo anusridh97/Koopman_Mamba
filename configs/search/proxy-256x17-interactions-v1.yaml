@@ -27,16 +27,27 @@
 #
 # ## Phases
 #
-# **Phase 1 -- 24 structured anchors** (`design_file`). A one-factor-at-a-time
-# screen around the base config, enqueued by the supervisor before any worker
-# starts, so eight workers do not race to enqueue the same designs. Exempt from
-# pruning by default (`metrics.wait_for_objective`), because they ARE the
-# reference population a median pruner compares against. See the design file's
-# own header for why they are a design and not a set of curated winners.
+# **Phase 1 -- 28 structured anchors** (`design_file`). A one-factor-at-a-time
+# screen around the base config (24 designs) PLUS four extra training seeds of
+# the reference (`reference_group: reference`), enqueued by the supervisor before
+# any worker starts, so eight workers do not race to enqueue the same designs.
+# Exempt from pruning by default (`metrics.wait_for_objective`), because they ARE
+# the reference population a median pruner compares against. See the design
+# file's own header for why they are a design and not a set of curated winners.
+#
+# The four extra seeds are the study's NOISE FLOOR and they are the most
+# important five trials in the budget. With `reference-k1` they are five
+# evaluations of ONE configuration differing only in `runtime.seed`, so their
+# spread is the smallest difference this study can resolve. Every effect
+# `analysis.py` reports is stated against that number, and an effect smaller than
+# it is labelled UNRESOLVABLE rather than ranked. Without it a 1e-4 difference in
+# held-out loss and a 1e-1 difference look equally like findings -- and the
+# measured SKA ablation delta on the 4m smoke study (job 445657) was 1.166e-4,
+# which is precisely why this cannot be left to judgement.
 #
 # **Phase 2 -- exploratory startup, to 64 completed references.** TPE draws at
-# RANDOM until `sampler_startup_trials` trials have finished. Set to 64: the 24
-# anchors plus ~40 random draws.
+# RANDOM until `sampler_startup_trials` trials have finished. Set to 64: the 28
+# anchors plus 36 random draws.
 #
 #   Optuna semantics, verified in `test_sampler_and_pruner_startup.py` rather
 #   than assumed, because the two counters do NOT use the same rule:

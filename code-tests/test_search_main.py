@@ -357,7 +357,40 @@ def _study_with(tmp_path, **extra):
 def test_a_healthy_study_resolves_all_its_anchors_in_the_dry_run(tmp_path):
     r = _run(_study_with(tmp_path), "--dry_run")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "24 anchor(s) resolve" in r.stdout, r.stdout
+    assert "28 anchor(s) resolve" in r.stdout, r.stdout
+
+
+def test_the_dry_run_reports_the_noise_floor_plan(tmp_path):
+    """The replicate set is the number every conclusion in the analysis is
+    divided by, so it belongs in the artifact someone reads before spending eight
+    GPUs -- not inferred from a design file."""
+    r = _run(_study_with(tmp_path), "--dry_run")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "noise floor" in r.stdout, r.stdout
+    assert "5 evaluation(s) at runtime.seed [42, 43, 44, 45, 46]" in r.stdout, \
+        r.stdout
+
+
+def test_a_replicate_group_that_collides_on_a_seed_fails_in_the_dry_run(tmp_path):
+    """`load_designs` cannot catch this -- it compares the DECLARED seeds, and
+    `"baseline"` is not comparable to `42` without the base spec. So a sibling
+    that writes the base's own seed out explicitly passes the load check and then
+    trains the same model twice: one run_id, one datapoint counted as two, and a
+    noise floor of exactly zero, which reads as an excellent result."""
+    designs = tmp_path / "designs.yaml"
+    designs.write_text(
+        "designs:\n"
+        "  - name: ref-inherit\n"
+        "    reference_group: reference\n"
+        "  - name: ref-explicit\n"
+        "    seed: 42\n"
+        "    reference_group: reference\n")
+    r = _run(_study_with(tmp_path, design_file=str(designs)), "--dry_run")
+    assert r.returncode != 0, (
+        "a replicate group whose members collide on a seed passed the dry "
+        "run:\n" + r.stdout)
+    combined = r.stdout + r.stderr
+    assert "reference" in combined and "42" in combined, combined
 
 
 def test_an_axis_kind_change_fails_during_the_dry_run(tmp_path):

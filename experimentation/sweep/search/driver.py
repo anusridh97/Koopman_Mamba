@@ -58,7 +58,8 @@ from experimentation.sweep.launch import materialize_cell
 from experimentation.sweep.search.metrics import (
     looks_like_oom, objective_from_metrics)
 from experimentation.sweep.search.space import params_to_overrides
-from experimentation.sweep.search.study import ANCHOR_ATTR, to_distributions
+from experimentation.sweep.search.study import (
+    ANCHOR_ATTR, REFERENCE_GROUP_ATTR, SEED_ATTR, to_distributions)
 from experimentation.sweep.spec import build_cell_run_spec
 from experimentation.run.spec import group_id, run_id
 
@@ -114,10 +115,25 @@ _MAX_STALLED_ATTEMPTS = 3
 TRIAL_ATTRS = ("param_count", "baseline_param_count", "worker_id",
                "sampler", "sampler_seed", "per_device_batch_size",
                "anchor_name",
-               # Stamped after the run finishes, not at materialization: it comes
-               # from quick_eval.json. Absent when the ablation did not run, and
-               # `analysis` excludes rather than zero-fills such a trial.
-               "ska_delta")
+               # The seed the trial ACTUALLY trained at, read off the resolved
+               # spec. Recorded for every trial, seeded or not: reconstructing a
+               # trial from trials.csv needs the seed that ran, and `run_id`
+               # hashes it, so a reader without this column cannot check the
+               # identity it is given. Distinct from `designated_seed`, which is
+               # the REQUEST and is absent unless a design made one.
+               "model_seed",
+               # Which replicate set this trial belongs to, when it belongs to
+               # one. This is the column the noise floor is computed over.
+               "reference_group",
+               # The resolved SKA layer indices. `trial.params` records
+               # (n_ska_layers, placement); nothing else records what that pair
+               # resolved to, and the placement axis exists precisely because
+               # the resolution is not the identity.
+               "ska_layer_indices",
+               # Stamped after the run finishes, not at materialization: they
+               # come from quick_eval.json. Absent when the run produced none,
+               # and `analysis` excludes rather than zero-fills such a trial.
+               "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens")
 
 
 @dataclass(frozen=True)
@@ -192,6 +208,29 @@ def run_trial(study: optuna.study.Study, trial, *,
     # the space stays pure.
     overrides["optim.max_steps"] = int(max_steps)
 
+    # The TRAINING seed, when -- and only when -- a design designated one.
+    #
+    # This is the whole mechanism behind the study's noise floor: a handful of
+    # designated repeats of one reference configuration, differing in nothing but
+    # `runtime.seed`, whose spread in held-out loss is the smallest difference
+    # this study can resolve. Every other trial falls through this branch and
+    # keeps the base spec's own seed, which is what keeps ORDINARY trials
+    # comparable to each other -- a seed that moved per trial would fold the
+    # noise floor into every measurement instead of isolating it.
+    #
+    # `runtime.seed` is inside `run/spec.py::_scientific_payload(include_seed=
+    # True)` and outside `group_id`, so a repeat gets its own `run_id` and its own
+    # directory while sharing a `group_id` with its siblings. That is the run
+    # system's existing spelling for "one experiment, N datapoints" and is why
+    # this needs no new identity machinery.
+    #
+    # NOT the sampler seed. `study.sampler_seed_for` is per-worker and seeds the
+    # PROPOSAL stream; nothing here touches it, so which worker pulled a trial
+    # still cannot change that trial's result.
+    designated_seed = trial.user_attrs.get(SEED_ATTR)
+    if designated_seed is not None:
+        overrides["runtime.seed"] = int(designated_seed)
+
     # Reuse sweep's stamp keys so results.py's existing sweep_name column stays
     # meaningful, and add the study-specific pair beside them.
     stamp = {
@@ -234,7 +273,8 @@ def run_trial(study: optuna.study.Study, trial, *,
         _record_trial_attrs(
             trial, spec, base_model,
             worker_id=worker_id, sampler_name=sampler_name,
-            sampler_seed=sampler_seed, anchor=anchor)
+            sampler_seed=sampler_seed, anchor=anchor,
+            reference_group=trial.user_attrs.get(REFERENCE_GROUP_ATTR))
         try:
             # wait=False so the objective reader can WATCH this run rather than
             # only inspect its corpse. With a blocking submit the reader starts
@@ -248,11 +288,33 @@ def run_trial(study: optuna.study.Study, trial, *,
                 # Descending helps only for memory. Retrying a shape error at a
                 # smaller microbatch burns another queue slot to fail identically.
                 continue
-            trial.set_user_attr("failure", last_failure)
+            # An EXHAUSTED LADDER is said so, because the analysis has to be able
+            # to tell four failure modes apart from `trials.csv` alone: a config
+            # too big for the smallest microbatch, a config that OOMs once and
+            # fits on the next rung, a shape error (which never descends -- see
+            # above), and a launcher fault. All four used to arrive here with the
+            # same shape of string, and `per_device_batch_size` alone cannot
+            # distinguish them: rung 0 IS the only rung when the ladder is off.
+            #
+            # It is spelled on the LAST rung rather than in the `for ... else`
+            # below because this branch is how the loop actually ends: the final
+            # rung has no next rung, so it returns from inside the loop and the
+            # `else` clause is only reachable if `_ladder` ever returns nothing.
+            exhausted = len(rungs) > 1 and looks_like_oom(run_dir)
+            reason = (f"every microbatch rung failed ({len(rungs)} rung(s), down "
+                      f"to per_device_batch_size="
+                      f"{spec.runtime.per_device_batch_size}): {last_failure}"
+                      if exhausted else last_failure)
+            trial.set_user_attr("failure", reason)
             study.tell(trial, state=optuna.trial.TrialState.FAIL)
             return TrialOutcome(state="failed", objective=None, **identity)
-    else:
-        trial.set_user_attr("failure", f"every microbatch rung failed: {last_failure}")
+    else:                                              # pragma: no cover
+        # Only reachable if `_ladder` returns an empty list, which it cannot --
+        # it returns `[None]` in every degenerate case. Kept as the honest answer
+        # to "what if it did" rather than deleted, since deleting it would make
+        # `identity` unbound below.
+        trial.set_user_attr("failure",
+                            f"no microbatch rung was attempted: {last_failure}")
         study.tell(trial, state=optuna.trial.TrialState.FAIL)
         return TrialOutcome(state="failed", objective=None, **identity)
 
@@ -315,36 +377,74 @@ def run_trial(study: optuna.study.Study, trial, *,
     # earned its place. A config with a good loss whose SKA branch contributes
     # nothing is a good Mamba model, not evidence for SKA -- and that is
     # invisible in a loss ranking.
-    _stamp_ska_delta(trial, run_dir)
+    _stamp_measured_metrics(trial, run_dir)
     study.tell(trial, float(objective))
     return TrialOutcome(state="complete", objective=float(objective), **identity)
 
 
-def _stamp_ska_delta(trial, run_dir) -> None:
-    """Copy `ska_ablation.loss_delta` from the eval payload onto the trial.
+#: `quick_eval.json`'s `metrics.full` key -> the trial attr it becomes.
+#:
+#: All three were already MEASURED for every trial and none of them reached the
+#: trial, so none reached `trials.csv`, so the loss/throughput Pareto front the
+#: study's cost argument rests on could not be computed at all. The measurement
+#: existed; the wire did not. Promoting them is the whole fix.
+#:
+#: `n_tokens` is renamed to `n_eval_tokens` on the way across, because `n_tokens`
+#: is already the DATA section's field name (the shard's total token count, which
+#: `verify_shard` checks) and one column meaning two things a few characters apart
+#: is how a reader comes to divide by the wrong number.
+_FULL_METRIC_ATTRS = (
+    ("tokens_per_sec", "tokens_per_sec"),
+    ("peak_memory_gib", "peak_memory_gib"),
+    ("n_tokens", "n_eval_tokens"),
+)
 
-    Best-effort and silent on absence: the ablation is an optional part of
-    quick_eval, so a study that did not run it simply has no delta, and
-    `analysis._top_by_ska_delta` EXCLUDES a trial with no delta rather than
-    ranking it as zero. Absent is not zero.
 
-    Deliberately does not fail a trial that trained fine. This is provenance for
-    a post-hoc ranking, not the objective -- raising here would turn a missing
-    optional metric into a lost result.
+def _stamp_measured_metrics(trial, run_dir) -> None:
+    """Copy the measured, non-objective numbers from the eval payload onto the
+    trial: the SKA ablation delta, throughput, peak memory, eval token count.
+
+    Best-effort and silent on absence, for one reason stated once: **absent is
+    not zero.** The ablation is an optional part of quick_eval, and a trial
+    recorded at 0 tokens/sec would sit at the wrong end of every cost ranking
+    while looking exactly like a measurement. `analysis` excludes a trial with no
+    value rather than zero-filling it, and that only works if this writes nothing
+    when there is nothing to write.
+
+    Deliberately does not fail a trial that trained fine. These are provenance
+    for post-hoc rankings, not the objective -- raising here would turn a missing
+    optional metric into a lost result. That is not hypothetical: `ska_delta` was
+    found in review as an INERT field, written by nothing, so
+    `top_by_ska_delta.csv` was header-only for every real study.
+
+    Why here and not in `_record_trial_attrs`: every number below comes from
+    `run_dir/eval/*/quick_eval.json`, which does not exist until the run has
+    finished, and materialization is long past by then.
     """
     from experimentation.sweep.search.metrics import read_quick_eval_metrics
 
     try:
         metrics = read_quick_eval_metrics(run_dir) or {}
-        ablation = metrics.get("ska_ablation") or {}
-        if not ablation.get("supported"):
-            return
-        delta = ablation.get("loss_delta")
-        if delta is None:
-            return
-        trial.set_user_attr("ska_delta", float(delta))
     except Exception:                                  # noqa: BLE001
         # A malformed eval file must not cost a completed trial its objective.
+        return
+
+    try:
+        ablation = metrics.get("ska_ablation") or {}
+        delta = ablation.get("loss_delta") if ablation.get("supported") else None
+        if delta is not None:
+            trial.set_user_attr("ska_delta", float(delta))
+
+        full = metrics.get("full") or {}
+        for key, attr in _FULL_METRIC_ATTRS:
+            value = full.get(key)
+            if value is None:
+                continue
+            trial.set_user_attr(attr, int(value) if attr == "n_eval_tokens"
+                                else float(value))
+    except (TypeError, ValueError, AttributeError):
+        # A payload with a string where a number belongs. Same rule: the trial
+        # trained and scored, so it keeps its objective.
         return
 
 
@@ -352,7 +452,8 @@ def _record_trial_attrs(trial, spec, base_model: KoopmanLMConfig, *,
                         worker_id: Optional[int],
                         sampler_name: Optional[str],
                         sampler_seed: Optional[int],
-                        anchor: Optional[str]) -> None:
+                        anchor: Optional[str],
+                        reference_group: Optional[str] = None) -> None:
     """Stamp the resolved facts about this trial onto the trial itself.
 
     Not onto the run directory. Both would be defensible and the trial is the
@@ -371,7 +472,20 @@ def _record_trial_attrs(trial, spec, base_model: KoopmanLMConfig, *,
         "param_count": int(spec.model.param_count_estimate()),
         "baseline_param_count": int(base_model.param_count_estimate()),
         "per_device_batch_size": int(spec.runtime.per_device_batch_size),
+        # Off the RESOLVED spec, not off the trial's request. `run_id` hashes
+        # `runtime.seed`, so a reader handed a run_id and no seed column cannot
+        # check the identity -- and a reference repeat is a trial whose only
+        # distinguishing input IS this number.
+        "model_seed": int(spec.runtime.seed),
+        # What (n_ska_layers, placement) actually resolved to. The placement axis
+        # exists because that resolution is not the identity, so recording only
+        # the request records only half the experiment: `geometry.make_layer_
+        # indices` CLAMPS a count past the usable window rather than raising, and
+        # a clamped trial is indistinguishable from an unclamped one without this.
+        "ska_layer_indices": [int(i) for i in spec.model.ska_layer_indices],
     }
+    if reference_group is not None:
+        attrs[REFERENCE_GROUP_ATTR] = str(reference_group)
     if worker_id is not None:
         attrs["worker_id"] = int(worker_id)
     if sampler_name is not None:

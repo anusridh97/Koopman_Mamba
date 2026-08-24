@@ -29,15 +29,16 @@ import dataclasses
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 import yaml
 
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.sweep.search.geometry import clamp, nearest
 
-__all__ = ["Design", "check_space_is_resolvable", "load_designs",
-           "resolve_design", "designs_to_cells"]
+__all__ = ["Design", "check_space_is_resolvable", "check_replicates_resolve",
+           "load_designs", "reference_groups", "resolve_design",
+           "designs_to_cells"]
 
 _BASELINE = "baseline"
 
@@ -72,9 +73,39 @@ class Design:
     weight_decay: float = 0.1
     warmup_ratio: float = 0.02
     grad_clip: float = 1.0
+    #: The TRAINING seed -- `runtime.seed`, which seeds initialisation and batch
+    #: order. `"baseline"` (the default) inherits the base spec's own, which is
+    #: what every design did before this field existed, so no committed design
+    #: file changes meaning.
+    #:
+    #: NOT a search parameter, and it cannot become one: `resolve_design` emits
+    #: the params dict optuna's declared distributions have to accept, and a key
+    #: with no distribution is rejected at `enqueue_trial` time. So the seed
+    #: travels as trial METADATA (`study.SEED_ATTR`) and the driver applies it as
+    #: a `runtime.seed` override.
+    #:
+    #: `runtime.seed` IS inside `run/spec.py::_scientific_payload(include_seed=
+    #: True)` and outside `group_id`, so two designs differing only here produce
+    #: distinct `run_id`s in distinct directories under one shared `group_id` --
+    #: which is how the run system already spells "one experiment, N datapoints".
+    seed: Union[int, str] = _BASELINE
+    #: Names the replicate set this design belongs to, or None.
+    #:
+    #: A `reference_group` is a PROMISE, checked by `load_designs`: every member
+    #: is identical in every scientific factor and differs only in `seed`. That
+    #: is what makes the spread of their objectives an estimate of the study's
+    #: own reproducibility noise rather than of some factor nobody controlled --
+    #: and a group that quietly varied a factor would inflate the noise floor and
+    #: therefore label real effects unresolvable, which is the most damaging
+    #: thing this mechanism could do.
+    reference_group: Optional[str] = None
 
 
 _FIELDS = {f.name for f in dataclasses.fields(Design)}
+
+#: Fields that may differ between members of one `reference_group`. Everything
+#: else must be identical, or the group is not a controlled replicate set.
+_REPLICATE_FREE_FIELDS = frozenset({"name", "seed", "reference_group"})
 
 
 def load_designs(path, *, minimum: int = 1) -> List[Design]:
@@ -113,7 +144,122 @@ def load_designs(path, *, minimum: int = 1) -> List[Design]:
         raise ValueError(
             f"{path} declares {len(designs)} design(s); this study requires at "
             f"least {minimum}")
+    _check_reference_groups(path, designs)
     return designs
+
+
+def _check_reference_groups(path, designs: List[Design]) -> None:
+    """A `reference_group` must be a controlled replicate set. Enforce it.
+
+    Three requirements, and the reason each one is a hard error rather than a
+    warning is the same: the group's spread becomes the study's NOISE FLOOR, and
+    every reported effect is compared against it. A wrong noise floor does not
+    look wrong -- it produces a complete, plausible analysis in which real
+    effects are labelled unresolvable (if inflated) or noise is labelled an
+    effect (if deflated).
+
+      * **At least two members.** One observation has no spread. A group of one
+        is a declaration wearing a measurement's clothes.
+      * **Distinct seeds.** Two members at one seed are one datapoint recorded
+        twice, and `deterministic: true` on the proxy spec means they would
+        report a spread of ~0 -- i.e. claim perfect reproducibility from one run.
+      * **Identical in every other factor.** This is the one that matters most.
+        A group whose members differ in rank measures the RANK effect and reports
+        it as noise.
+    """
+    groups: Dict[str, List[Design]] = {}
+    for design in designs:
+        if design.reference_group is None:
+            continue
+        groups.setdefault(str(design.reference_group), []).append(design)
+
+    for group, members in sorted(groups.items()):
+        if len(members) < 2:
+            raise ValueError(
+                f"{path}: reference_group {group!r} has {len(members)} member(s); "
+                f"a replicate set needs at least two, because its whole purpose "
+                f"is to produce a SPREAD and one observation has none. Add "
+                f"another design with the same factors and a different seed, or "
+                f"drop the reference_group key.")
+        seeds = [d.seed for d in members]
+        if len(set(map(repr, seeds))) != len(seeds):
+            raise ValueError(
+                f"{path}: reference_group {group!r} has two members at the same "
+                f"seed ({sorted(map(repr, seeds))}). That is one datapoint "
+                f"recorded twice, not two datapoints: the proxy base sets "
+                f"`deterministic: true`, so both would land on the same loss and "
+                f"the group would report a spread of ~0 -- a claim of perfect "
+                f"reproducibility drawn from a single run. Give each member its "
+                f"own seed.")
+        reference = members[0]
+        for member in members[1:]:
+            differing = sorted(
+                field for field in sorted(_FIELDS - _REPLICATE_FREE_FIELDS)
+                if getattr(member, field) != getattr(reference, field))
+            if differing:
+                raise ValueError(
+                    f"{path}: reference_group {group!r} is not a controlled "
+                    f"replicate set -- {member.name!r} differs from "
+                    f"{reference.name!r} in {differing}. A reference group's "
+                    f"spread becomes the study's NOISE FLOOR, against which "
+                    f"every reported effect is judged; a group that also varies "
+                    f"{differing} measures that factor's effect and reports it "
+                    f"as noise, which would label real effects unresolvable. "
+                    f"Members may differ in `seed` and nothing else.")
+
+
+def reference_groups(designs) -> Dict[str, List[Design]]:
+    """`{group name: members}` for every design that names a `reference_group`."""
+    groups: Dict[str, List[Design]] = {}
+    for design in designs:
+        if getattr(design, "reference_group", None) is None:
+            continue
+        groups.setdefault(str(design.reference_group), []).append(design)
+    return groups
+
+
+def resolved_seed(design: Design, base_seed: int) -> int:
+    """The `runtime.seed` this design will actually train at."""
+    if getattr(design, "seed", _BASELINE) == _BASELINE:
+        return int(base_seed)
+    return int(design.seed)
+
+
+def check_replicates_resolve(designs, base_seed: int) -> None:
+    """Do the members of each `reference_group` reach DISTINCT training seeds?
+
+    `load_designs` cannot answer this and says so: it compares the declared
+    `seed` fields, and `"baseline"` is not comparable to `42` without knowing the
+    base spec. So a group containing `reference-k1` (inheriting 42) alongside a
+    design that wrote `seed: 42` explicitly passes the load check and then trains
+    the same model twice -- two identical runs, one `run_id`, one datapoint
+    recorded as two, and a noise floor of exactly zero.
+
+    Pure arithmetic over committed files, so `__main__` calls it during
+    `--dry_run`. The alternative -- discovering it from the analysis after 256
+    GPU-trials -- is not a discovery, because a spread of zero looks like an
+    excellent result.
+    """
+    for group, members in sorted(reference_groups(designs).items()):
+        seeds: Dict[int, List[str]] = {}
+        for design in members:
+            seeds.setdefault(resolved_seed(design, base_seed),
+                             []).append(design.name)
+        collisions = {seed: names for seed, names in seeds.items()
+                      if len(names) > 1}
+        if collisions:
+            detail = "; ".join(f"seed {seed} <- {sorted(names)}"
+                               for seed, names in sorted(collisions.items()))
+            raise ValueError(
+                f"reference_group {group!r} does not reach distinct training "
+                f"seeds against this base spec (base runtime.seed="
+                f"{int(base_seed)}): {detail}. Two members at one seed are ONE "
+                f"datapoint recorded twice -- identical params and identical "
+                f"seed hash to one `run_id`, so the pair contributes a spread of "
+                f"exactly zero to the study's noise floor, which reads as "
+                f"perfect reproducibility rather than as a mistake. A design "
+                f"that omits `seed` inherits the base spec's, so it must not "
+                f"also be written out explicitly by a sibling.")
 
 
 def _baseline_norm_clip_multiplier(base_model: KoopmanLMConfig) -> float:

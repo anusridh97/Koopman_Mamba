@@ -1,6 +1,6 @@
 # A STRUCTURED EXPERIMENTAL DESIGN for the proxy-256x17 interaction study.
-# 24 anchors: one reference plus a one-factor-at-a-time screen plus three K=2
-# cells.
+# 28 anchors: one reference, a one-factor-at-a-time screen, three K=2 cells, and
+# four EXTRA SEEDS of the reference whose spread is the study's noise floor.
 #
 # ============================ WHAT THIS IS NOT ============================
 # These are NOT curated winners. Nobody has run any of them. Nothing here
@@ -74,16 +74,26 @@
 #
 # MedianPruner prunes nothing until `prune_startup_trials` trials have COMPLETED,
 # and `driver`/`metrics.wait_for_objective` exempt anchors from pruning for
-# exactly that reason. These 24 are the first 24 completions the reference
+# exactly that reason. These 28 are the first 28 completions the reference
 # population is built from -- so an anchor that fails is not just a lost trial,
-# it delays the pruner for every trial after it.
+# it delays the pruner for every trial after it. A failed member of the
+# `reference` group costs more still: it costs a degree of freedom in the noise
+# floor every other conclusion is stated against.
 
 designs:
   # ------------------------------------------------------------ the reference
   # Sets nothing, so it reproduces configs/runs/proxy-256x17.yaml exactly. Its
   # job is to make every other anchor's score readable as a delta, and to be the
   # one trial whose params a reader can check against the base spec by eye.
+  #
+  # `reference_group` puts it in the replicate set at the bottom of this file: it
+  # is the seed-42 member (the base spec's own seed), and the four
+  # `reference-seed-*` designs are the same configuration at four other seeds. It
+  # sets no `seed` key of its own on purpose -- writing `seed: 42` here would
+  # duplicate a number that lives in the base spec, and the two could then
+  # disagree.
   - name: reference-k1
+    reference_group: reference
 
   # ------------------------------------------------------------- rank, 8 -> 32
   # The capacity axis. `norm_clip_multiplier` is held at the reference, so the
@@ -184,3 +194,66 @@ designs:
   - name: k2-ridge-high
     power_K: 2
     ridge_factor: 3.0
+
+  # ============================ THE NOISE FLOOR ============================
+  # Four MORE evaluations of `reference-k1`, differing from it and from each
+  # other in the training seed and in NOTHING else. With `reference-k1` itself
+  # (which runs at the base spec's `runtime.seed: 42`) that is five evaluations
+  # of one configuration.
+  #
+  # ## Why this is the most important block in the file
+  #
+  # This study ranks configurations on held-out loss after 600 steps. On the 4m
+  # smoke study (job 445657) ablating the SKA branch ENTIRELY moved held-out loss
+  # by 1.166e-4, and REVIEW.md records the same quantity at <=2.3e-4 against an
+  # anchor spread of 0.458. If this study's own trial-to-trial reproducibility
+  # noise is of that order, then differences between these anchors are not
+  # measurements of anything and no sampler can repair that -- a multivariate TPE
+  # fitted to noise produces a confident joint model of noise.
+  #
+  # So the spread of these five is the study's NOISE FLOOR, and `analysis.py`
+  # states every reported effect against it. An effect smaller than the floor is
+  # labelled UNRESOLVABLE rather than ranked. That is the one honest thing to do
+  # with it, and it is only possible if the floor is measured.
+  #
+  # ## Why five and not two
+  #
+  # The floor is a standard deviation, and a standard deviation from n
+  # observations has relative uncertainty ~1/sqrt(2(n-1)): 71% at n=2, 41% at
+  # n=4, 35% at n=5. A noise floor known only to a factor of two is not a
+  # threshold, it is a suggestion. Five 600-step trials out of 256 is a 2%
+  # overhead for the number every other conclusion is divided by.
+  #
+  # ## Why the seed and not something else
+  #
+  # `runtime.seed` seeds parameter initialisation AND batch order, which is the
+  # whole of what a repeat should vary. It is inside
+  # `run/spec.py::_scientific_payload(include_seed=True)` and outside `group_id`,
+  # so these five get five distinct `run_id`s in five distinct directories while
+  # sharing one `group_id` -- the run system's existing spelling for "one
+  # experiment, five datapoints", with no new identity machinery.
+  #
+  # Note `configs/runs/proxy-256x17.yaml` sets `deterministic: true`. That is what
+  # makes this measurement clean: it removes cuDNN nondeterminism, so what is left
+  # is the seed's effect and not the hardware's. A NON-deterministic spread would
+  # be a different (larger) number and is NOT what this measures -- see the
+  # report's list of what the proxy cannot establish.
+  #
+  # `reference_group` is a PROMISE enforced by `anchors._check_reference_groups`:
+  # every member of a group must be identical in every scientific factor and
+  # differ only in `seed`. A group that also varied, say, rank would measure the
+  # rank effect and report it as noise, inflating the floor and labelling real
+  # effects unresolvable -- the most damaging thing this mechanism could do, so it
+  # is a load error rather than a comment.
+  - name: reference-seed-43
+    seed: 43
+    reference_group: reference
+  - name: reference-seed-44
+    seed: 44
+    reference_group: reference
+  - name: reference-seed-45
+    seed: 45
+    reference_group: reference
+  - name: reference-seed-46
+    seed: 46
+    reference_group: reference

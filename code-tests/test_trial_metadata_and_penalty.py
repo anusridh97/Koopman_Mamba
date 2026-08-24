@@ -219,8 +219,18 @@ def test_the_recorded_attrs_are_the_ones_the_module_declares():
     assert set(TRIAL_ATTRS) == {
         "param_count", "baseline_param_count", "worker_id", "sampler",
         "sampler_seed", "per_device_batch_size", "anchor_name",
+        # The seed the trial actually trained at, and which replicate set it
+        # belongs to. `run_id` hashes `runtime.seed`, so a study whose noise
+        # floor comes from designated seed repeats cannot be read back without
+        # these two.
+        "model_seed", "reference_group",
+        # What (n_ska_layers, placement) RESOLVED to. `make_layer_indices`
+        # clamps rather than raising, so the request is not the answer.
+        "ska_layer_indices",
         # Stamped after the run, from quick_eval.json, not at materialization.
-        "ska_delta"}
+        # All four were measured per trial and none but `ska_delta` reached the
+        # journal, so the loss/throughput Pareto front had no data at all.
+        "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens"}
 
 
 def _spec_and_base():
@@ -340,7 +350,7 @@ def test_ska_delta_is_stamped_from_the_eval_payload(tmp_path):
     pytest.importorskip("optuna")
     import json
 
-    from experimentation.sweep.search.driver import _stamp_ska_delta
+    from experimentation.sweep.search.driver import _stamp_measured_metrics
 
     run_dir = tmp_path / "run"
     (run_dir / "eval" / "final").mkdir(parents=True)
@@ -348,7 +358,7 @@ def test_ska_delta_is_stamped_from_the_eval_payload(tmp_path):
         {"metrics": {"full": {"loss": 3.2},
                      "ska_ablation": {"supported": True, "loss_delta": 0.0123}}}))
     trial = _Trial()
-    _stamp_ska_delta(trial, run_dir)
+    _stamp_measured_metrics(trial, run_dir)
     assert trial.user_attrs["ska_delta"] == 0.0123
 
 
@@ -358,7 +368,7 @@ def test_an_unsupported_ablation_stamps_nothing(tmp_path):
     pytest.importorskip("optuna")
     import json
 
-    from experimentation.sweep.search.driver import _stamp_ska_delta
+    from experimentation.sweep.search.driver import _stamp_measured_metrics
 
     run_dir = tmp_path / "run"
     (run_dir / "eval" / "final").mkdir(parents=True)
@@ -366,7 +376,7 @@ def test_an_unsupported_ablation_stamps_nothing(tmp_path):
         {"metrics": {"full": {"loss": 3.2},
                      "ska_ablation": {"supported": False}}}))
     trial = _Trial()
-    _stamp_ska_delta(trial, run_dir)
+    _stamp_measured_metrics(trial, run_dir)
     assert "ska_delta" not in trial.user_attrs
 
 
@@ -374,16 +384,16 @@ def test_a_missing_or_malformed_eval_does_not_cost_the_trial(tmp_path):
     """This is provenance for a post-hoc ranking, not the objective. Raising
     would turn a missing optional metric into a lost result."""
     pytest.importorskip("optuna")
-    from experimentation.sweep.search.driver import _stamp_ska_delta
+    from experimentation.sweep.search.driver import _stamp_measured_metrics
 
     trial = _Trial()
-    _stamp_ska_delta(trial, tmp_path / "nothing-here")     # no eval dir at all
+    _stamp_measured_metrics(trial, tmp_path / "nothing-here")     # no eval dir at all
     assert "ska_delta" not in trial.user_attrs
 
     run_dir = tmp_path / "bad"
     (run_dir / "eval" / "final").mkdir(parents=True)
     (run_dir / "eval" / "final" / "quick_eval.json").write_text("{not json")
-    _stamp_ska_delta(trial, run_dir)
+    _stamp_measured_metrics(trial, run_dir)
     assert "ska_delta" not in trial.user_attrs
 
 
