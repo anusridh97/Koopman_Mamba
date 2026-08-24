@@ -22,27 +22,59 @@ import pathlib
 import sys
 
 import pytest
+import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 SEARCH_DIR = REPO / "configs/search"
 
-# A design file, not a study: it has a `designs:` list and no `name`/`base`.
-# Named explicitly rather than pattern-matched so a NEW study config cannot skip
-# this suite by accident -- an unrecognised file is a failure, not a skip.
-NOT_STUDIES = {"example_anchors.yaml"}
+
+def _is_design_file(path):
+    """Is this a `designs:` list rather than a study?
+
+    Discriminated by CONTENT, not by a hardcoded filename. It was a set of two
+    names -- `{"example_anchors.yaml"}` -- and adding a second design file broke
+    four tests with "unknown key(s) ['designs']", which is the roster-goes-stale
+    failure this repo keeps producing. Content cannot go stale: a study has
+    `name` and `base` and no `designs`, a design file has the reverse, and a file
+    that is neither still fails, so nothing can skip the suite by accident.
+    """
+    raw = yaml.safe_load(path.read_text()) or {}
+    return isinstance(raw, dict) and "designs" in raw and "base" not in raw
+
+
+def _design_files():
+    return sorted(p for p in SEARCH_DIR.glob("*.yaml") if _is_design_file(p))
 
 
 def _study_configs():
-    return sorted(p for p in SEARCH_DIR.glob("*.yaml")
-                  if p.name not in NOT_STUDIES)
+    return sorted(p for p in SEARCH_DIR.glob("*.yaml") if not _is_design_file(p))
 
 
 def test_there_is_at_least_one_committed_study():
     """Guards the guard: a glob that matches nothing makes every
     parametrised test below vacuously green."""
     assert _study_configs(), f"no study configs found under {SEARCH_DIR}"
+
+
+def test_the_design_files_are_recognised_as_such():
+    """The other half of the guard. If `_is_design_file` ever returned False for
+    everything, every design file would be parsed as a study and fail; if it
+    returned True for everything, every study would silently skip."""
+    found = {p.name for p in _design_files()}
+    assert "example_anchors.yaml" in found, found
+    assert not (found & {p.name for p in _study_configs()})
+
+
+@pytest.mark.parametrize("path", _design_files(), ids=lambda p: p.name)
+def test_every_design_file_loads(path):
+    """A design file has no StudySpec to validate it, so nothing parsed these
+    until a study pointed at one. `load_designs` is what a study will call."""
+    from experimentation.sweep.search.anchors import load_designs
+
+    designs = load_designs(path, minimum=1)
+    assert len({d.name for d in designs}) == len(designs), "duplicate names"
 
 
 @pytest.mark.parametrize("path", _study_configs(), ids=lambda p: p.name)
