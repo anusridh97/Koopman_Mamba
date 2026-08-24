@@ -1,0 +1,185 @@
+# The proxy base for the SKA interaction study: 256 wide, 17 layers, ~25.35M.
+#
+# ## Why this geometry and not 4m or 50m
+#
+# The interaction study needs to move `placement` and `n_ska_layers` and observe
+# a difference. `configs/runs/4m-golden.yaml` cannot supply that: it is 4 layers
+# with SKA at [2, 3], so `geometry.py`'s free window is {1, 2}, every legal
+# layer count clamps to 2, and all four placements resolve to the SAME pair of
+# indices. Two of the study's nine axes would be dead -- a sampler spending
+# trials on them, and a parameter importance computed over a difference that
+# does not exist. `test_search_axis_restriction.py` asserts both halves of that:
+# that 4m-golden's placement axis IS dead, and that this geometry's is not.
+#
+# `configs/runs/50m-first-real.yaml` is the geometry we actually care about, and
+# it is 2x the parameters per trial at the same depth. This config keeps 50m's
+# DEPTH (17 layers) and its SKA placement ([3, 7, 11, 15]) and narrows the width
+# from 384 to 256, because depth is what the placement and layer-count axes act
+# on and width is what costs.
+#
+# ## The head width is 64, and that is not a coincidence
+#
+# `d_model / ska_n_heads = 256 / 4 = 64`. Value width 64 is the one geometry the
+# fused SM100 prefix-scan kernel is compiled for (`cuda_prefix_scan._VALUE`), so
+# a later confirmation run on this same base can reach that kernel without
+# changing the architecture. This study does NOT use it -- see the route section
+# below -- but a base whose width forecloses it would have foreclosed it for
+# every follow-up too. Pinned by test (`test_proxy_256x17_config.py`), because
+# value width is a property of the BASE SPEC that no sampled rank can repair,
+# and `fused_only`'s own error message exists because that was learned the
+# expensive way.
+#
+# `mamba_headdim: 32` rather than mamba_ssm's default 64: d_inner is 512, so
+# headdim 64 would give 8 Mamba heads against the SKA branch's 4. 32 gives 16,
+# which keeps the per-head state dimension in the same range 50m's 384/6 does.
+#
+# ## The SKA route: exact inverse-Cholesky, pinned
+#
+# `ska_prefix_scan: false`, `ska_inverse_cholesky: true`,
+# `ska_exact_intrachunk: false` -- the negation-of-a-disjunction that `space.py`
+# calls `exact_invchol`. Exact to 5.1e-13 against the fp64 oracle and 0.92x-1.41x
+# the cost of the chunked approximation (jobs 440122 / 440135). It is the route
+# whose exactness is free, and the study pins it for the whole run because
+# `chunk_stats`/`exact_stats` add a 1e-4*I jitter on top of `ska_ridge` and
+# `ska_prefix_scan` does not -- so switching route between trials would perturb a
+# SAMPLED variable by 0.3%-10%.
+#
+# Not `exact_auto`: the fused kernel needs rank exactly 24 and the study samples
+# {8, 16, 24, 32}, so three of four ranks fall off a 167x-738x cliff correlated
+# with a searched variable.
+#
+# ## Norm clipping and layerscale
+#
+# `ska_norm_clip_c: 4.0` at rank 24 is `4/sqrt(24) = 0.8164965809277261` in the
+# study's `norm_clip_multiplier` vocabulary -- production-equivalent, and one of
+# that axis's four declared choices, so the reference point is inside the space.
+# `ska_layerscale_init: 0.01` likewise sits inside [0.002, 0.03].
+#
+# ## Optimizer
+#
+# lr 4e-4 matches 50m-fineweb-3b, and `space.default_base_lr` returns 4e-4 for
+# d_model <= 384 -- so the study's LR axis is centred on this value whether it
+# reads the spec or falls back.
+#
+# `warmup_steps: 24` is sized for THIS spec's own 600-step standalone run
+# (0.04 x 600). A study OVERRIDES it: `warmup_ratio` is a study axis and the
+# driver applies `optim.max_steps` from the StudySpec, so a trial's warmup is
+# recomputed against the study's budget. The number here is what a hand-launched
+# `python -m experimentation.run configs/runs/proxy-256x17.yaml` should use, not
+# what the study will use.
+#
+# ## Runtime
+#
+# One GPU per trial: eight trials run concurrently on one 8-GPU node, each pinned
+# by `CUDA_VISIBLE_DEVICES`, so a trial that asked for more than one device would
+# be asking for a device another trial owns.
+#
+# `deterministic: true` because this spec's purpose is comparison. Two runs at
+# one seed diverge by ~2e-4 without it (that is exactly what
+# golden_4m_curve.json's noise floor measured), and a study ranking configs on
+# held-out loss cannot resolve an effect smaller than its own reproducibility.
+# `runtime` is not hashed into run_id, so this renames nothing.
+#
+# `per_device_batch_size: 8` is deliberately conservative -- effective_batch 64
+# therefore accumulates 8x. Eight concurrent trainers share one node's host
+# memory and PCIe, and the study enables the OOM ladder
+# (`batch_ladder: true`), which can only descend. Starting high and descending
+# costs a dead trial per rung; starting low costs accumulation steps that are
+# nearly free at this size.
+name: proxy-256x17
+model:
+  d_model: 256
+  n_layers: 17
+  vocab_size: 32000
+  d_state: 48
+  d_conv: 4
+  mamba_expand: 2
+  mamba_headdim: 32
+  ska_n_heads: 4
+  ska_rank: 24
+  ska_ridge: 0.01
+  ska_power_K: 1
+  ska_chunk_size: 64
+  ska_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  ska_mode: parallel
+  # No `ska_backend` pinned. It is read by exactly one of the four SKA routes
+  # (the prefix scan), and this spec selects the inverse-Cholesky route -- so a
+  # value here would look like it selected something and would not have.
+  ska_prefix_scan: false
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+  ska_norm_clip: true
+  ska_norm_clip_c: 4.0
+  # The MODERN eta/gamma policy, stated explicitly rather than inherited. These
+  # are now KoopmanLMConfig's own defaults (the inversion landed 2026-08-21), so
+  # writing them changes nothing today -- and that is the point: a base spec for
+  # a study that will be re-read months from now should say which
+  # parameterisation its results came from, not depend on a default it does not
+  # control.
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.0
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+  # bf16 compute with an fp32 SKA core. The whitened core takes a Cholesky of a
+  # Gram matrix and bf16's 8 mantissa bits make that unreliable -- which is part
+  # of why ska_ridge exists, and exactly the quantity this study is sampling. A
+  # bf16 core would confound the ridge axis with its own numerical noise.
+  compute_precision: bf16
+  ska_precision: fp32
+  tie_embeddings: true
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 1.0e-05
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 1024
+# The existing 100M-token FineWeb-Edu shard, matching its meta.json exactly.
+# `run/data_verify.verify_shard` checks tokenizer and n_tokens against that file
+# at launch, so a mismatch here is a startup failure rather than a silent
+# retokenization.
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix:
+    fineweb: 1.0
+    pg19: 0.0
+    scrolls: 0.0
+  n_tokens: 100000536
+optim:
+  lr: 0.0004
+  warmup_steps: 24
+  max_steps: 600
+  schedule: cosine
+  effective_batch: 64
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  per_device_batch_size: 8
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: 00:45:00
+  gpu_arch: '9.0'
