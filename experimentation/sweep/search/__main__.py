@@ -177,15 +177,42 @@ def should_fanout(concurrent_trials: int, worker_index) -> bool:
     return concurrent_trials > 1 and worker_index is None
 
 
-def _fanout(args, study_spec, *, gpus):
+#: Env var an operator (or the sbatch script) sets to give each worker its own
+#: log. Not a CLI flag: it describes where output goes, which is not part of the
+#: study -- and the flag-removal rule is about study content, so a log path would
+#: have been a legitimate flag. It is an env var only because the sbatch script
+#: already computes a per-job directory and passing it through the environment
+#: avoids a second place to keep in step.
+WORKER_LOG_DIR_ENV = "KOOPMAN_SEARCH_WORKER_LOG_DIR"
+
+
+def _fanout(args, study_spec, *, gpus, log_dir=None):
     """Run `study_spec.concurrent_trials` copies of this command, one each.
 
     Returns (exit_code, per_worker_exit_codes). The parent does NOT run a trial
     itself: a supervisor that is also a worker cannot report on the worker it is,
     and the asymmetry showed up as a report written while one trial was still
     running.
+
+    `log_dir`, when given, sends each child's output to its own
+    `worker-<index>.log`. Without it every child inherited ONE stream and they
+    interleaved -- a traceback's first line landing under another worker's
+    progress -- which is what made the sbatch script's `WORKER_LOG_DIR` and its
+    comment claiming per-worker logs both false.
+
+    The mechanism is `LocalLauncher.submit`'s, for its reasons: a line-buffered
+    file object here AND `PYTHONUNBUFFERED` in the child, because `buffering=1`
+    affects only this process's object -- the child inherits a raw fd and CPython
+    block-buffers at 8 KB when stdout is a file, so a `tail -f` on a 12-hour job
+    would show nothing until the worker exited. Deliberately NOT `stdout=PIPE`: a
+    pipe nobody reads BLOCKS the child once it fills, which is a study that stops
+    progressing with no error at all.
     """
     procs = []
+    logs = []
+    if log_dir is not None:
+        log_dir = Path(log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
     for index in range(study_spec.concurrent_trials):
         env = {**os.environ,
                WORKER_ENV: str(index),
@@ -203,12 +230,28 @@ def _fanout(args, study_spec, *, gpus):
             cmd.append("--force")
         if args.force_no_eval:
             cmd.append("--force-no-eval")
-        proc = subprocess.Popen(cmd, env=env)
+        if log_dir is not None:
+            log = open(log_dir / f"worker-{index}.log", "w", buffering=1)
+            logs.append(log)
+            env["PYTHONUNBUFFERED"] = "1"
+            proc = subprocess.Popen(cmd, env=env, stdout=log,
+                                    stderr=subprocess.STDOUT)
+        else:
+            # No log directory: inherit, which is what an interactive run wants.
+            # The same asymmetry LocalLauncher.submit draws between its waiting
+            # and non-waiting branches.
+            proc = subprocess.Popen(cmd, env=env)
         procs.append(proc)
         gpu = env.get("CUDA_VISIBLE_DEVICES", "(none)")
-        print(f"[search]   worker {index}  GPU {gpu}  pid {proc.pid}")
+        where = f"  log {log_dir / f'worker-{index}.log'}" if log_dir else ""
+        print(f"[search]   worker {index}  GPU {gpu}  pid {proc.pid}{where}")
 
     codes = [p.wait() for p in procs]
+    # Closed after the wait, not before: the children hold their own dup'd fds,
+    # so closing early would not truncate their output -- but leaking N file
+    # objects for the length of a 12-hour study is still worth not doing.
+    for log in logs:
+        log.close()
     for index, code in enumerate(codes):
         if code != 0:
             print(f"[search] worker {index} exited {code}")
@@ -533,7 +576,8 @@ def main(argv=None):
     # worker only ever pulls.
     if fanning_out:
         print(f"[search] launching {study_spec.concurrent_trials} worker(s)")
-        code, _codes = _fanout(args, study_spec, gpus=gpus)
+        code, _codes = _fanout(args, study_spec, gpus=gpus,
+                               log_dir=os.environ.get(WORKER_LOG_DIR_ENV))
         # Reattach rather than reuse: this process built its Study before the
         # workers ran, and its trial list is that stale snapshot. The report has
         # to read the journal again or it describes an empty study. Same kwargs,

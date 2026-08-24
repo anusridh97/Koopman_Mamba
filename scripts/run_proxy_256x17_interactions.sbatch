@@ -135,13 +135,26 @@ export VENV=$SCRATCH/venvs/koopman-cuda
 export OPTUNA_SITE=/users/jkli/.venvs/koopman-optuna/site
 export STUDY_CONFIG="${STUDY_CONFIG:-configs/search/proxy-256x17-interactions-v1.yaml}"
 
-# Per-worker logs. The CLI's children inherit this process's stdout, so without
-# somewhere to route them all eight trainers interleave into one file and a
-# tracebacks's first line lands under another worker's progress. The run system
-# already gives every TRIAL its own run_dir/*.log; this is for the WORKER
-# processes' own output.
-export WORKER_LOG_DIR="$SCRATCH/logs/koopman-studies/workers-${SLURM_JOB_ID:-manual}"
-mkdir -p "$WORKER_LOG_DIR"
+# Per-worker logs, and the variable the CLI actually reads.
+#
+# This used to export WORKER_LOG_DIR, which NOTHING read: `_fanout` called Popen
+# with no `stdout=`, so all eight children inherited one stream and interleaved --
+# a traceback's first line landing under another worker's progress. The comment
+# here claimed otherwise, which is worse than not having the variable.
+# KOOPMAN_SEARCH_WORKER_LOG_DIR is the name `__main__.WORKER_LOG_DIR_ENV`
+# defines, and each worker now writes worker-<index>.log there, line-buffered,
+# with PYTHONUNBUFFERED set in the child so a tail shows progress rather than an
+# empty file until exit.
+#
+# The run system already gives every TRIAL its own run_dir/train.log; this is for
+# the WORKER processes' own output -- which is where a materialization error or a
+# claimed run directory shows up.
+export KOOPMAN_SEARCH_WORKER_LOG_DIR="$SCRATCH/logs/koopman-tests/workers-${SLURM_JOB_ID:-manual}"
+export WORKER_LOG_DIR="$KOOPMAN_SEARCH_WORKER_LOG_DIR"   # legacy alias, for the echo below
+if ! mkdir -p "$WORKER_LOG_DIR"; then
+    echo "FATAL: cannot create $WORKER_LOG_DIR"
+    exit 1
+fi
 
 echo "=== job ${SLURM_JOB_ID:-<interactive>} on $(hostname) ==="
 date -Is

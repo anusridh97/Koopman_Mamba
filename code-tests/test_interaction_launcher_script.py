@@ -417,9 +417,47 @@ def test_each_worker_gets_a_distinct_log_destination(text):
 
 def test_the_log_directory_is_per_job(text):
     """Two submissions must not overwrite each other's logs, even though they
-    deliberately share the run root and the journal."""
-    assert "SLURM_JOB_ID" in text[text.index("WORKER_LOG_DIR"):
-                                  text.index("WORKER_LOG_DIR") + 300]
+    deliberately share the run root and the journal.
+
+    Asserted on the EXECUTABLE assignment rather than a character window around
+    the first mention. The window version broke the moment a comment above the
+    line grew -- it was testing the prose, not the code.
+    """
+    assignments = [c for c in _commands(text)
+                   if "KOOPMAN_SEARCH_WORKER_LOG_DIR=" in c]
+    assert assignments, "the script does not set the log directory the CLI reads"
+    assert any("SLURM_JOB_ID" in c for c in assignments), assignments
+
+
+def test_it_exports_the_variable_the_cli_actually_READS(text):
+    """The bug this replaces: the script exported `WORKER_LOG_DIR` and nothing
+    read it, so eight workers shared one stream while the comment claimed
+    otherwise. The name is asserted against the constant, not spelled twice."""
+    from experimentation.sweep.search.__main__ import WORKER_LOG_DIR_ENV
+
+    assignments = [c for c in _commands(text)
+                   if f"{WORKER_LOG_DIR_ENV}=" in c]
+    assert assignments, (
+        f"the script must export {WORKER_LOG_DIR_ENV}, which is what _fanout "
+        f"reads; any other name is a directory nothing writes to")
+
+
+def test_the_log_directory_creation_is_checked(text):
+    """`mkdir -p` can fail (quota, read-only mount). Unchecked, the workers then
+    fail one by one on an IOError with the real cause three screens up.
+
+    The guard must be on the mkdir ITSELF -- `if ! mkdir ...` or `mkdir ... ||`.
+    An earlier version searched for `exit 1` within 200 characters and passed on
+    an unrelated abort further down the file, which is a test satisfied by
+    proximity rather than by structure.
+    """
+    guarded = [c for c in _commands(text)
+               if "mkdir -p" in c and "WORKER_LOG_DIR" in c
+               and (c.lstrip().startswith("if ! mkdir")
+                    or "||" in c.split("mkdir", 1)[1])]
+    assert guarded, (
+        "the WORKER_LOG_DIR mkdir is not guarded on its own exit status; write "
+        "`if ! mkdir -p ...; then ... exit 1; fi` or `mkdir -p ... || exit 1`")
 
 
 def test_it_fails_when_a_worker_fails(text):

@@ -61,6 +61,12 @@ class _FakePopen:
     def __init__(self, cmd, env=None, **kwargs):
         self.cmd = list(cmd)
         self.env = dict(env or {})
+        # Recorded so the log wiring is observable: `stdout` is the whole point
+        # of the per-worker log, and a test that only checked argv could not see
+        # 8 children sharing one stream.
+        self.stdout_arg = kwargs.get("stdout")
+        self.stderr_arg = kwargs.get("stderr")
+        self.stdout_path = getattr(self.stdout_arg, "name", None)
         self.pid = 1000 + len(_FakePopen.started)
         self.returncode = 0
         _FakePopen.started.append(self)
@@ -199,3 +205,101 @@ def test_an_empty_allocation_is_not_read_as_all_gpus(monkeypatch):
     here would pin workers onto GPUs the allocation explicitly excluded."""
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     assert visible_gpus() == []
+
+
+# ------------------------------------------------ each worker gets its own log ----
+#
+# `_fanout` called `Popen(cmd, env=env)` with no `stdout=`, so all N children
+# inherited ONE stream and interleaved -- a traceback's first line landing under
+# another worker's progress. The sbatch script's `WORKER_LOG_DIR` therefore gave
+# no worker a log at all, and its comment claiming otherwise was false.
+#
+# The pattern is `LocalLauncher.submit`'s existing one for its non-blocking path,
+# and for the same reasons: a line-buffered file object here, plus
+# PYTHONUNBUFFERED in the CHILD env, because `buffering=1` only affects this
+# process's object -- the child inherits a raw fd and CPython block-buffers at
+# 8 KB when stdout is a file, so without it a `tail -f` shows an empty file until
+# the worker exits.
+
+
+def test_each_worker_gets_a_distinct_log_file(spawned, tmp_path):
+    _fanout(_Args(), _Spec(concurrent_trials=4), gpus=["0", "1"],
+            log_dir=tmp_path)
+    paths = [p.stdout_path for p in spawned]
+    assert len(set(paths)) == 4, paths
+    for index, path in enumerate(sorted(paths)):
+        assert pathlib.Path(path).parent == tmp_path
+
+
+def test_the_log_name_identifies_the_worker(spawned, tmp_path):
+    """`worker-3.log` beats `log.3`: a human greps for the worker index, and the
+    `.log` suffix is what `metrics._LOG_GLOBS` matches -- not needed here, but
+    consistency with the run-directory logs costs nothing."""
+    _fanout(_Args(), _Spec(concurrent_trials=3), gpus=["0"], log_dir=tmp_path)
+    names = sorted(pathlib.Path(p.stdout_path).name for p in spawned)
+    assert names == ["worker-0.log", "worker-1.log", "worker-2.log"]
+
+
+def test_stderr_is_folded_into_the_same_file(spawned, tmp_path):
+    """A traceback split from the progress line it followed is much harder to
+    read, and two files per worker doubles what an operator has to open."""
+    import subprocess as _sp
+
+    _fanout(_Args(), _Spec(concurrent_trials=2), gpus=["0"], log_dir=tmp_path)
+    for proc in spawned:
+        assert proc.stderr_arg == _sp.STDOUT
+
+
+def test_the_child_gets_pythonunbuffered(spawned, tmp_path):
+    """Without it the log is empty until the worker exits, so a multi-hour job
+    cannot be told from a hung one."""
+    _fanout(_Args(), _Spec(concurrent_trials=2), gpus=["0"], log_dir=tmp_path)
+    for proc in spawned:
+        assert proc.env["PYTHONUNBUFFERED"] == "1"
+
+
+def test_the_log_files_are_actually_created(spawned, tmp_path):
+    """Opened, not just named: a path the parent never opened is a path nothing
+    writes to."""
+    _fanout(_Args(), _Spec(concurrent_trials=3), gpus=["0"], log_dir=tmp_path)
+    for index in range(3):
+        assert (tmp_path / f"worker-{index}.log").exists()
+
+
+def test_the_parent_does_not_hold_the_pipe(spawned, tmp_path):
+    """The failure mode this replaces. If the parent passed `stdout=PIPE` and
+    never read it, a worker writing more than the pipe buffer would BLOCK
+    forever -- a study that stops making progress with no error at all."""
+    import subprocess as _sp
+
+    _fanout(_Args(), _Spec(concurrent_trials=2), gpus=["0"], log_dir=tmp_path)
+    for proc in spawned:
+        assert proc.stdout_arg is not _sp.PIPE
+        assert proc.stdout_arg is not None, (
+            "inheriting the parent's stdout is what made 8 workers interleave")
+
+
+def test_the_files_are_closed_by_the_parent(spawned, tmp_path):
+    """`_fanout` waits for every child, so it must not leak N file objects for
+    the length of a 12-hour study."""
+    _fanout(_Args(), _Spec(concurrent_trials=3), gpus=["0"], log_dir=tmp_path)
+    for proc in spawned:
+        assert proc.stdout_arg.closed, "a worker log file was left open"
+
+
+def test_with_no_log_dir_the_behaviour_is_unchanged(spawned):
+    """Absent means inherit, which is what an interactive `python -m ... ` run
+    wants -- the same asymmetry `LocalLauncher.submit` draws between its waiting
+    and non-waiting branches."""
+    _fanout(_Args(), _Spec(concurrent_trials=2), gpus=["0"])
+    for proc in spawned:
+        assert proc.stdout_arg is None
+
+
+def test_the_log_directory_is_created_if_absent(spawned, tmp_path):
+    """The sbatch script mkdir's it, but `_fanout` is also called directly and a
+    missing directory would be an IOError after the plan printed."""
+    target = tmp_path / "deep" / "nested"
+    _fanout(_Args(), _Spec(concurrent_trials=2), gpus=["0"], log_dir=target)
+    assert target.is_dir()
+    assert (target / "worker-0.log").exists()

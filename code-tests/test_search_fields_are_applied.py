@@ -485,3 +485,66 @@ def test_the_sampler_name_stamped_on_a_trial_is_the_declared_one(tmp_path):
     being read as though it used today's default."""
     _, captured = _run_main(_study_file(tmp_path, sampler="tpe_multivariate"))
     assert captured["sampler_name"] == "tpe_multivariate"
+
+
+# ------------------------------- the worker log directory reaches _fanout ----
+
+def test_the_worker_log_directory_env_var_reaches_the_fanout(tmp_path,
+                                                            monkeypatch):
+    """Catches reverting `log_dir=os.environ.get(WORKER_LOG_DIR_ENV)` to `None`.
+
+    Found by mutation: every unit test of `_fanout`'s logging passed while `main`
+    passed nothing, so the sbatch script would export the directory and the CLI
+    would ignore it -- the same "exports a name nothing reads" bug the per-worker
+    logs were added to fix, one layer up.
+    """
+    from experimentation.sweep.search import __main__ as cli
+
+    seen = {}
+
+    def fake_fanout(args, spec, *, gpus, log_dir=None):
+        seen["log_dir"] = log_dir
+        return 0, [0]
+
+    target = tmp_path / "worker-logs"
+    monkeypatch.setenv(cli.WORKER_LOG_DIR_ENV, str(target))
+    original_fanout = cli._fanout
+    original_gate = cli.check_git_clean
+    cli._fanout = fake_fanout
+    cli.check_git_clean = lambda allow_dirty=False: False
+    try:
+        # concurrent_trials > 1 so the supervisor fans out rather than driving.
+        study = _study_file(tmp_path, concurrent_trials=2, n_trials=2)
+        cli.main([str(study), "--force-no-eval"])
+    finally:
+        cli._fanout = original_fanout
+        cli.check_git_clean = original_gate
+
+    assert seen["log_dir"] == str(target), (
+        "the worker log directory did not reach _fanout, so eight workers would "
+        "share one interleaved stream while the sbatch script claimed otherwise")
+
+
+def test_no_log_directory_in_the_environment_means_none(tmp_path, monkeypatch):
+    """Guards the guard: if `main` passed a constant, the test above would pass
+    for the wrong reason."""
+    from experimentation.sweep.search import __main__ as cli
+
+    seen = {}
+
+    def fake_fanout(args, spec, *, gpus, log_dir=None):
+        seen["log_dir"] = log_dir
+        return 0, [0]
+
+    monkeypatch.delenv(cli.WORKER_LOG_DIR_ENV, raising=False)
+    original_fanout = cli._fanout
+    original_gate = cli.check_git_clean
+    cli._fanout = fake_fanout
+    cli.check_git_clean = lambda allow_dirty=False: False
+    try:
+        study = _study_file(tmp_path, concurrent_trials=2, n_trials=2)
+        cli.main([str(study), "--force-no-eval"])
+    finally:
+        cli._fanout = original_fanout
+        cli.check_git_clean = original_gate
+    assert seen["log_dir"] is None
