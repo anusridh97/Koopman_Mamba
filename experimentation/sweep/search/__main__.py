@@ -15,14 +15,24 @@ unmodified run system, so a trial gets the same content-addressed run_id, shard
 verification, atomic materialization and attempts.jsonl that a hand-launched run
 gets.
 
-**What this does NOT do yet, and must say so.** Nothing in the launch path writes
-`run_dir/eval/<ckpt>/quick_eval.json`, which is where the objective is read from.
-`train.py` does not call it and the sbatch template does not either -- the only
-caller anywhere is `scripts/verify_search_and_provenance.sbatch`, by hand. So
-every trial will train successfully and then be recorded FAIL. That is loud rather
-than silent: the CLI checks for it up front and refuses without --force-no-eval,
-because burning N GPU jobs to learn nothing is worse than a startup error. The
-objective hook lands with the §6.2 TrainTask work.
+**The loop closes, and that is now MEASURED rather than argued.** The objective is
+read from `run_dir/eval/<ckpt>/quick_eval.json`, and for most of this package's
+life nothing in the launch path wrote it: every trial trained successfully and was
+then recorded FAIL. `train.py --eval_on_final` writes it now, put there by the
+launcher rather than the spec (a scored run is not a different experiment, so it
+must not reach `run_id`).
+
+Job 445657, `scripts/verify_study_e2e.sbatch` on one H100, is the first end-to-end
+evidence: 4 trials, 4 COMPLETE, four `quick_eval.json` with finite losses
+(7.1819 / 7.1934 / 7.2201 / 7.6400), all four reporting 20 intermediate steps, so
+the pruner had something to consult. The 0.458 anchor spread matches the figure
+`REVIEW.md` records from the SKA-route measurement, which is a consistency check
+on both.
+
+The startup gate that refused to launch without `--force-no-eval` therefore no
+longer fires -- but it is still here and still checked by looking for a caller
+rather than trusting a flag, because deleting the hook must bring the refusal back
+rather than silently restoring N-trials-N-FAILs.
 
 **Parallelism is `concurrent_trials:` in the study file, and it launches
 itself.** Set it and this command spawns that many processes, pins each to a
