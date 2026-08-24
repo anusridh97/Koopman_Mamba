@@ -250,6 +250,11 @@ def test_the_indices_survive_a_failed_launch(tmp_path):
 _REQUIRED_COLUMNS = (
     # identity and outcome
     "number", "state", "objective",
+    # the pruner's evidence: which steps this trial reported, and the last one.
+    # A PRUNED trial's whole explanation is its curve, and `trials.csv` is what a
+    # reader opens -- the journal is not.
+    "n_reported_steps", "last_reported_step", "last_reported_value",
+    "intermediate_values",
     # every searched axis
     "param_ska_rank", "param_n_ska_layers", "param_placement",
     "param_ska_ridge", "param_ska_layerscale_init",
@@ -259,7 +264,7 @@ _REQUIRED_COLUMNS = (
     "param_weight_decay", "param_warmup_ratio", "param_grad_clip",
     # resolved facts and measurements
     "attr_param_count", "attr_baseline_param_count", "attr_ska_layer_indices",
-    "attr_per_device_batch_size", "attr_model_seed",
+    "attr_per_device_batch_size", "attr_model_seed", "attr_ska_norm_clip_c",
     "attr_tokens_per_sec", "attr_peak_memory_gib", "attr_n_eval_tokens",
     "attr_ska_delta",
     # provenance
@@ -396,3 +401,168 @@ def test_a_reference_repeat_reconstructs_to_its_own_run_id(tmp_path):
 
     assert {t.user_attrs["model_seed"] for t in study.trials} == {42, 101}
     assert len({t.user_attrs["run_id"] for t in study.trials}) == 2
+
+# --------------------------------------- the two columns found in review ----
+
+def test_the_resolved_norm_clip_c_reaches_the_trial(tmp_path):
+    """`params` records the MULTIPLIER; the model runs at
+    `multiplier * sqrt(rank)`. The absolute value is derivable from two recorded
+    columns, and derivable is not recorded: a reader has to know the formula, and
+    `params_to_overrides` also ROUNDS the product to 8 decimal places -- so a
+    hand-recomputed value can differ from the one that ran in the last bits,
+    which is exactly enough to make a run_id check fail for the wrong reason."""
+    import math
+
+    _study, trial, _outcome = _one_trial(tmp_path)
+    expected = round(math.sqrt(trial.params["ska_rank"])
+                     * trial.params["norm_clip_multiplier"], 8)
+    assert trial.user_attrs["ska_norm_clip_c"] == pytest.approx(expected)
+
+
+def test_the_pruning_history_reaches_trials_csv(tmp_path):
+    """A PRUNED trial's evidence is its reported curve, and `trial_row` flattened
+    params and user_attrs but NOT `intermediate_values` -- so the one thing that
+    explains why a trial was pruned lived only in the journal. `trials.csv` is
+    what the analysis and any external reader actually open."""
+    import csv
+
+    from experimentation.sweep.search.report import write_trials_csv
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="provenance", study_dir=tmp_path, seed=1)
+    trial = study.ask(to_distributions(context["space"]))
+    for step, value in ((450, 4.2), (475, 4.1), (500, 4.05)):
+        trial.report(value, step)
+    trial.set_user_attr("pruned", "pruned at step 500")
+    study.tell(trial, state=optuna.trial.TrialState.PRUNED)
+
+    row = next(iter(csv.DictReader(
+        write_trials_csv(study, tmp_path).read_text().splitlines())))
+    assert row["state"] == "PRUNED"
+    assert row["n_reported_steps"] == "3"
+    assert row["last_reported_step"] == "500"
+    assert float(row["last_reported_value"]) == pytest.approx(4.05)
+    assert json.loads(row["intermediate_values"]) == {
+        "450": 4.2, "475": 4.1, "500": 4.05}
+
+
+def test_a_trial_that_reported_nothing_says_zero_rather_than_blank(tmp_path):
+    """Zero reported steps is a real and important observation -- it means the
+    pruner had nothing to consult, which is how pruning silently does nothing on
+    a study whose log format drifted. A blank cell reads as a missing column."""
+    import csv
+
+    from experimentation.sweep.search.report import write_trials_csv
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="provenance", study_dir=tmp_path, seed=1)
+    study.tell(study.ask(to_distributions(context["space"])), 1.0)
+
+    row = next(iter(csv.DictReader(
+        write_trials_csv(study, tmp_path).read_text().splitlines())))
+    assert row["n_reported_steps"] == "0"
+    assert row["last_reported_step"] == ""
+    assert row["intermediate_values"] == "{}"
+
+
+def test_the_intermediate_values_column_is_machine_readable(tmp_path):
+    """JSON, not a repr. A Python dict repr is not parseable by anything that
+    reads a CSV, and the point of putting the curve here is that something other
+    than optuna can read it."""
+    import csv
+
+    from experimentation.sweep.search.report import write_trials_csv
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="provenance", study_dir=tmp_path, seed=1)
+    trial = study.ask(to_distributions(context["space"]))
+    trial.report(4.2, 450)
+    study.tell(trial, 4.0)
+
+    row = next(iter(csv.DictReader(
+        write_trials_csv(study, tmp_path).read_text().splitlines())))
+    parsed = json.loads(row["intermediate_values"])
+    assert parsed == {"450": 4.2}
+
+
+# ============================================================================
+# The first-trial throughput artefact. MEASURED, job 445689.
+#
+# Four trials on the proxy base at 600 steps reported 17,818 / 111,416 /
+# 104,760 / 112,685 tok/s. The 6x outlier was TRIAL 0 and no architectural
+# difference between those four configs can cause a 6x throughput gap -- one
+# scalar multiply on a gate cannot. It paid first-trial CUDA context creation and
+# kernel autotuning, and `tokens_per_sec` is measured during the eval pass, which
+# is early enough in the process's life to still be inside that.
+#
+# At `concurrent_trials: 8` that is EIGHT poisoned points, not one, because each
+# worker process pays its own warmup.
+#
+# Handled by RECORDING rather than by discarding: `worker_trial_ordinal` says
+# which trial this was for this worker process, the analysis excludes ordinal 0
+# from the throughput front and REPORTS how many it excluded. Discarding in the
+# driver would delete a measurement; excluding silently in the analysis would
+# produce a front whose point count nobody could reconcile with the trial count.
+# ============================================================================
+
+def test_the_first_trial_of_a_worker_is_identified_as_such(tmp_path):
+    from experimentation.sweep.search.driver import drive
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study
+
+    context = _context(tmp_path)
+    study = create_study(study_name="provenance", study_dir=tmp_path, seed=1)
+    drive(study, n_trials=3, launcher=_FakeLauncher(),
+          objective_reader_for=fixed_reader(lambda d: 1.0), worker_id=0,
+          **context)
+
+    ordinals = [t.user_attrs["worker_trial_ordinal"] for t in study.trials]
+    assert ordinals == [0, 1, 2]
+
+
+def test_the_ordinal_counts_this_PROCESS_not_the_study(tmp_path):
+    """Warmup is a property of the process, not of the study, so a resumed worker
+    starts at 0 again -- and that is correct: the new process pays the warmup
+    again. A study-wide counter would mark the resumed trial as warm when it is
+    the coldest one in the journal."""
+    from experimentation.sweep.search.driver import drive
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study
+
+    context = _context(tmp_path)
+    study = create_study(study_name="provenance", study_dir=tmp_path, seed=1)
+    drive(study, n_trials=2, launcher=_FakeLauncher(),
+          objective_reader_for=fixed_reader(lambda d: 1.0), **context)
+    # A second `drive` call is a second process, as far as warmup is concerned.
+    drive(study, n_trials=4, launcher=_FakeLauncher(),
+          objective_reader_for=fixed_reader(lambda d: 1.0), **context)
+
+    ordinals = [t.user_attrs["worker_trial_ordinal"] for t in study.trials]
+    assert ordinals == [0, 1, 0, 1]
+
+
+def test_the_ordinal_reaches_trials_csv(tmp_path):
+    import csv
+
+    from experimentation.sweep.search.driver import drive
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.report import write_trials_csv
+    from experimentation.sweep.search.study import create_study
+
+    context = _context(tmp_path)
+    study = create_study(study_name="provenance", study_dir=tmp_path, seed=1)
+    drive(study, n_trials=2, launcher=_FakeLauncher(),
+          objective_reader_for=fixed_reader(lambda d: 1.0), **context)
+
+    rows = list(csv.DictReader(
+        write_trials_csv(study, tmp_path).read_text().splitlines()))
+    assert [r["attr_worker_trial_ordinal"] for r in rows] == ["0", "1"]
+
+
+def test_the_ordinal_is_in_the_attr_roster():
+    from experimentation.sweep.search.driver import TRIAL_ATTRS
+
+    assert "worker_trial_ordinal" in TRIAL_ATTRS

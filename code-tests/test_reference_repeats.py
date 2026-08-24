@@ -1,11 +1,17 @@
 """Repeated reference anchors: the study's own empirical noise floor.
 
 **Why this file exists, stated before any test.** The proxy study ranks configs on
-held-out loss after 600 steps. On the 4m smoke study (job 445657) ablating the SKA
-branch ENTIRELY moved held-out loss by 1.166e-4, and `REVIEW.md` records the same
-quantity at <=2.3e-4. If the study's own trial-to-trial reproducibility noise is
-of that order, then no ranking over these axes means anything and no sampler can
-repair it -- the study would be measuring its own seed.
+held-out loss after 600 steps, and job 445689 measured how big those differences
+actually are: four trials on this base at 600 steps gave losses spanning 0.069,
+with the best two 0.004 apart. If the study's own trial-to-trial reproducibility
+noise is of that order, then no ranking over these axes means anything and no
+sampler can repair it -- the study would be measuring its own seed.
+
+(An earlier version of this docstring cited a 1.17e-4 SKA ablation delta from a
+4m-geometry smoke study as the effect size to worry about. Job 445689 corrected
+that: at the same `ska_layerscale_init` the proxy gives 1.17e-2, a hundred times
+larger, and every delta is positive. The 4m number was a scale artefact. The
+question this file exists for did not change -- only its magnitude did.)
 
 So the study has to measure that noise, and the only honest way to measure it is
 to run the SAME configuration several times differing ONLY in the training seed.

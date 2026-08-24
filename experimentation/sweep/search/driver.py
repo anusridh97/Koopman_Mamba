@@ -115,6 +115,24 @@ _MAX_STALLED_ATTEMPTS = 3
 TRIAL_ATTRS = ("param_count", "baseline_param_count", "worker_id",
                "sampler", "sampler_seed", "per_device_batch_size",
                "anchor_name",
+               # Which trial this was for THIS worker process, 0-based.
+               #
+               # It exists for one measured reason. Job 445689, four trials on the
+               # proxy base at 600 steps: 17,818 / 111,416 / 104,760 / 112,685
+               # tok/s. The 6x outlier was trial 0. Those four configs differ only
+               # in `ska_layerscale_init` -- one scalar multiply on a gate -- so
+               # nothing architectural can cause a 6x throughput gap. It paid
+               # first-trial CUDA context creation and kernel autotuning, and
+               # `tokens_per_sec` comes from the eval pass, which is early enough
+               # in the process's life to still be inside that.
+               #
+               # At `concurrent_trials: 8` that is EIGHT poisoned points, not one:
+               # every worker process pays its own warmup. So the number is
+               # RECORDED here and `analysis.throughput_pareto` excludes ordinal 0
+               # while reporting how many it excluded. Discarding it in the driver
+               # would delete a measurement; excluding it silently in the analysis
+               # would produce a front nobody could reconcile with the trial count.
+               "worker_trial_ordinal",
                # The seed the trial ACTUALLY trained at, read off the resolved
                # spec. Recorded for every trial, seeded or not: reconstructing a
                # trial from trials.csv needs the seed that ran, and `run_id`
@@ -125,6 +143,10 @@ TRIAL_ATTRS = ("param_count", "baseline_param_count", "worker_id",
                # Which replicate set this trial belongs to, when it belongs to
                # one. This is the column the noise floor is computed over.
                "reference_group",
+               # The ABSOLUTE norm clip that ran, not the multiplier the sampler
+               # chose. Derivable from `norm_clip_multiplier` and `ska_rank`, and
+               # derivable is not recorded -- see `_record_trial_attrs`.
+               "ska_norm_clip_c",
                # The resolved SKA layer indices. `trial.params` records
                # (n_ska_layers, placement); nothing else records what that pair
                # resolved to, and the placement axis exists precisely because
@@ -173,7 +195,8 @@ def run_trial(study: optuna.study.Study, trial, *,
               batch_ladder: bool = False,
               worker_id: Optional[int] = None,
               sampler_name: Optional[str] = None,
-              sampler_seed: Optional[int] = None) -> TrialOutcome:
+              sampler_seed: Optional[int] = None,
+              worker_trial_ordinal: Optional[int] = None) -> TrialOutcome:
     """Turn one asked-for trial into a launched run, and report the result back.
 
     `base_lr` is accepted and unused here -- the sampler has already produced a
@@ -274,7 +297,8 @@ def run_trial(study: optuna.study.Study, trial, *,
             trial, spec, base_model,
             worker_id=worker_id, sampler_name=sampler_name,
             sampler_seed=sampler_seed, anchor=anchor,
-            reference_group=trial.user_attrs.get(REFERENCE_GROUP_ATTR))
+            reference_group=trial.user_attrs.get(REFERENCE_GROUP_ATTR),
+            worker_trial_ordinal=worker_trial_ordinal)
         try:
             # wait=False so the objective reader can WATCH this run rather than
             # only inspect its corpse. With a blocking submit the reader starts
@@ -453,7 +477,8 @@ def _record_trial_attrs(trial, spec, base_model: KoopmanLMConfig, *,
                         sampler_name: Optional[str],
                         sampler_seed: Optional[int],
                         anchor: Optional[str],
-                        reference_group: Optional[str] = None) -> None:
+                        reference_group: Optional[str] = None,
+                        worker_trial_ordinal: Optional[int] = None) -> None:
     """Stamp the resolved facts about this trial onto the trial itself.
 
     Not onto the run directory. Both would be defensible and the trial is the
@@ -483,9 +508,20 @@ def _record_trial_attrs(trial, spec, base_model: KoopmanLMConfig, *,
         # indices` CLAMPS a count past the usable window rather than raising, and
         # a clamped trial is indistinguishable from an unclamped one without this.
         "ska_layer_indices": [int(i) for i in spec.model.ska_layer_indices],
+        # The ABSOLUTE norm clip. `params` records the MULTIPLIER and the model
+        # runs at `multiplier * sqrt(rank)`, so the value that ran is derivable
+        # from two recorded columns -- and derivable is not recorded. A reader has
+        # to know the formula, and `params_to_overrides` ROUNDS the product to 8
+        # decimal places, so a hand-recomputed value can differ in the last bits:
+        # enough to make a run_id reconstruction fail for a reason that is not the
+        # bug it looks like.
+        "ska_norm_clip_c": (None if spec.model.ska_norm_clip_c is None
+                            else float(spec.model.ska_norm_clip_c)),
     }
     if reference_group is not None:
         attrs[REFERENCE_GROUP_ATTR] = str(reference_group)
+    if worker_trial_ordinal is not None:
+        attrs["worker_trial_ordinal"] = int(worker_trial_ordinal)
     if worker_id is not None:
         attrs["worker_id"] = int(worker_id)
     if sampler_name is not None:
@@ -589,11 +625,24 @@ def drive(study: optuna.study.Study, *, n_trials: int, **kwargs) -> List[TrialOu
     # counter is the thing the loop condition reads, so watching it is exact,
     # whereas a cap has to guess a margin.
     stalled = 0
+    # How many trials THIS CALL has attempted. Stamped onto each trial as
+    # `worker_trial_ordinal` so the analysis can tell a warm-up throughput
+    # measurement from an architectural one -- job 445689 measured trial 0 at
+    # 17,818 tok/s against ~110,000 for its siblings, from CUDA context creation
+    # and kernel autotuning rather than from anything in the config. See
+    # `TRIAL_ATTRS`.
+    #
+    # Per CALL, not per study, and that is the point: warmup is a property of the
+    # PROCESS. A resumed worker starts at 0 again because the new process pays the
+    # warmup again, and a study-wide counter would mark the resumed trial as warm
+    # when it is the coldest one in the journal.
+    ordinal = 0
     while _finished(study) < n_trials:
         before = _finished(study)
         trial = study.ask(distributions)
         try:
-            outcomes.append(run_trial(study, trial, **kwargs))
+            outcomes.append(run_trial(study, trial,
+                                      worker_trial_ordinal=ordinal, **kwargs))
         except FATAL_EXCEPTIONS:
             # Record, then re-raise: a worker that exits leaving a trial RUNNING
             # is the failure this whole handler exists to prevent, and that is
@@ -607,6 +656,10 @@ def drive(study: optuna.study.Study, *, n_trials: int, **kwargs) -> List[TrialOu
             # This trial's problem, as far as anything here can tell. Recorded,
             # told, and the worker moves to the next one.
             outcomes.append(_fail_trial(study, trial, exc))
+        # Incremented for every ATTEMPT, including the failed ones, because the
+        # warmup it tracks is paid by the process on its first attempt whether or
+        # not that attempt produced a result.
+        ordinal += 1
         if _finished(study) > before:
             stalled = 0
             continue

@@ -48,10 +48,14 @@
 #
 # For this pairing of base and study the arithmetic is exact and nothing clamps:
 # 0.01*0.3 == 0.003 and 0.01*3.0 == 0.03 are the ridge axis's own endpoints,
-# 0.01*0.2 == 0.002 and 0.01*3.0 == 0.03 are the layerscale axis's, and
-# 4.0e-4*0.8 == 3.2e-4 / 4.0e-4*1.2 == 4.8e-4 are the LR axis's -- all five
+# 0.01*0.5 == 0.005 and 0.01*30.0 == 0.3 are the layerscale axis's, and
+# 4.0e-4*0.8 == 3.2e-4 / 4.0e-4*1.2 == 4.8e-4 are the LR axis's -- all six
 # products are exactly representable in binary floating point, verified by test
 # rather than assumed.
+#
+# The layerscale pair changed on 2026-08-24 when the axis was widened to
+# [0.005, 0.3] on the evidence of job 445689; see that block below and the study
+# file's own note on the axis.
 #
 # **One thing DOES snap, and it is deliberate.** `Design.warmup_ratio` defaults
 # to 0.02, and this study FIXES warmup_ratio at 0.04, so every anchor's 0.02
@@ -144,10 +148,23 @@ designs:
   # ------------------------------------------------------------- layerscale
   # How loudly the SKA branch speaks at step 0. Distinct from ridge: this scales
   # the branch's OUTPUT, ridge conditions its INTERNAL solve.
-  - name: layerscale-low     # 0.01 x 0.2 = 0.002
-    layerscale_factor: 0.2
-  - name: layerscale-high    # 0.01 x 3.0 = 0.03
-    layerscale_factor: 3.0
+  #
+  # FACTORS UPDATED 2026-08-24 with the axis, from 0.2/3.0 to 0.5/30.0. Job 445689
+  # measured the best loss at ls_init 0.1 -- outside the old [0.002, 0.03] -- and
+  # the gate at 0.01 growing 2.36x during training while 0.1/0.5/1.0 stayed put,
+  # so the axis was capping a value training wanted higher. The study now declares
+  # [0.005, 0.3] and these two factors move with it so they still land EXACTLY on
+  # the endpoints: 0.01*0.5 == 0.005 and 0.01*30.0 == 0.3, both exactly
+  # representable in binary floating point and verified by test.
+  #
+  # Moving the axis WITHOUT moving these would have been the quiet failure this
+  # file's header warns about: the anchors would still resolve, still be named
+  # "low" and "high", and no longer reach either extreme of the axis they are
+  # named for -- an OFAT screen that has stopped screening its own endpoints.
+  - name: layerscale-low     # 0.01 x 0.5 = 0.005
+    layerscale_factor: 0.5
+  - name: layerscale-high    # 0.01 x 30.0 = 0.3
+    layerscale_factor: 30.0
 
   # --------------------------------------------------------- norm-clip multiplier
   # ABSOLUTE, not a factor, because the reference value 4/sqrt(24) is itself a
@@ -203,13 +220,24 @@ designs:
   #
   # ## Why this is the most important block in the file
   #
-  # This study ranks configurations on held-out loss after 600 steps. On the 4m
-  # smoke study (job 445657) ablating the SKA branch ENTIRELY moved held-out loss
-  # by 1.166e-4, and REVIEW.md records the same quantity at <=2.3e-4 against an
-  # anchor spread of 0.458. If this study's own trial-to-trial reproducibility
-  # noise is of that order, then differences between these anchors are not
-  # measurements of anything and no sampler can repair that -- a multivariate TPE
-  # fitted to noise produces a confident joint model of noise.
+  # This study ranks configurations on held-out loss after 600 steps, and job
+  # 445689 measured how large those differences are: four trials on THIS base at
+  # THIS horizon, crossing `ska_layerscale_init`, gave losses 5.2687 / 5.2648 /
+  # 5.2933 / 5.3338 -- a span of 0.069, with the best two 0.004 apart. If this
+  # study's own trial-to-trial reproducibility noise is of that order, then
+  # differences between these anchors are not measurements of anything and no
+  # sampler can repair that -- a multivariate TPE fitted to noise produces a
+  # confident joint model of noise.
+  #
+  # The same job settled a worry that had been attached to this block. An earlier
+  # 4m-geometry smoke study measured an SKA ablation delta of 1.17e-4 and raised
+  # the possibility that the branch was doing nothing at all here. At the same
+  # `ska_layerscale_init = 0.01` the proxy gives 1.17e-2 -- a hundred times
+  # larger -- rising monotonically with the gate (1.17e-2 -> 3.69e-2 -> 5.85e-2
+  # -> 7.48e-2) and POSITIVE throughout, i.e. removing SKA makes the loss worse.
+  # The 4m result was a scale artefact. So the question is no longer "is there a
+  # signal"; it is "is the signal above the seed noise", which is what these five
+  # trials measure and nothing else in the study can.
   #
   # So the spread of these five is the study's NOISE FLOOR, and `analysis.py`
   # states every reported effect against it. An effect smaller than the floor is

@@ -54,7 +54,33 @@ def _completed(study: optuna.study.Study) -> List[Any]:
 
 
 def trial_row(trial) -> Dict[str, Any]:
-    """One trial flattened for a spreadsheet: identity, state, params, attrs."""
+    """One trial flattened for a spreadsheet: identity, state, params, attrs,
+    and the PRUNING HISTORY.
+
+    The last of those was missing and it is the one a PRUNED trial's whole
+    explanation lives in. `intermediate_values` is `{step: value}` -- what the
+    trial reported and therefore what the pruner compared against a median -- and
+    it was durable in the journal and absent from `trials.csv`, which is the file
+    the analysis and every external reader actually open. A row saying PRUNED with
+    no curve cannot answer "pruned on the strength of what?".
+
+    Three summary columns plus the full series, because they answer different
+    questions and the summaries are the ones a spreadsheet can sort:
+
+      * `n_reported_steps` -- **zero is a finding.** It means the pruner had
+        nothing to consult, which is exactly how pruning silently does nothing
+        when the trainer's progress format drifts (`metrics.TRAIN_RE` is coupled
+        to a `print` statement, and a non-matching line is indistinguishable from
+        no progress). Recorded as `0`, never blank: a blank cell reads as a
+        missing column.
+      * `last_reported_step` / `last_reported_value` -- where the trial got to.
+        For a PRUNED trial this is where it was stopped.
+      * `intermediate_values` -- the whole curve, as **JSON**, not a Python
+        repr. The point of putting it in a CSV is that something other than optuna
+        can read it, and a repr is not parseable by anything.
+    """
+    reported = dict(getattr(trial, "intermediate_values", {}) or {})
+    steps = sorted(reported)
     row: Dict[str, Any] = {
         "number": trial.number,
         "state": trial.state.name,
@@ -62,6 +88,14 @@ def trial_row(trial) -> Dict[str, Any]:
         "datetime_start": trial.datetime_start.isoformat() if trial.datetime_start else None,
         "datetime_complete": (trial.datetime_complete.isoformat()
                               if trial.datetime_complete else None),
+        "n_reported_steps": len(steps),
+        "last_reported_step": steps[-1] if steps else None,
+        "last_reported_value": reported[steps[-1]] if steps else None,
+        # `sort_keys` so two runs of the report produce byte-identical cells --
+        # `write_analysis` is documented idempotent and a dict whose order
+        # wandered would make a diff of two reports unreadable.
+        "intermediate_values": json.dumps({str(s): reported[s] for s in steps},
+                                          sort_keys=True),
     }
     row.update({f"param_{k}": v for k, v in trial.params.items()})
     row.update({f"attr_{k}": v for k, v in trial.user_attrs.items()})

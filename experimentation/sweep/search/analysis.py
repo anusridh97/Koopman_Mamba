@@ -48,12 +48,29 @@ same adaptive-sampling reason.
 the within-group spread of the study's designated reference replicates -- one
 configuration, several training seeds -- and every magnitude in the report carries
 its size in units of that spread plus a `resolved` / `unresolvable` verdict. This
-is the section to read first and the reason is arithmetic: on the 4m smoke study
-(job 445657) ablating SKA entirely moved held-out loss by 1.166e-4, so if the
-floor here is of that order then the differences this study ranks are differences
-between seeds and no sampler can repair that. A report without a floor is a
-ranking without a scale, and `noise_floor` says so in those words rather than
-returning zero.
+is the section to read first, and the reason is that the effects being ranked are
+SMALL.
+
+The size of the effects is now measured rather than feared. Job 445689, four
+trials on the proxy base at its real 600-step horizon crossing
+`ska_layerscale_init`, gave losses 5.2687 / 5.2648 / 5.2933 / 5.3338 -- a total
+span of 0.069, with the top two 0.004 apart -- and SKA ablation deltas of
+1.17e-2 to 7.48e-2, all POSITIVE, i.e. removing SKA makes the model worse. Two
+consequences:
+
+  * The SKA branch is load-bearing at this scale. An earlier 4m-geometry smoke
+    study measured an ablation delta of 1.17e-4 and raised the worry that the
+    whole study was in a dead regime; at the same `ska_layerscale_init = 0.01`
+    the proxy gives 1.17e-2, a hundred times larger. That was a SCALE artefact of
+    the 4m geometry, not a property of the mechanism.
+  * The differences the study must rank are of order 1e-2 to 1e-3 in held-out
+    loss, and the top two configs in that probe differ by 4e-3. Whether an
+    ordering that tight is real is a question about SEED NOISE and nothing else,
+    which is exactly what `noise_floor` measures and why it is computed first and
+    threaded through every magnitude below.
+
+A report without a floor is a ranking without a scale, and `noise_floor` says so
+in those words rather than returning zero.
 
 **No plots, by measurement not by preference.** sklearn and matplotlib are not
 installed in this environment, so fANOVA and MeanDecreaseImpurity are
@@ -273,11 +290,15 @@ def noise_floor(study: optuna.study.Study) -> Dict[str, Any]:
 
     **The single most important number this module produces.** Everything else
     here is a difference in held-out loss, and a difference is only a measurement
-    if it is larger than what the same configuration produces twice. On the 4m
-    smoke study (job 445657) ablating SKA entirely moved held-out loss by
-    1.166e-4; if that is the size of this study's seed noise then the study cannot
-    rank SKA at all, and that is a finding rather than a failure -- but only if it
-    is measured.
+    if it is larger than what the same configuration produces twice.
+
+    The scale of what has to be resolved is measured: job 445689, four trials on
+    the proxy base at 600 steps, produced losses spanning 0.069 with the best two
+    0.004 apart. So this study is being asked to rank differences of order 1e-2
+    to 1e-3, and whether it can is entirely a question about how much one
+    configuration moves when only its seed changes. If sigma is of that order the
+    study cannot rank these axes at all -- which is a finding rather than a
+    failure, but only if it is measured.
 
     Computed from `reference_group` members and from NOTHING else. In particular
     not from the spread of the whole study: that is a spread ACROSS
@@ -995,7 +1016,27 @@ def pareto_front(study: optuna.study.Study) -> List[Dict[str, Any]]:
     return front
 
 
-def throughput_pareto(study: optuna.study.Study) -> List[Dict[str, Any]]:
+#: Why a worker's first trial is kept off the throughput front, with the number.
+_WARMUP_REASON = (
+    "A worker process's FIRST trial (`attr_worker_trial_ordinal == 0`) is "
+    "excluded from the throughput front. Measured, job 445689: four trials on "
+    "the proxy base at 600 steps reported 17,818 / 111,416 / 104,760 / 112,685 "
+    "tok/s, and the 6x outlier was trial 0. Those four configs differ only in "
+    "`ska_layerscale_init` -- one scalar multiply on a gate -- so nothing "
+    "architectural can produce a 6x throughput gap. It is first-trial CUDA "
+    "context creation and kernel autotuning, and `tokens_per_sec` is measured "
+    "during the eval pass, early enough in the process's life to still be inside "
+    "that. At `concurrent_trials: 8` this is EIGHT poisoned points, not one, "
+    "because every worker process pays its own warmup. The trials are NOT "
+    "dropped from anything else -- their loss is a real measurement and only "
+    "their throughput is suspect -- and `throughput_pareto(exclude_warmup=False)` "
+    "returns them for anyone who wants to check the claim or who is on hardware "
+    "where it does not hold. A journal written before this column existed has no "
+    "ordinals and nothing is excluded, rather than everything.")
+
+
+def throughput_pareto(study: optuna.study.Study, *,
+                      exclude_warmup: bool = True) -> List[Dict[str, Any]]:
     """Trials not dominated on (held-out loss, tokens/sec). Fastest first.
 
     The other half of the cost question, and until `tokens_per_sec` was promoted
@@ -1009,15 +1050,26 @@ def throughput_pareto(study: optuna.study.Study) -> List[Dict[str, Any]]:
     read this front WITH `attr_per_device_batch_size`. That caveat is why the
     exchange rate stays the reader's rather than becoming a `throughput_penalty`.
 
-    A trial with no recorded throughput is EXCLUDED, never zero-filled: 0
-    tokens/sec would sit at the wrong end of the front and look like a
-    measurement.
+    Two exclusions, both because a wrong number here looks exactly like a
+    measurement:
+
+      * **No recorded throughput.** Excluded, never zero-filled -- 0 tokens/sec
+        would sit at the fast-loss end of nothing and the slow end of everything.
+      * **A worker's first trial.** See `_WARMUP_REASON`; it is a measured 6x
+        artefact of process warmup, and at 8 workers it is 8 points.
     """
     _require_minimize(study)
     points = []
     for trial in _completed(study):
         speed = trial.user_attrs.get("tokens_per_sec")
         if speed is None or float(speed) <= 0:
+            continue
+        ordinal = trial.user_attrs.get("worker_trial_ordinal")
+        # `is not None` and not truthiness: ordinal 0 is the value being tested
+        # for. And a MISSING ordinal excludes nothing -- an archived journal
+        # written before this column existed would otherwise lose every trial
+        # from its own front, which is a worse failure than the artefact.
+        if exclude_warmup and ordinal is not None and int(ordinal) == 0:
             continue
         points.append({
             "trial": trial.number,
@@ -1027,6 +1079,7 @@ def throughput_pareto(study: optuna.study.Study) -> List[Dict[str, Any]]:
             "per_device_batch_size": trial.user_attrs.get(
                 "per_device_batch_size"),
             "param_count": trial.user_attrs.get("param_count"),
+            "worker_trial_ordinal": ordinal,
             "anchor": trial.user_attrs.get(ANCHOR_ATTR) or "",
             "run_id": trial.user_attrs.get("run_id") or "",
         })
@@ -1041,6 +1094,29 @@ def throughput_pareto(study: optuna.study.Study) -> List[Dict[str, Any]]:
             front.append(point)
             best = point["objective"]
     return front
+
+
+def _throughput_notes(study: optuna.study.Study) -> Dict[str, Any]:
+    """How many trials the throughput front dropped, and why.
+
+    Reported rather than silent. A front whose point count nobody can reconcile
+    with the trial count invites the reader to assume a bug somewhere else, and
+    is a worse artefact than the outlier it removes.
+    """
+    completed = _completed(study)
+    measured = [t for t in completed
+                if t.user_attrs.get("tokens_per_sec") not in (None, 0, 0.0)]
+    warmup = [t.number for t in measured
+              if t.user_attrs.get("worker_trial_ordinal") is not None
+              and int(t.user_attrs["worker_trial_ordinal"]) == 0]
+    return {
+        "n_completed": len(completed),
+        "n_with_throughput": len(measured),
+        "n_missing_throughput": len(completed) - len(measured),
+        "n_excluded_warmup": len(warmup),
+        "excluded_warmup_trials": sorted(warmup),
+        "reason": _WARMUP_REASON,
+    }
 
 
 # ------------------------------------------------------------- shortlist ----
@@ -1064,12 +1140,19 @@ CANNOT_ESTABLISH: Tuple[str, ...] = (
     "between the two. `d_state` is 48 here against 50m's 64, which is a SECOND "
     "unresolved difference and is flagged as an open question rather than "
     "quietly treated as immaterial.",
-    "**That SKA earns its place.** `ska_delta` ranks how much zeroing the SKA "
-    "branch hurts, and on the 4m smoke study that quantity was 1.166e-4 against "
-    "an anchor spread of 0.458. If it is of the same order here then this study "
-    "measures SKA's hyperparameters without establishing that the branch does "
-    "anything -- and no ranking over its hyperparameters can establish that. "
-    "Compare the ska_delta column to the noise floor directly.",
+    "**How much SKA earns its place, beyond that it does.** This one is PARTLY "
+    "settled and the correction is worth recording. An earlier 4m-geometry smoke "
+    "study measured an ablation delta of 1.17e-4 and raised the worry that this "
+    "study might be measuring SKA's hyperparameters without establishing that the "
+    "branch does anything. Job 445689 settles the sign: on THIS base at 600 "
+    "steps the delta is 1.17e-2 to 7.48e-2 depending on the layerscale, a "
+    "hundred times larger, and positive throughout -- removing SKA makes the "
+    "model worse. The 4m number was a scale artefact. What remains unestablished "
+    "is the MAGNITUDE at any scale that matters: 25.35M parameters and 600 steps "
+    "is not 50m and it is not convergence, and an ablation delta measured on a "
+    "model that has barely left its warmup transient is not the delta at "
+    "convergence. Compare the ska_delta column to the noise floor directly, and "
+    "do not read its size as a claim about a trained model.",
     "**Any effect smaller than the measured noise floor.** Not 'probably not "
     "real' -- unmeasurable by this study, at any trial count, because it is "
     "inside what one configuration does to itself when the seed changes. More "
@@ -1381,6 +1464,7 @@ def analyse(study: optuna.study.Study, *, top_k: int = 15,
         "sampler_correlations": sampler_induced_correlations(study),
         "pareto": pareto_front(study),
         "throughput_pareto": throughput_pareto(study),
+        "throughput_notes": _throughput_notes(study),
         "shortlist": shortlist(study, floor),
         "top_by_loss": _top_by_loss(study, top_k),
         "top_by_ska_delta": _top_by_ska_delta(study, top_k),
@@ -1470,9 +1554,10 @@ def _noise_floor_markdown(floor: Mapping[str, Any]) -> List[str]:
             "**UNAVAILABLE.** " + floor.get("reason", ""), "",
             "Every magnitude in this report is therefore presented WITHOUT A "
             "SCALE. A difference of 1e-4 and a difference of 1e-1 look "
-            "identical here, and on the 4m smoke study (job 445657) the SKA "
-            "ablation delta was 1.166e-4 -- so that distinction is the whole "
-            "question. Treat every ranking below as unvalidated ordering.", ""]
+            "identical here -- and job 445689 measured the losses this study "
+            "must separate as spanning 0.069 with the best two 0.004 apart, so "
+            "that distinction is the whole question. Treat every ranking below "
+            "as unvalidated ordering.", ""]
         return lines
 
     lines += [
@@ -1754,6 +1839,13 @@ def _interactions_markdown(result: Mapping[str, Any]) -> str:
               "so its throughput is not comparable to theirs. That caveat is why "
               "the loss/throughput exchange rate stays the reader's rather than "
               "becoming a `throughput_penalty` baked into every proposal.", ""]
+    notes = result["throughput_notes"]
+    lines += [notes["reason"], "",
+              f"Of {notes['n_completed']} completed trial(s): "
+              f"{notes['n_with_throughput']} carry a throughput measurement, "
+              f"{notes['n_missing_throughput']} do not, and "
+              f"{notes['n_excluded_warmup']} were excluded as a worker's first "
+              f"trial (trials {notes['excluded_warmup_trials']}).", ""]
     if result["throughput_pareto"]:
         lines += ["| tok/s | objective | trial | pdbs | peak GiB | params | "
                   "anchor |",
@@ -1851,7 +1943,7 @@ def write_analysis(study: optuna.study.Study, out_dir, *, top_k: int = 15,
         out_dir / "throughput_pareto.csv", result["throughput_pareto"],
         columns=["tokens_per_sec", "objective", "trial",
                  "per_device_batch_size", "peak_memory_gib", "param_count",
-                 "anchor", "run_id"])
+                 "worker_trial_ordinal", "anchor", "run_id"])
     written["shortlist"] = _write_csv(
         out_dir / "shortlist.csv", result["shortlist"]["entries"],
         columns=["slot", "trial", "objective", "lead_over_reference",

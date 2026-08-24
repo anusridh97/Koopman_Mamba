@@ -6,10 +6,11 @@ every test here exists because the alternative is a plausible, complete, wrong
 report.
 
 **The one number.** The spread of the reference replicates is the smallest
-difference this study can resolve. On the 4m smoke study (job 445657) ablating
-SKA entirely moved held-out loss by 1.166e-4. If the floor is of that order then
-the differences between anchors are not measurements and a multivariate TPE
-fitted to them produces a confident joint model of noise. So:
+difference this study can resolve. Job 445689 measured what has to be resolved:
+four trials on the proxy base at 600 steps, losses spanning 0.069, best two
+0.004 apart. If the floor is of that order then the differences between anchors
+are not measurements and a multivariate TPE fitted to them produces a confident
+joint model of noise. So:
 
   * the floor is computed from the replicates and from nothing else -- never from
     the spread of the whole study, which is a spread ACROSS configurations and
@@ -55,7 +56,7 @@ def _distributions():
         "ska_ridge": optuna.distributions.FloatDistribution(
             0.003, 0.03, log=True),
         "ska_layerscale_init": optuna.distributions.FloatDistribution(
-            0.002, 0.03, log=True),
+            0.005, 0.3, log=True),
         "norm_clip_multiplier": optuna.distributions.CategoricalDistribution(
             [0.75, 0.8164965809277261, 1.0, 1.25]),
         "gamma_value": optuna.distributions.CategoricalDistribution(
@@ -644,3 +645,115 @@ def test_the_analysis_still_does_not_modify_the_study(study, tmp_path):
     after = [(t.number, t.state, t.value, dict(t.user_attrs))
              for t in study.trials]
     assert before == after
+
+# ------------------------------------------- the first-trial warmup artefact ----
+#
+# MEASURED, job 445689. Four trials on the proxy base at 600 steps reported
+# 17,818 / 111,416 / 104,760 / 112,685 tok/s. The 6x outlier was TRIAL 0, and no
+# architectural difference between those four configs can cause a 6x throughput
+# gap -- they differ only in `ska_layerscale_init`, one scalar multiply on a gate.
+# It paid first-trial CUDA context creation and kernel autotuning, and
+# `tokens_per_sec` is measured during the eval pass, early enough in the
+# process's life to still be inside that.
+#
+# At `concurrent_trials: 8` that is EIGHT poisoned points, not one, because each
+# worker process pays its own warmup.
+
+def test_a_workers_first_trial_is_kept_off_the_throughput_front():
+    """The artefact this exists for: raw `tokens_per_sec` would put trial 0 at the
+    slow end of the front for no architectural reason."""
+    from experimentation.sweep.search.analysis import throughput_pareto
+
+    study = _with_ordinals_fixture()
+    assert 0 not in {p["trial"] for p in throughput_pareto(study)}
+
+
+def test_the_exclusion_is_reported_rather_than_silent():
+    """A front whose point count nobody can reconcile with the trial count is
+    worse than a slow outlier. `analyse` says how many were dropped and why."""
+    from experimentation.sweep.search.analysis import analyse
+
+    notes = analyse(_with_ordinals_fixture())["throughput_notes"]
+    assert notes["n_excluded_warmup"] >= 1
+    assert "warmup" in notes["reason"].lower()
+    assert "445689" in notes["reason"], "the measurement should be citable"
+
+
+def test_the_warmup_points_can_still_be_asked_for():
+    """Recorded, not discarded. A reader who wants to CHECK the warmup claim --
+    or who is on hardware where it does not apply -- must be able to."""
+    from experimentation.sweep.search.analysis import throughput_pareto
+
+    included = throughput_pareto(_with_ordinals_fixture(),
+                                 exclude_warmup=False)
+    assert 0 in {p["trial"] for p in included}
+    assert all("worker_trial_ordinal" in p for p in included)
+
+
+def test_a_study_with_no_ordinals_recorded_excludes_nothing():
+    """Backward compatibility with journals written before this column existed.
+    Treating a missing ordinal as 0 would silently drop every trial of an
+    archived study from its own throughput front."""
+    from experimentation.sweep.search.analysis import throughput_pareto
+
+    st = optuna.create_study(direction="minimize")
+    st.add_trial(optuna.trial.create_trial(
+        params={}, distributions={}, value=1.0,
+        user_attrs={"tokens_per_sec": 1000.0}))
+    assert len(throughput_pareto(st)) == 1
+
+
+def test_the_report_names_the_warmup_exclusion(tmp_path):
+    from experimentation.sweep.search.analysis import write_analysis
+
+    text = write_analysis(_with_ordinals_fixture(),
+                          tmp_path)["interactions"].read_text()
+    assert "warmup" in text.lower()
+    assert "445689" in text
+
+
+_ORDINAL_STUDY = None
+
+
+def _with_ordinals_fixture():
+    """A study whose trial 0 is a warm-up outlier, as job 445689 measured."""
+    global _ORDINAL_STUDY
+    if _ORDINAL_STUDY is not None:
+        return _ORDINAL_STUDY
+
+    import random
+
+    rng = random.Random(20260824)
+    base = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=11),
+                               pruner=optuna.pruners.NopPruner())
+    distributions = _distributions()
+    for index in range(30):
+        trial = base.ask(distributions)
+        params = trial.params
+        rank, ridge = params["ska_rank"], params["ska_ridge"]
+        want = 0.003 * (rank / 8.0)
+        loss = (4.0 - 0.02 * rank + 8.0 * abs(math.log(ridge / want))
+                + 0.05 * rng.random())
+        for key, value in _attrs(index, params).items():
+            trial.set_user_attr(key, value)
+        base.tell(trial, loss)
+
+    out = optuna.create_study(direction="minimize")
+    best = min(float(t.value) for t in base.trials)
+    for position, trial in enumerate(base.trials):
+        attrs = dict(trial.user_attrs)
+        attrs["worker_trial_ordinal"] = position
+        value = float(trial.value)
+        if position == 0:
+            # 17,818 tok/s AND the best loss in the study, so trial 0 would
+            # otherwise be the SLOW END of the front rather than a dominated
+            # point. Without that the exclusion test passes because trial 0 is
+            # dominated anyway, i.e. it tests nothing -- the artefact only
+            # matters when the warm-up trial is a point the front would keep.
+            attrs["tokens_per_sec"] = 17_818.0
+            value = best - 0.5
+        out.add_trial(optuna.trial.create_trial(
+            params=dict(trial.params), distributions=dict(trial.distributions),
+            value=value, user_attrs=attrs))
+    _ORDINAL_STUDY = out
+    return out

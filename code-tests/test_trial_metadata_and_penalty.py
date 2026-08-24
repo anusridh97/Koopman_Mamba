@@ -224,9 +224,16 @@ def test_the_recorded_attrs_are_the_ones_the_module_declares():
         # floor comes from designated seed repeats cannot be read back without
         # these two.
         "model_seed", "reference_group",
+        # Which trial this was for THIS worker process. Job 445689 measured
+        # trial 0 at 17,818 tok/s against ~110,000 for its siblings -- process
+        # warmup, not architecture -- so the throughput front excludes ordinal 0.
+        "worker_trial_ordinal",
         # What (n_ska_layers, placement) RESOLVED to. `make_layer_indices`
-        # clamps rather than raising, so the request is not the answer.
-        "ska_layer_indices",
+        # clamps rather than raising, so the request is not the answer. Same for
+        # the ABSOLUTE norm clip against the multiplier the sampler chose:
+        # derivable from two columns, and `params_to_overrides` rounds the
+        # product, so a recomputed value can differ in the last bits.
+        "ska_layer_indices", "ska_norm_clip_c",
         # Stamped after the run, from quick_eval.json, not at materialization.
         # All four were measured per trial and none but `ska_delta` reached the
         # journal, so the loss/throughput Pareto front had no data at all.

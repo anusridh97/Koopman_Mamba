@@ -121,7 +121,7 @@ EXPECTED_VALUE = {
     "placement-even": "even", "placement-midlate": "midlate",
     "placement-late": "late",
     "ridge-low": 0.003, "ridge-high": 0.03,
-    "layerscale-low": 0.002, "layerscale-high": 0.03,
+    "layerscale-low": 0.005, "layerscale-high": 0.3,
     "normclip-low": 0.75, "normclip-high": 1.25,
     "gamma-low": 0.90, "gamma-high": 1.05,
     "reference-k2": 2,

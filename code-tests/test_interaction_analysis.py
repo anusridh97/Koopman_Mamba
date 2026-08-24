@@ -68,7 +68,7 @@ def _distributions():
             ["baseline", "even", "midlate", "late"]),
         "ska_ridge": optuna.distributions.FloatDistribution(0.003, 0.03, log=True),
         "ska_layerscale_init": optuna.distributions.FloatDistribution(
-            0.002, 0.03, log=True),
+            0.005, 0.3, log=True),
         "norm_clip_multiplier": optuna.distributions.CategoricalDistribution(
             [0.75, 0.8164965809277261, 1.0, 1.25]),
         "gamma_value": optuna.distributions.CategoricalDistribution([0.9, 1.0, 1.05]),

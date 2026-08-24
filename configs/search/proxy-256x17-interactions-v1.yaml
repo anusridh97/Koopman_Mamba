@@ -40,10 +40,17 @@
 # evaluations of ONE configuration differing only in `runtime.seed`, so their
 # spread is the smallest difference this study can resolve. Every effect
 # `analysis.py` reports is stated against that number, and an effect smaller than
-# it is labelled UNRESOLVABLE rather than ranked. Without it a 1e-4 difference in
-# held-out loss and a 1e-1 difference look equally like findings -- and the
-# measured SKA ablation delta on the 4m smoke study (job 445657) was 1.166e-4,
-# which is precisely why this cannot be left to judgement.
+# it is labelled UNRESOLVABLE rather than ranked. Without it a 4e-3 difference in
+# held-out loss and a 1e-1 difference look equally like findings -- and job 445689
+# measured four trials on this exact base at this exact horizon whose losses
+# spanned 0.069 with the best two 0.004 apart, which is precisely the regime where
+# this cannot be left to judgement.
+#
+# That job also settled a related worry in the study's favour: the SKA ablation
+# delta here is 1.17e-2 to 7.48e-2 and positive throughout, against 1.17e-4 on the
+# 4m geometry. The branch is load-bearing at this scale, so the study's question
+# is well posed -- it is the RESOLUTION that was open, and these five trials are
+# what closes it.
 #
 # **Phase 2 -- exploratory startup, to 64 completed references.** TPE draws at
 # RANDOM until `sampler_startup_trials` trials have finished. Set to 64: the 28
@@ -165,10 +172,67 @@ search_axes:
     low: 0.003
     high: 0.03
     log: true
+  # WIDENED UPWARD on evidence, 2026-08-24. Was [0.002, 0.03].
+  #
+  # ## The measurement
+  #
+  # Job 445689, four all-anchor trials on this exact base at this exact 600-step
+  # horizon, crossing `ska_layerscale_init` and nothing else:
+  #
+  #     ls_init  ls_final  growth  loss     abl_delta   tok/s     GiB
+  #       0.010   0.02361   2.36x  5.2687   1.17e-02    17818    1.82
+  #       0.100   0.10235   1.02x  5.2648   3.69e-02   111416    1.82
+  #       0.500   0.48157   0.96x  5.2933   5.85e-02   104760    1.82
+  #       1.000   0.97280   0.97x  5.3338   7.48e-02   112685    1.82
+  #
+  # Two things follow and they point the same way.
+  #
+  # **The best loss was at 0.1, which was OUTSIDE the old interval.** An optimum
+  # on or past a boundary is not an optimum this study can find: the sampler
+  # cannot propose past its own bound, so the axis would have reported "higher is
+  # better, as high as allowed" for all 256 trials and the interaction tables over
+  # it would have been computed entirely on one side of the response surface.
+  #
+  # **The gate at 0.01 GREW 2.36x during training** while the three larger
+  # settings stayed put (1.02x / 0.96x / 0.97x). Training was actively pushing the
+  # gate up and the axis was capping where it could start from. That is
+  # independent evidence for the same conclusion, and it is the stronger of the
+  # two because it does not depend on a 0.004 loss difference.
+  #
+  # ## Why [0.005, 0.3] and not the obvious [0.01, 0.3]
+  #
+  # The upper edge is real: 0.5 and 1.0 were both WORSE than both 0.01 and 0.1, so
+  # the useful region is bounded above and 0.3 sits inside that bound with
+  # headroom over the observed 0.1 optimum. Not 0.5, which was measured worse.
+  #
+  # The lower edge is 0.005 rather than 0.01 for one reason: 0.01 is the BASE
+  # SPEC's own value. `dropped_base_values` would pass either way (containment is
+  # inclusive), but this axis is log-uniform, so a low bound of exactly 0.01 puts
+  # the reference point at the extreme edge of the prior and the sampler would
+  # essentially never propose near it. `reference-k1` has to stay reproducible by
+  # the SAMPLER and not only by the anchor -- that is what this study file's
+  # header claims -- so the baseline needs to be interior. At [0.005, 0.3] the
+  # log-centre is 0.039 and both 0.01 and 0.1 are interior.
+  #
+  # The span goes from 15x to 60x, which is real cost: a wider log-uniform axis
+  # spends more of a 9-dimensional budget locating one dimension. Accepted,
+  # because a narrow interval that excludes the optimum spends the whole budget
+  # answering nothing, and 60x on a multiplicative gate is the same order as
+  # `ska_ridge`'s 10x on a multiplicative loading.
+  #
+  # The anchors moved with it: `layerscale_factor` 0.2 -> 0.5 and 3.0 -> 30.0, so
+  # `layerscale-low`/`layerscale-high` still land EXACTLY on the two endpoints
+  # (0.01*0.5 == 0.005 and 0.01*30.0 == 0.3, both exactly representable in binary
+  # floating point, verified by test). An anchor set that no longer reached its
+  # axis's extremes would have silently become a smaller screen.
+  #
+  # This changes `study_id`, and therefore the journal path. That is correct: a
+  # different space is a different study, and a resubmission must not attach to a
+  # journal whose trials were drawn from the old interval.
   ska_layerscale_init:
     kind: float
-    low: 0.002
-    high: 0.03
+    low: 0.005
+    high: 0.3
     log: true
   # A MULTIPLIER on sqrt(rank), so the same value means the same thing at every
   # rank. 0.8164965809277261 is exactly 4/sqrt(24) -- the base spec's
