@@ -77,7 +77,11 @@ __all__ = ["TRIAL_ATTRS", "TrialOutcome", "objective_from_metrics", "run_trial",
 #: indistinguishable from one that did not.
 TRIAL_ATTRS = ("param_count", "baseline_param_count", "worker_id",
                "sampler", "sampler_seed", "per_device_batch_size",
-               "anchor_name")
+               "anchor_name",
+               # Stamped after the run finishes, not at materialization: it comes
+               # from quick_eval.json. Absent when the ablation did not run, and
+               # `analysis` excludes rather than zero-fills such a trial.
+               "ska_delta")
 
 
 @dataclass(frozen=True)
@@ -259,8 +263,53 @@ def run_trial(study: optuna.study.Study, trial, *,
 
     trial.set_user_attr("run_id", identity["run_id"])
     trial.set_user_attr("run_dir", str(run_dir))
+    # The SKA ablation delta, stamped from the eval payload now that one exists.
+    #
+    # Found in review as an inert field: `analysis._top_by_ska_delta` reads
+    # `ska_delta` off the trial and NOTHING wrote it, so `top_by_ska_delta.csv`
+    # would have been header-only for every real study -- and its test could not
+    # catch that, because `_write_csv` always writes a header and the assertion
+    # was `st_size > 0`.
+    #
+    # It has to happen HERE rather than in `_record_trial_attrs`: the number
+    # comes from `run_dir/eval/*/quick_eval.json`, which does not exist until the
+    # run has finished, and materialization is long past by then.
+    #
+    # Why it is worth recording at all: it is the ranking that asks whether SKA
+    # earned its place. A config with a good loss whose SKA branch contributes
+    # nothing is a good Mamba model, not evidence for SKA -- and that is
+    # invisible in a loss ranking.
+    _stamp_ska_delta(trial, run_dir)
     study.tell(trial, float(objective))
     return TrialOutcome(state="complete", objective=float(objective), **identity)
+
+
+def _stamp_ska_delta(trial, run_dir) -> None:
+    """Copy `ska_ablation.loss_delta` from the eval payload onto the trial.
+
+    Best-effort and silent on absence: the ablation is an optional part of
+    quick_eval, so a study that did not run it simply has no delta, and
+    `analysis._top_by_ska_delta` EXCLUDES a trial with no delta rather than
+    ranking it as zero. Absent is not zero.
+
+    Deliberately does not fail a trial that trained fine. This is provenance for
+    a post-hoc ranking, not the objective -- raising here would turn a missing
+    optional metric into a lost result.
+    """
+    from experimentation.sweep.search.metrics import read_quick_eval_metrics
+
+    try:
+        metrics = read_quick_eval_metrics(run_dir) or {}
+        ablation = metrics.get("ska_ablation") or {}
+        if not ablation.get("supported"):
+            return
+        delta = ablation.get("loss_delta")
+        if delta is None:
+            return
+        trial.set_user_attr("ska_delta", float(delta))
+    except Exception:                                  # noqa: BLE001
+        # A malformed eval file must not cost a completed trial its objective.
+        return
 
 
 def _record_trial_attrs(trial, spec, base_model: KoopmanLMConfig, *,

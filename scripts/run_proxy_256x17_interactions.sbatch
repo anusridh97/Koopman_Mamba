@@ -9,8 +9,16 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=512G
 #SBATCH --time=12:00:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-studies/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-studies/%x-%j.err
+#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.out
+#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.err
+#
+# `koopman-tests`, which EXISTS, and not a tidier `koopman-studies`, which did
+# not. Slurm does not create the directory for --output/--error: slurmstepd fails
+# to open stdout and the batch step dies BEFORE LINE 1, so all three gates below
+# are bypassed and there is no log anywhere saying why. Every other committed
+# sbatch script in this repo writes here. If you want a separate directory,
+# `mkdir -p` it before the first submission -- the `mkdir -p` further down runs
+# far too late to help.
 #
 # The eight-GPU SKA interaction study: 256 trials x 600 steps on the 256x17
 # proxy, eight concurrent, one node, one journal.

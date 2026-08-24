@@ -218,7 +218,9 @@ def test_the_recorded_attrs_are_the_ones_the_module_declares():
 
     assert set(TRIAL_ATTRS) == {
         "param_count", "baseline_param_count", "worker_id", "sampler",
-        "sampler_seed", "per_device_batch_size", "anchor_name"}
+        "sampler_seed", "per_device_batch_size", "anchor_name",
+        # Stamped after the run, from quick_eval.json, not at materialization.
+        "ska_delta"}
 
 
 def _spec_and_base():
@@ -327,3 +329,66 @@ def test_the_attrs_reach_trials_csv():
     assert row["attr_per_device_batch_size"] == 4
     assert row["attr_anchor_name"] == "layers-8"
     assert row["param_ska_rank"] == 24
+
+
+# ------------------------------------- ska_delta is WRITTEN, not just read ----
+
+def test_ska_delta_is_stamped_from_the_eval_payload(tmp_path):
+    """Found in review as an inert field: `analysis._top_by_ska_delta` reads
+    `ska_delta` and NOTHING wrote it, so `top_by_ska_delta.csv` would have been
+    header-only for every real study."""
+    pytest.importorskip("optuna")
+    import json
+
+    from experimentation.sweep.search.driver import _stamp_ska_delta
+
+    run_dir = tmp_path / "run"
+    (run_dir / "eval" / "final").mkdir(parents=True)
+    (run_dir / "eval" / "final" / "quick_eval.json").write_text(json.dumps(
+        {"metrics": {"full": {"loss": 3.2},
+                     "ska_ablation": {"supported": True, "loss_delta": 0.0123}}}))
+    trial = _Trial()
+    _stamp_ska_delta(trial, run_dir)
+    assert trial.user_attrs["ska_delta"] == 0.0123
+
+
+def test_an_unsupported_ablation_stamps_nothing(tmp_path):
+    """Absent is not zero. `analysis` EXCLUDES a trial with no delta rather than
+    ranking it as zero, so writing 0.0 here would fabricate a whole ranking."""
+    pytest.importorskip("optuna")
+    import json
+
+    from experimentation.sweep.search.driver import _stamp_ska_delta
+
+    run_dir = tmp_path / "run"
+    (run_dir / "eval" / "final").mkdir(parents=True)
+    (run_dir / "eval" / "final" / "quick_eval.json").write_text(json.dumps(
+        {"metrics": {"full": {"loss": 3.2},
+                     "ska_ablation": {"supported": False}}}))
+    trial = _Trial()
+    _stamp_ska_delta(trial, run_dir)
+    assert "ska_delta" not in trial.user_attrs
+
+
+def test_a_missing_or_malformed_eval_does_not_cost_the_trial(tmp_path):
+    """This is provenance for a post-hoc ranking, not the objective. Raising
+    would turn a missing optional metric into a lost result."""
+    pytest.importorskip("optuna")
+    from experimentation.sweep.search.driver import _stamp_ska_delta
+
+    trial = _Trial()
+    _stamp_ska_delta(trial, tmp_path / "nothing-here")     # no eval dir at all
+    assert "ska_delta" not in trial.user_attrs
+
+    run_dir = tmp_path / "bad"
+    (run_dir / "eval" / "final").mkdir(parents=True)
+    (run_dir / "eval" / "final" / "quick_eval.json").write_text("{not json")
+    _stamp_ska_delta(trial, run_dir)
+    assert "ska_delta" not in trial.user_attrs
+
+
+def test_ska_delta_is_declared_in_the_attr_roster():
+    pytest.importorskip("optuna")
+    from experimentation.sweep.search.driver import TRIAL_ATTRS
+
+    assert "ska_delta" in TRIAL_ATTRS

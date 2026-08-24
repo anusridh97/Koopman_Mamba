@@ -464,6 +464,7 @@ def main(argv=None):
         prune_after_step=study_spec.prune_after_step,
         prune_startup_trials=study_spec.prune_startup_trials,
         n_trials=n_trials, logging_steps=study_spec.logging_steps,
+        direction=study_spec.direction,
         storage_url=study_spec.storage)
     sampler_seed = sampler_seed_for(study_spec.seed, worker_index)
     study = create_study(**study_kwargs)

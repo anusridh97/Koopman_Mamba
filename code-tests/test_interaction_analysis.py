@@ -577,3 +577,57 @@ def test_the_cli_does_not_write_into_the_study_directory_itself(study, tmp_path)
          str(study_dir)], capture_output=True, text=True, cwd=REPO)
     after = {p.name for p in study_dir.iterdir()}
     assert after - before == {"analysis"}
+
+
+# ------------------------------------------------- binning must lose nothing ----
+
+def test_the_minimum_valued_trial_is_not_dropped_by_a_log_bin_edge():
+    """The bug this pins, found in review and confirmed by arithmetic.
+
+    `exp(log(x))` is frequently ABOVE x for a decimal literal --
+    `exp(log(0.002)) == 0.0020000000000000005` -- so a COMPUTED bottom edge
+    excludes the minimum-valued trial. Only the top edge was repaired, because
+    only the top edge's exclusion is obvious from the half-open comparison.
+
+    Not theoretical: `ska_layerscale_init`'s declared low is 0.002 and the
+    `layerscale-low` anchor resolves to EXACTLY 0.002, so a curated design
+    endpoint vanished from two of the seven prespecified tables on every run.
+    """
+    assert math.exp(math.log(0.002)) > 0.002, (
+        "the float behaviour this test is built on no longer holds")
+
+    d = {"ska_layerscale_init": optuna.distributions.FloatDistribution(
+             0.002, 0.03, log=True),
+         "ska_rank": optuna.distributions.CategoricalDistribution([8, 24])}
+    st = optuna.create_study()
+    for _ in range(6):
+        st.tell(st.ask(d), 1.0)
+    # Force the endpoint to be present, whatever the sampler drew.
+    forced = optuna.trial.create_trial(
+        params={"ska_layerscale_init": 0.002, "ska_rank": 8},
+        distributions=d, value=1.0)
+    st.add_trial(forced)
+    table = pairwise_table(st, "ska_rank", "ska_layerscale_init", bins=3)
+    assert table["n_dropped"] == 0, (
+        f"{table['n_dropped']} trial(s) fell outside every bin -- the "
+        f"minimum-valued trial is being discarded at the bottom edge")
+    assert table["n_placed"] == table["n_completed"]
+
+
+def test_every_completed_trial_lands_in_a_cell_for_every_prespecified_pair(study):
+    """The general invariant, over the real pair list. A table that silently
+    omits trials is worse than one that reports none: it looks complete."""
+    for left, right in PRESPECIFIED_PAIRS:
+        table = pairwise_table(study, left, right)
+        assert table["n_dropped"] == 0, f"{left} x {right}: {table['n_dropped']}"
+        assert table["n_placed"] == table["n_completed"]
+
+
+def test_a_dropped_trial_would_be_reported_in_the_markdown(study):
+    """Guards the guard: if the accounting were never surfaced, a future
+    regression would be silent again."""
+    from experimentation.sweep.search.analysis import _format_table
+
+    table = dict(pairwise_table(study, "ska_rank", "ska_ridge"))
+    table["n_dropped"] = 3
+    assert "WARNING" in "\n".join(_format_table(table))

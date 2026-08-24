@@ -83,6 +83,7 @@ def _run_main(study_path, *flags):
         captured.update(kwargs)
         return []
 
+
     original_drive = driver_mod.drive
     original_gate = cli.check_git_clean
     driver_mod.drive = fake_drive
@@ -93,6 +94,49 @@ def _run_main(study_path, *flags):
         driver_mod.drive = original_drive
         cli.check_git_clean = original_gate
     return code, captured
+
+
+class _RecordingTrial:
+    """Enough of a Trial for the reader closure, with the driver's own attrs."""
+
+    def __init__(self, attrs=None):
+        self.number = 0
+        self.user_attrs = dict(attrs or {})
+
+    def set_user_attr(self, key, value):
+        self.user_attrs[key] = value
+
+
+def _reader_call(study_path, *, trial_attrs=None, flags=()):
+    """Run `main`, then CALL the reader factory it built and record the kwargs
+    that reach `wait_for_objective`.
+
+    The gap this closes. `_run_main` captures `drive`'s kwargs, which is enough
+    for anything passed positionally to `drive` -- and nothing at all for the two
+    things `main` puts inside a CLOSURE: the objective reader's timeout and the
+    weights. A closure that is never invoked is unobserved, so
+    `timeout_seconds=study_spec.trial_timeout_seconds` and
+    `**weights_for_trial(...)` could both be reverted with the suite green.
+    """
+    from experimentation.sweep.search import metrics as metrics_mod
+
+    seen = {}
+
+    def fake_wait(study_, trial, run_dir, **kwargs):
+        seen.update(kwargs)
+        seen["trial"] = trial
+        return 1.0
+
+    original = metrics_mod.wait_for_objective
+    metrics_mod.wait_for_objective = fake_wait
+    try:
+        _, captured = _run_main(study_path, *flags)
+        factory = captured["objective_reader_for"]
+        trial = _RecordingTrial(trial_attrs)
+        factory(captured["study"], trial)("/tmp/does-not-matter")
+    finally:
+        metrics_mod.wait_for_objective = original
+    return seen, captured
 
 
 # ------------------------------------------ search_axes reaches the driver ----
@@ -340,12 +384,9 @@ def test_every_declared_field_that_shapes_a_trial_is_asserted_somewhere():
         "run_root": "where run directories go",
         "logging_steps": "the pruner's interval -- covered by the startup tests",
         "prune_after_step": "the pruner's warmup -- covered by the startup tests",
-        "trial_timeout_seconds": "the objective reader's timeout",
-        "eval_data_dir": "set on the LAUNCHER, not the spec",
         "backend_policy": "covered by test_backend_geometry.py",
         "seq_len": "covered by test_search_space.py",
         "batch_ladder": "covered by test_search_driver.py",
-        "objective": "covered by test_trial_metadata_and_penalty.py",
         "seed": "covered by the sampler-seed tests above",
     }
     source = pathlib.Path(__file__).read_text()
@@ -358,3 +399,89 @@ def test_every_declared_field_that_shapes_a_trial_is_asserted_somewhere():
         f"nor listed as not trial-shaping. Add an assertion that reads the "
         f"value off the CONSUMER, or add the field to NOT_TRIAL_SHAPING with "
         f"the reason and a pointer to whatever does cover it.")
+
+
+# ------------------- the four apply-lines the roster used to excuse ----------
+#
+# Found in code review, all four mutation-proven against the FULL suite (1837
+# passed with each one live). `_run_main` captures `drive`'s kwargs, so anything
+# `main` hands to `drive` was covered -- and three of these live on the LAUNCHER
+# or inside the reader CLOSURE, which `drive` never sees, and the fourth is a
+# kwarg the roster excused with free text.
+#
+# The loophole was `NOT_TRIAL_SHAPING`'s prose. "covered by
+# test_trial_metadata_and_penalty.py" meant *the function is unit-tested*, not
+# *main calls it* -- exactly the distinction this file's docstring exists to
+# enforce. Reasons are no longer accepted for a field that HAS a consumer.
+
+
+def test_the_held_out_eval_shard_reaches_the_launcher(tmp_path):
+    """Catches deletion of `"eval_data_dir": study_spec.eval_data_dir` from
+    `scoring` in `__main__.main`. The highest-stakes of the four.
+
+    The study file says: "HELD OUT. The default is the base spec's own training
+    shard, which would make the ranking a training-loss ranking. A ranking you
+    intend to design a 50m confirmation study from must not be one." Delete that
+    one dict entry and you get precisely the study that comment forbids --
+    silently, with the whole suite green.
+    """
+    _, captured = _run_main(_study_file(
+        tmp_path, eval_data_dir="/scratch/held-out-probe"))
+    launcher = captured["launcher"]
+    assert launcher.eval_data_dir == "/scratch/held-out-probe", (
+        "the study's held-out eval shard did not reach the launcher; every "
+        "trial would be scored on its own TRAINING data")
+
+
+def test_eval_on_final_is_set_on_the_launcher(tmp_path):
+    """Without it the run writes no quick_eval.json and every trial is FAIL."""
+    _, captured = _run_main(_study_file(tmp_path))
+    assert captured["launcher"].eval_on_final is True
+
+
+def test_the_trial_timeout_reaches_the_objective_reader(tmp_path):
+    """Catches deletion of `timeout_seconds=study_spec.trial_timeout_seconds`.
+
+    Lives inside a closure, so `drive`'s kwargs cannot see it. Reverting it
+    silently restores the 2 h default over the study's deliberate 40 min -- one
+    dead trial idling 1 of 8 GPUs for two hours.
+    """
+    seen, _ = _reader_call(_study_file(tmp_path, trial_timeout_seconds=1234.0))
+    assert seen["timeout_seconds"] == 1234.0
+
+
+def test_the_parameter_penalty_counts_reach_the_objective_reader(tmp_path):
+    """Catches reverting `**weights_for_trial(study_spec.objective, trial)` to
+    `**study_spec.objective` -- i.e. re-introducing, for free, the exact
+    regression this branch exists to fix.
+
+    `test_trial_metadata_and_penalty.py` calls `weights_for_trial` DIRECTLY and
+    never through `main`, so the penalty could go back to being valid, validated
+    and inert with no test noticing.
+    """
+    seen, _ = _reader_call(
+        _study_file(tmp_path, objective={"parameter_penalty": 0.5}),
+        trial_attrs={"param_count": 26_000_000,
+                     "baseline_param_count": 25_352_736})
+    assert seen["parameter_penalty"] == 0.5
+    assert seen["param_count"] == 26_000_000, (
+        "the resolved parameter count did not reach objective_from_metrics; "
+        "parameter_penalty is inert again")
+    assert seen["baseline_param_count"] == 25_352_736
+
+
+def test_an_empty_objective_reaches_the_reader_as_nothing_extra(tmp_path):
+    """Guards the guard: every committed study has `objective: {}`, and this must
+    still be a passthrough or the assertion above would pass for any wiring."""
+    seen, _ = _reader_call(_study_file(tmp_path))
+    assert "parameter_penalty" not in seen
+    assert "param_count" not in seen
+
+
+def test_the_sampler_name_stamped_on_a_trial_is_the_declared_one(tmp_path):
+    """Catches `sampler_name=study_spec.sampler` -> a constant. `attr_sampler` in
+    trials.csv would claim `tpe` for a `tpe_multivariate` study -- a provenance
+    lie, and the field's whole stated purpose is stopping an archived study from
+    being read as though it used today's default."""
+    _, captured = _run_main(_study_file(tmp_path, sampler="tpe_multivariate"))
+    assert captured["sampler_name"] == "tpe_multivariate"

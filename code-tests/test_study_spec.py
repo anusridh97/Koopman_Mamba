@@ -215,3 +215,17 @@ def test_study_id_is_not_a_run_identity():
         "run/spec.py references study_id -- study membership is provenance, not "
         "a scientific input, and must not perturb run_id or group_id")
     assert hasattr(run_spec, "group_id")
+
+
+def test_maximize_is_refused_rather_than_silently_minimized(tmp_path):
+    """Found in review: `direction` accepted "maximize", was validated, was
+    hashed into study_id -- and `study.py` hardcoded `direction="minimize"`, so a
+    study declaring maximize was silently minimized. Valid, validated, inert."""
+    with pytest.raises(ValueError, match="direction"):
+        load_study_spec(_write(tmp_path, direction="maximize"))
+
+
+def test_minimize_is_still_accepted(tmp_path):
+    """Guards the guard: every committed study says minimize."""
+    assert load_study_spec(_write(tmp_path, direction="minimize")).direction \
+        == "minimize"

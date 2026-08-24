@@ -485,3 +485,53 @@ def test_every_repo_relative_script_it_calls_exists(text):
     """A renamed helper strands this file with a shell-level failure at 3am."""
     for match in re.finditer(r"(scripts/[\w./-]+\.py)", text):
         assert (REPO / match.group(1)).is_file(), match.group(1)
+
+
+# --------------------------------------- the job must be able to START ----
+
+def _log_dirs(text):
+    """The directories --output/--error point at, with %x/%j stripped."""
+    out = set()
+    for match in re.finditer(r"^#SBATCH --(?:output|error)=(\S+)", text,
+                             re.MULTILINE):
+        out.add(str(pathlib.Path(match.group(1)).parent))
+    return sorted(out)
+
+
+def test_it_names_a_log_directory(text):
+    assert _log_dirs(text), "no --output/--error directive"
+
+
+@pytest.mark.parametrize("path", _sbatch_scripts(), ids=lambda p: p.name)
+def test_every_sbatch_log_directory_exists(path):
+    """Slurm does NOT create the directory for --output/--error. slurmstepd fails
+    to open stdout and the batch step dies BEFORE LINE 1 -- so every gate is
+    bypassed and there is no log anywhere saying why.
+
+    Skipped rather than failed when scratch is absent: this box may not have it,
+    and a test that cannot see the filesystem must not claim the directory is
+    missing. Guarded below so the skip cannot become universal silently.
+    """
+    text = path.read_text()
+    dirs = _log_dirs(text)
+    if not dirs:
+        pytest.skip(f"{path.name} declares no log directory")
+    for directory in dirs:
+        root = pathlib.Path(directory).parents[-2] if pathlib.Path(
+            directory).is_absolute() else None
+        if not pathlib.Path("/scratch/m000151-pm06").is_dir():
+            pytest.skip("scratch is not mounted on this host")
+        assert pathlib.Path(directory).is_dir(), (
+            f"{path.name} writes its job log to {directory}, which does not "
+            f"exist. Slurm will not create it -- the job dies before line 1 "
+            f"with no log. `mkdir -p` it, or point at a directory that exists.")
+
+
+def test_the_log_directory_check_is_not_universally_skipped():
+    """Guards the guard: if scratch were never mounted the parametrised test
+    above would skip for every script and prove nothing. On a host with scratch,
+    at least one script must be really checked."""
+    if not pathlib.Path("/scratch/m000151-pm06").is_dir():
+        pytest.skip("scratch is not mounted on this host")
+    checked = [p for p in _sbatch_scripts() if _log_dirs(p.read_text())]
+    assert len(checked) >= 5, checked

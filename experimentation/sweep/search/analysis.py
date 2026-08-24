@@ -112,6 +112,27 @@ _CAVEAT = (
 
 # --------------------------------------------------------------- trial views ----
 
+def _require_minimize(study: optuna.study.Study) -> None:
+    """Refuse a maximize study rather than silently inverting every conclusion.
+
+    Every ranking here sorts ASCENDING and `pareto_front` sweeps for smaller-is-
+    better. Pointed at a maximize journal -- which `scripts/analyze_interactions.py`
+    will happily open, since it analyses whatever it is given -- the "front" comes
+    back containing strictly dominated points and missing the best trial, with no
+    error. Measured on a 3-trial maximize study in review.
+
+    A hard failure, not a warning: the output is a table of numbers that looks
+    exactly as authoritative when it is backwards.
+    """
+    if study.direction != optuna.study.StudyDirection.MINIMIZE:
+        raise ValueError(
+            f"this analysis assumes a MINIMIZE study and {study.study_name!r} is "
+            f"{study.direction.name}. Every ranking here sorts ascending and the "
+            f"Pareto sweep takes smaller-is-better, so the results would be "
+            f"silently inverted rather than wrong-looking. StudySpec permits only "
+            f"'minimize'; this journal was not produced by one.")
+
+
 def _completed(study: optuna.study.Study) -> List[Any]:
     return [t for t in study.trials
             if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None]
@@ -189,6 +210,17 @@ def _levels(values: Sequence[Any], *, bins: int, continuous: bool
             edges.append(math.exp(math.log(lo) + fraction * (math.log(hi) - math.log(lo))))
         else:
             edges.append(lo + fraction * (hi - lo))
+    # BOTH ends repaired, not just the top. `exp(log(x))` is frequently ABOVE x
+    # for a decimal literal -- measured: exp(log(0.002)) == 0.0020000000000000005
+    # -- so a computed bottom edge excludes the minimum-valued trial, `_bucket`
+    # returns None for it, and `pairwise_table` used to drop it silently.
+    #
+    # That was not a theoretical rounding worry. `ska_layerscale_init`'s declared
+    # low is 0.002 and the `layerscale-low` anchor resolves to EXACTLY 0.002, so a
+    # curated design endpoint vanished from two of the seven prespecified tables
+    # on every single run. Only the top edge was repaired because only the top
+    # edge's exclusion was obvious from the half-open comparison.
+    edges[0] = lo
     edges[-1] = hi
     out = []
     for index in range(bins):
@@ -207,12 +239,21 @@ def _bucket(value: Any, levels: Sequence[Mapping[str, Any]], binned: bool
             if level["value"] == value:
                 return index
         return None
+    numeric = float(value)
     for index, level in enumerate(levels):
         # Half-open except for the last bin, so the maximum lands somewhere.
-        if level["lo"] <= float(value) < level["hi"]:
+        if level["lo"] <= numeric < level["hi"]:
             return index
-        if index == len(levels) - 1 and float(value) == level["hi"]:
+        if index == len(levels) - 1 and numeric == level["hi"]:
             return index
+    # Belt and braces over the edge repair above: clamp rather than drop. A value
+    # outside every bin can only come from float error at an edge, and silently
+    # discarding a trial is the worst available outcome -- the table would look
+    # complete and be missing a point.
+    if numeric <= levels[0]["lo"]:
+        return 0
+    if numeric >= levels[-1]["hi"]:
+        return len(levels) - 1
     return None
 
 
@@ -227,6 +268,7 @@ def pairwise_table(study: optuna.study.Study, left: str, right: str, *,
     construction, so a mean without its count is not interpretable -- this is the
     single most important thing the table reports.
     """
+    _require_minimize(study)
     trials = _completed(study)
     left_values = [t.params.get(left) for t in trials]
     right_values = [t.params.get(right) for t in trials]
@@ -247,10 +289,15 @@ def pairwise_table(study: optuna.study.Study, left: str, right: str, *,
                 f"sampler never varied.")
 
     buckets: Dict[Tuple[int, int], List[float]] = {}
+    dropped = 0
     for trial, lv, rv in zip(trials, left_values, right_values):
         li = _bucket(lv, left_levels, left_binned)
         ri = _bucket(rv, right_levels, right_binned)
         if li is None or ri is None:
+            # Counted, not just skipped. A silently dropped trial is how a
+            # float-error bug at a bin edge hid a curated anchor endpoint from two
+            # tables on every run -- the table looked complete and was not.
+            dropped += 1
             continue
         buckets.setdefault((li, ri), []).append(float(trial.value))
 
@@ -266,10 +313,15 @@ def pairwise_table(study: optuna.study.Study, left: str, right: str, *,
             })
         rows.append({"level": level["label"], "cells": cells})
 
+    placed = sum(len(v) for v in buckets.values())
     return {"left": left, "right": right,
             "left_levels": left_levels, "right_levels": right_levels,
             "left_binned": left_binned, "right_binned": right_binned,
             "degenerate": degenerate, "note": note, "rows": rows,
+            # Every completed trial must land somewhere. Reported so the
+            # invariant is checkable from the artefact rather than trusted.
+            "n_completed": len(trials), "n_placed": placed,
+            "n_dropped": dropped,
             "caveat": _CAVEAT}
 
 
@@ -421,10 +473,13 @@ def pareto_front(study: optuna.study.Study) -> List[Dict[str, Any]]:
     sampler makes afterwards, unrecoverably; a front lets the reader choose, and
     change their mind, without re-running anything.
     """
+    _require_minimize(study)
     points = []
     for trial in _completed(study):
         count = trial.user_attrs.get("param_count")
-        if not count:
+        # `is None`, not truthiness: a param_count of 0 is absurd but would be
+        # dropped as though absent, which is a different statement.
+        if count is None or int(count) <= 0:
             continue
         points.append({"trial": trial.number, "objective": float(trial.value),
                        "param_count": int(count),
@@ -509,6 +564,7 @@ def _rank_curve(study):
 def analyse(study: optuna.study.Study, *, top_k: int = 15,
             bins: int = DEFAULT_BINS) -> Dict[str, Any]:
     """Everything the report needs, as plain data. Touches no filesystem."""
+    _require_minimize(study)
     completed = _completed(study)
     return {
         "study_name": study.study_name,
@@ -569,6 +625,14 @@ def _format_table(table: Mapping[str, Any]) -> List[str]:
                 cells.append(f"{cell['mean']:.4f} (n={cell['n']})")
         lines.append(f"| {row['level']} | " + " | ".join(cells) + " |")
     lines.append("")
+    if table["n_dropped"]:
+        lines.append(f"**WARNING: {table['n_dropped']} of "
+                     f"{table['n_completed']} completed trial(s) fell outside "
+                     f"every cell and are NOT in this table.** That should be "
+                     f"impossible -- every completed trial has a value on both "
+                     f"axes and the bins tile their range. Treat the cell means "
+                     f"as incomplete.")
+        lines.append("")
     if table["right_binned"] or table["left_binned"]:
         binned = [name for name, flag in ((left, table["left_binned"]),
                                           (right, table["right_binned"])) if flag]

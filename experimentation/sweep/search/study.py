@@ -251,6 +251,7 @@ def create_study(*, study_name: str, study_dir, seed: int = 2026,
                  prune_startup_trials: Optional[int] = None,
                  n_trials: Optional[int] = None,
                  logging_steps: int = DEFAULT_LOGGING_STEPS,
+                 direction: str = "minimize",
                  storage_url: Optional[str] = None) -> optuna.study.Study:
     """Create or reattach to the study named `study_name` under `study_dir`.
 
@@ -274,7 +275,11 @@ def create_study(*, study_name: str, study_dir, seed: int = 2026,
                            prune_startup_trials=prune_startup_trials,
                            n_trials=n_trials,
                            logging_steps=logging_steps),
-        direction="minimize",
+        # From the caller, not hardcoded. It WAS hardcoded, which made
+        # `StudySpec.direction` inert -- a study declaring `maximize` was
+        # silently minimized. `StudySpec` now permits only "minimize", so this
+        # is defence for the day that changes rather than a live knob.
+        direction=direction,
         load_if_exists=True,
     )
 

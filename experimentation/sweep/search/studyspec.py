@@ -78,7 +78,19 @@ def derived_prune_startup_trials(n_trials: Optional[int]) -> int:
 # all. Since pruning is what makes a study affordable, the recommended route is
 # to search single-objective and compute the front post hoc from trials.csv,
 # which already records every metric per trial.
-_DIRECTIONS = ("minimize", "maximize")
+# Only "minimize". "maximize" was accepted, validated, hashed into study_id --
+# and read by NOTHING: `study.py` hardcoded `direction="minimize"`, so a study
+# declaring `maximize` was silently minimized. Found in review, and it is the
+# same "valid, validated, and inert" shape this branch spent its time closing,
+# sitting in a pre-existing field.
+#
+# Narrowed rather than wired, because wiring it is not a one-liner: `analysis`,
+# `report._completed`, `pareto_front` and every "top trials" ranking sort
+# ascending, and MedianPruner's own comparison flips. A maximize study would need
+# all of them audited, and nothing in this repo wants one -- the objective is a
+# loss. The field is still passed through to `create_study` so that if the domain
+# is ever widened again, the value is APPLIED rather than ignored.
+_DIRECTIONS = ("minimize",)
 
 _LAUNCHERS = ("slurm", "local")
 
