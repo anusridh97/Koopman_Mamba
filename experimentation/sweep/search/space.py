@@ -292,6 +292,20 @@ _STR_AXES = frozenset({"placement"})
 
 
 def _coerce(axis: str, value: Any) -> Any:
+    # `bool` first, and before `_STR_AXES`, because Python makes it invisible
+    # otherwise: `bool` IS an `int`, so `float(True)` is 1.0 and `int(1.0)` is 1.
+    # A study writing `ska_power_K: true` would have been silently accepted as
+    # K=1, and `str(True)` is "True", which is not a placement. YAML makes this
+    # reachable rather than theoretical -- `yes`, `on` and `true` all parse to
+    # True. `StudySpec` also rejects a bool in `fixed_params`, but this function
+    # is the public entry point for a caller who did not come through a StudySpec,
+    # and two layers that disagree about what is legal is how the weaker one
+    # becomes the real contract.
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{axis}={value!r} is a boolean. YAML parses `true`, `yes` and `on` "
+            f"that way, and Python's bool is an int -- so this would silently "
+            f"become {int(value)} rather than being rejected. Write the number.")
     if axis in _STR_AXES:
         return str(value)
     if axis in _INT_AXES:
@@ -398,6 +412,18 @@ def _validated_declaration(axis: str, declaration: Mapping[str, Any],
         return {"kind": "categorical", "choices": choices}
 
     low, high = float(declaration["low"]), float(declaration["high"])
+    if low >= high:
+        # `StudySpec` rejects this too, with a longer message pointing at
+        # `fixed_params`. Repeated here for the same reason `_coerce` rejects
+        # bools: this is the entry point for a caller who did not come through a
+        # StudySpec, and low == high would otherwise become a degenerate
+        # FloatDistribution -- legal to optuna, `single()`, and indistinguishable
+        # in the journal from an axis the sampler simply never varied.
+        raise ValueError(
+            f"search_axes[{axis!r}]: low={low} must be strictly less than "
+            f"high={high}. low == high is a fixed value, not a range -- put it "
+            f"in fixed_params, where it becomes a validated singleton "
+            f"categorical instead of a degenerate interval.")
     check(low, base_model)
     check(high, base_model)
     if axis in _INT_AXES or axis in _STR_AXES:

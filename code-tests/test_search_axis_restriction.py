@@ -173,6 +173,92 @@ def test_a_float_range_on_a_counting_axis_is_refused():
                                           "high": 32.0}})
 
 
+# ---------------------------------- both layers agree about what is legal ----
+#
+# `StudySpec` validates a declaration's SHAPE and `restrict_space` validates its
+# DOMAIN, and the split is right -- only the second has a base model. But two
+# layers with overlapping rules is how the weaker one quietly becomes the real
+# contract, so where they overlap they must AGREE. Both of the cases below were
+# found by an adversarial probe against `restrict_space` called directly: each
+# was refused by StudySpec and accepted here, which meant any caller not coming
+# through a study file got the weaker rule.
+
+
+def test_a_boolean_is_refused_rather_than_silently_becoming_an_int():
+    """The one Python hides. `bool` IS an `int`, so `float(True)` is 1.0 and
+    `int(1.0)` is 1 -- `ska_power_K: true` was accepted as K=1. YAML makes it
+    reachable rather than theoretical: `true`, `yes` and `on` all parse to True.
+    """
+    base = _base_model()
+    for axis in ("ska_power_K", "grad_clip", "ska_rank", "placement"):
+        with pytest.raises(ValueError, match="boolean"):
+            restrict_space(search_space(base), base, fixed={axis: True})
+
+
+def test_a_boolean_choice_in_a_declaration_is_refused_too():
+    base = _base_model()
+    with pytest.raises(ValueError, match="boolean"):
+        restrict_space(search_space(base), base,
+                       axes={"ska_power_K": {"kind": "categorical",
+                                             "choices": [1, True]}})
+
+
+def test_a_degenerate_float_range_is_refused_here_as_well_as_in_studyspec():
+    """low == high would become a FloatDistribution optuna considers `single()`
+    -- legal, and indistinguishable in the journal from an axis the sampler
+    simply never varied. The study spec rejects it; so must this."""
+    base = _base_model()
+    with pytest.raises(ValueError, match="strictly less than"):
+        restrict_space(search_space(base), base,
+                       axes={"ska_ridge": {"kind": "float", "low": 0.01,
+                                           "high": 0.01}})
+
+
+def test_an_inverted_float_range_is_refused():
+    base = _base_model()
+    with pytest.raises(ValueError, match="strictly less than"):
+        restrict_space(search_space(base), base,
+                       axes={"ska_ridge": {"kind": "float", "low": 0.03,
+                                           "high": 0.003}})
+
+
+def test_a_numeric_string_is_still_accepted_and_coerced():
+    """Deliberate leniency, not an oversight, and worth pinning so it is not
+    "tightened" away: PyYAML parses `3e-3` as a STRING (no decimal point in the
+    mantissa) -- `OptimSpec.lr`'s own error message exists because of that. A
+    numeric string still goes through the same domain check, so it can only land
+    on a value the axis already allows."""
+    base = _base_model()
+    restricted = restrict_space(search_space(base), base,
+                                fixed={"ska_rank": "24", "ska_ridge": "0.01"})
+    assert restricted["ska_rank"]["choices"] == [24]
+    assert restricted["ska_ridge"]["choices"] == [0.01]
+    assert isinstance(restricted["ska_rank"]["choices"][0], int)
+
+
+def test_a_non_numeric_string_on_a_numeric_axis_is_refused():
+    base = _base_model()
+    with pytest.raises((ValueError, TypeError)):
+        restrict_space(search_space(base), base, fixed={"ska_rank": "twenty"})
+
+
+def test_a_nan_is_refused():
+    """`nan > 0` is False, so the positivity check catches it -- asserted because
+    that is a property of the comparison rather than an explicit guard, and a
+    future refactor could lose it."""
+    base = _base_model()
+    with pytest.raises(ValueError):
+        restrict_space(search_space(base), base,
+                       axes={"gamma_value": {"kind": "categorical",
+                                             "choices": [float("nan")]}})
+
+
+def test_an_absurdly_large_int_is_refused_by_containment():
+    base = _base_model()
+    with pytest.raises(ValueError, match="outside this axis"):
+        restrict_space(search_space(base), base, fixed={"ska_rank": 2 ** 40})
+
+
 def test_a_non_positive_ridge_is_refused():
     base = _base_model()
     with pytest.raises(ValueError, match="ska_ridge"):
