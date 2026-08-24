@@ -1,0 +1,63 @@
+# Four points on one axis: how large must LayerScale be before SKA is measurable?
+#
+# NOT a design set for a search. This is a diagnostic, and its four points exist
+# to answer a single question that blocks the 256x17 interaction study.
+#
+# ## Why
+#
+# Measured on the 4m smoke study (job 445657), reading `layerscale_gate` out of
+# the four final checkpoints:
+#
+#     ls_init   ls_final   growth    loss     abl_delta
+#      0.0100    0.01018    1.02x   7.1819    -2.30e-05
+#      0.0100    0.01164    1.16x   7.1934    +1.17e-04
+#      0.0100    0.00893    0.89x   7.2201    -1.11e-05
+#      0.0300    0.02916    0.97x   7.6400    -3.35e-05
+#
+# The gate does not move. `ska.py:219` says why, and says it on purpose:
+# "out_proj is now full-rank (small std), NOT zeros -- LayerScale handles the
+# near-zero start". So SKA contributes ~1% of the residual at init and still ~1%
+# at the end, and ablating it moves held-out loss by 1e-5 to 1e-4. Three of the
+# four deltas are NEGATIVE, which at that magnitude is not "SKA hurts" but "the
+# sign is noise".
+#
+# Weight decay is not the cause: `optim.py:104` excludes `p.ndim < 2` and the
+# gate is 1-D, which the param_groups docstring names explicitly.
+#
+# So the interaction study's `ska_layerscale_init` axis, [0.002, 0.03], lies
+# entirely inside the region where SKA is switched off. A 256-trial search over
+# rank, depth and placement would be searching a mechanism that is not
+# contributing, and would rank sampling noise with high confidence.
+#
+# ## What these four points measure
+#
+# layerscale_factor multiplies the base spec's 0.01, so the resolved inits are
+# 0.01 / 0.1 / 0.5 / 1.0 -- two decades, from the study's own baseline to a gate
+# that passes SKA through at full magnitude.
+#
+# Read the result as: at which init does `ska_ablation.loss_delta` rise clearly
+# above the trial-to-trial noise floor? That value is the lower bound of a
+# useful `ska_layerscale_init` axis. If NONE of them does, the objective cannot
+# rank SKA at 600 steps and the study needs a different objective (MQAR recall,
+# per HANDOFF-2026-08-21 section 4) rather than a wider axis.
+#
+# The 0.01 point does double duty: it is the study's actual baseline at the
+# study's actual horizon, so its gate growth answers "does 600 steps grow the
+# gate when 200 did not?" independently of the widening question.
+designs:
+  # The interaction study's own baseline. Reproduces proxy-256x17.yaml.
+  - name: ls-0p01-baseline
+
+  # 10x. Enough that SKA carries ~10% of the residual if the gate holds.
+  - name: ls-0p1
+    layerscale_factor: 10.0
+
+  # 50x. Halfway to unity in linear terms, ~0.7 of the way in log.
+  - name: ls-0p5
+    layerscale_factor: 50.0
+
+  # 100x. SKA at full magnitude -- no longer a near-zero start at all. If the
+  # ablation delta is still ~1e-4 here, LayerScale is not what is suppressing
+  # it and the cause is elsewhere.
+  - name: ls-1p0
+    layerscale_factor: 100.0

@@ -1,0 +1,98 @@
+# Is SKA measurable at all on the 256x17 proxy? The gate on the interaction study.
+#
+# Four all-anchor trials, one GPU, ~25 minutes. Every trial is an anchor and
+# n_trials equals the anchor count, so NOTHING is sampled -- this is a controlled
+# four-point measurement wearing the search machinery, chosen because the search
+# path is the only launcher that sets `eval_on_final` and therefore the only one
+# that writes `ska_ablation.loss_delta`. `python -m experimentation.sweep` would
+# train these four and record no ablation at all.
+#
+# See configs/search/layerscale-probe-anchors.yaml for the measurement this is
+# built on: the 4m smoke study's gate did not move (0.89x-1.16x over 200 steps),
+# SKA contributed ~1% of the residual throughout, and the ablation delta was
+# 1e-5 to 1e-4 with three of four signs NEGATIVE.
+#
+# ## What decides the outcome
+#
+# Compare `ska_ablation.loss_delta` across the four resolved inits (0.01, 0.1,
+# 0.5, 1.0) against the spread among trials. Three outcomes, and they imply
+# different things for proxy-256x17-interactions-v1.yaml:
+#
+#   1. delta grows with init and clears the spread somewhere. That init is the
+#      lower bound for a useful `ska_layerscale_init` axis, and the interaction
+#      study's [0.002, 0.03] must be widened to sit above it.
+#   2. delta stays ~1e-4 at every init. LayerScale is NOT the suppressor, and
+#      held-out LM loss at 600 steps cannot rank SKA regardless of the axis. The
+#      study then needs a different objective -- MQAR recall, the `on_final`
+#      work HANDOFF-2026-08-21 section 4 identifies as "a modest change on a
+#      shared loop" -- not a wider search.
+#   3. delta is large but loss gets WORSE as init rises. SKA is measurable and
+#      unhelpful at this scale, which is itself a publishable answer about the
+#      proxy and means the interaction study should be run at 50m or not at all.
+#
+# The `ls-0p01-baseline` trial answers a second question for free: it is the
+# study's own baseline at the study's own horizon, so its final gate says whether
+# 600 steps grows the gate when 200 did not.
+#
+# ## Not a search, and configured to stay that way
+#
+# `sampler: random` is deliberate and inert -- with four anchors and n_trials 4
+# the sampler is never asked for a point. Naming `random` rather than TPE means a
+# misconfiguration that DID reach the sampler produces obvious uniform draws
+# rather than something that looks adaptive.
+#
+# Nothing must ever be pruned here, and that matters in a way it does not in a
+# search: a pruned trial writes no final checkpoint and no quick_eval, so it
+# would contribute neither a gate reading nor an ablation delta -- the two things
+# this study exists to produce.
+#
+# `prune_after_step: 599` is how, NOT a large `prune_startup_trials`. The spec
+# refuses `prune_startup_trials >= n_trials` (a study that believes it prunes and
+# cannot), which is right in general and would have been the obvious lever here.
+# Instead: prune_after_step becomes MedianPruner's n_warmup_steps, reports arrive
+# every `logging_steps` (25, 50, ... 600), and only 600 clears 599 -- so the
+# earliest possible prune point is the final step, by which point the trial has
+# already produced everything needed.
+name: layerscale-probe
+base: configs/runs/proxy-256x17.yaml
+
+n_trials: 4
+max_steps: 600
+
+# The study's real horizon, so the baseline point is directly comparable to the
+# interaction study rather than to a shortened stand-in.
+prune_after_step: 599
+logging_steps: 25
+
+# No `sampler_startup_trials` beside this: RandomSampler has no startup window,
+# and the spec REFUSES the pair rather than letting optuna ignore the number
+# silently. Caught by that validation on the first dry run of this file.
+sampler: random
+
+launcher: local
+concurrent_trials: 1
+seed: 2026
+direction: minimize
+
+design_file: configs/search/layerscale-probe-anchors.yaml
+
+# The whole point. The interaction study declares [0.002, 0.03]; an anchor snaps
+# THROUGH the declared space, so a factor of 100 against that bound would clamp
+# to 0.03 and the probe would measure nothing. Widened to two decades so the
+# four anchors resolve to the values they name.
+search_axes:
+  ska_layerscale_init:
+    kind: float
+    low: 0.01
+    high: 1.0
+    log: true
+
+run_root: /scratch/m000151-pm06/jkli/study-layerscale-probe
+
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# 600 steps at roughly 0.5 s/step is ~5 min; 30 min is generous without letting a
+# hung trial eat the whole booking.
+trial_timeout_seconds: 1800
+
+objective: {}
