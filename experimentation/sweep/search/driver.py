@@ -45,6 +45,7 @@ the reader injectable in the first place -- see
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
@@ -61,8 +62,43 @@ from experimentation.sweep.search.study import ANCHOR_ATTR, to_distributions
 from experimentation.sweep.spec import build_cell_run_spec
 from experimentation.run.spec import group_id, run_id
 
-__all__ = ["TRIAL_ATTRS", "TrialOutcome", "objective_from_metrics", "run_trial",
-           "drive"]
+__all__ = ["FATAL_EXCEPTIONS", "TRIAL_ATTRS", "FatalTrialError", "TrialOutcome",
+           "objective_from_metrics", "run_trial", "drive"]
+
+
+class FatalTrialError(Exception):
+    """Raised when a fault will recur identically for EVERY remaining trial.
+
+    The distinction `drive`'s handler cannot make on its own. A claimed run
+    directory is this trial's problem; a data shard that does not exist is every
+    trial's problem, and continuing spends 256 GPU-trials proving one fact.
+
+    No `except` clause can tell those apart from an exception type or a message
+    string, so the caller that knows says so by raising this. Everything not
+    raised as this -- and not in `FATAL_EXCEPTIONS` -- is treated as the current
+    trial's problem, which is the safe default: a study that fails every trial
+    for one reason is diagnosable in one glance from `_print_failures`, while a
+    study that stopped at trial 3 of 256 has wasted the allocation.
+    """
+
+
+#: Exceptions that are never a single trial's problem, so a per-trial handler must
+#: not convert them into a FAILED trial and carry on.
+#:
+#: `KeyboardInterrupt` and `SystemExit` do not derive from `Exception`, so a bare
+#: `except Exception` already misses them -- they are listed for the reader, and
+#: because the handler catches `BaseException` in order to record a reason before
+#: re-raising. `MemoryError` is the one that genuinely needs the allowlist: it
+#: IS an `Exception`, and a supervisor process out of host memory will not
+#: recover by starting another trial.
+FATAL_EXCEPTIONS = (KeyboardInterrupt, SystemExit, MemoryError)
+
+#: How many consecutive non-advancing attempts mean the journal, not the trial,
+#: is broken. Small: the condition it detects is binary (states are being
+#: recorded or they are not), so a large number only delays the diagnosis. Not 1,
+#: because `study.ask` on a WAITING enqueued trial legitimately returns without
+#: the count moving if that trial is then told by another worker.
+_MAX_STALLED_ATTEMPTS = 3
 
 #: The user-attr keys a trial records at MATERIALIZATION time -- before it is
 #: launched, so they survive a failure and a pruning.
@@ -376,6 +412,32 @@ def _finished(study: optuna.study.Study) -> int:
     return sum(1 for t in study.trials if t.state in terminal)
 
 
+def _fail_trial(study, trial, exc) -> TrialOutcome:
+    """Record why a trial died and tell optuna, so it does not sit RUNNING.
+
+    Both a summary and the traceback. The summary is what `_print_failures`
+    groups -- N failures with ONE reason is a harness bug, N with N reasons is a
+    rough study, and a count cannot tell them apart. The traceback is what makes
+    the cause findable: this driver's own history includes a `TypeError` swallowed
+    by the OOM ladder's broad `except` and surfacing as an unrelated assertion in
+    22 tests.
+    """
+    import traceback as _traceback
+
+    reason = f"{type(exc).__name__}: {exc}"
+    try:
+        trial.set_user_attr("failure", reason)
+        trial.set_user_attr("traceback", _traceback.format_exc())
+        study.tell(trial, state=optuna.trial.TrialState.FAIL)
+    except Exception:                                  # noqa: BLE001
+        # The storage itself is failing. Nothing useful left to do here, and
+        # raising would mask the original exception.
+        pass
+    return TrialOutcome(trial_number=getattr(trial, "number", -1),
+                        state="failed", run_id="", group_id="",
+                        run_dir=Path("."), objective=None, anchor=None)
+
+
 def drive(study: optuna.study.Study, *, n_trials: int, **kwargs) -> List[TrialOutcome]:
     """Run trials until the study holds `n_trials` finished ones.
 
@@ -383,10 +445,64 @@ def drive(study: optuna.study.Study, *, n_trials: int, **kwargs) -> List[TrialOu
     15-trial study that already finished 10 runs 5 -- which is the behaviour a
     human expects after a launcher crash, and the opposite of what "run 15" would
     do.
+
+    **A raising trial is failed, not fatal.** `run_trial` guards the LAUNCH, but
+    `params_to_overrides`, `build_cell_run_spec` and `materialize_cell` (which
+    calls `verify_shard` and `claim_run_dir`) all run outside that try. So one
+    claimed directory or one transient `/scratch` error used to raise straight out
+    of here: the worker exited non-zero, its trial sat RUNNING in the journal
+    forever, and the remaining hours of an 8-worker study ran 7-wide with nothing
+    saying why. On a multi-hour study that is the likeliest way the whole thing
+    quietly degrades.
+
+    The needle this threads: catching everything turns a genuinely broken study
+    into 256 identical failures, and catching nothing leaves the above. So a
+    trial-specific fault is recorded and the loop continues, while
+    `FATAL_EXCEPTIONS` and `FatalTrialError` still stop the worker -- see those
+    for where the line is and why it cannot be drawn by inspecting a message.
     """
     distributions = to_distributions(kwargs["space"])
     outcomes: List[TrialOutcome] = []
+    # A trial that neither COMPLETEs, PRUNEs nor FAILs does not advance
+    # `_finished`, so the loop would ask for another one forever. That is not
+    # hypothetical: `_fail_trial` swallows a storage error when telling FAIL (it
+    # has to -- raising there would mask the original exception), so a journal
+    # that has gone read-only turns this loop into a spin that burns the
+    # allocation at 100% CPU and looks like progress. Found because a mutation
+    # that removed the `tell` hung the test run instead of failing it.
+    #
+    # The guard is "did the last attempt move the counter", not a trial cap: the
+    # counter is the thing the loop condition reads, so watching it is exact,
+    # whereas a cap has to guess a margin.
+    stalled = 0
     while _finished(study) < n_trials:
+        before = _finished(study)
         trial = study.ask(distributions)
-        outcomes.append(run_trial(study, trial, **kwargs))
+        try:
+            outcomes.append(run_trial(study, trial, **kwargs))
+        except FATAL_EXCEPTIONS:
+            # Record, then re-raise: a worker that exits leaving a trial RUNNING
+            # is the failure this whole handler exists to prevent, and that is
+            # true whether it exits by choice or not.
+            _fail_trial(study, trial, sys.exc_info()[1])
+            raise
+        except FatalTrialError as exc:
+            _fail_trial(study, trial, exc)
+            raise
+        except Exception as exc:                       # noqa: BLE001
+            # This trial's problem, as far as anything here can tell. Recorded,
+            # told, and the worker moves to the next one.
+            outcomes.append(_fail_trial(study, trial, exc))
+        if _finished(study) > before:
+            stalled = 0
+            continue
+        stalled += 1
+        if stalled >= _MAX_STALLED_ATTEMPTS:
+            raise FatalTrialError(
+                f"{stalled} consecutive trial(s) finished without advancing the "
+                f"study's completed count ({before} of {n_trials}). The journal "
+                f"is not recording terminal states -- most likely it has become "
+                f"unwritable -- so this loop would spin forever asking for "
+                f"trials that never finish. Stopping instead of burning the "
+                f"allocation.")
     return outcomes

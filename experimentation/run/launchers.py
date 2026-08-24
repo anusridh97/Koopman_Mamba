@@ -122,19 +122,33 @@ class _ScoresRuns:
 
     eval_on_final: bool = False
     eval_data_dir = None
+    #: How often the trainer prints a progress line, or None for its own default.
+    #:
+    #: Here for the same reason as `eval_on_final`: how often a run PRINTS is a
+    #: property of who launched it, and anything on the spec would be hashed into
+    #: run_id -- two runs differing only in log verbosity are the same experiment.
+    #:
+    #: A study MUST set it. `metrics.read_progress` parses those lines and the
+    #: pruner's `interval_steps` is consulted on the same cadence, so the two have
+    #: to be ONE number; they were two, and the pruner was being asked about steps
+    #: no trial had reported.
+    logging_steps = None
 
     def _scoring_kwargs(self):
         return {"eval_on_final": self.eval_on_final,
-                "eval_data_dir": self.eval_data_dir}
+                "eval_data_dir": self.eval_data_dir,
+                "logging_steps": self.logging_steps}
 
 
 class LocalLauncher(Launcher, _ScoresRuns):
     """Runs training in-process via subprocess: `python -m ...` for a single
     GPU, `torchrun --standalone` when runtime.ddp and runtime.gpus > 1."""
 
-    def __init__(self, *, eval_on_final: bool = False, eval_data_dir=None):
+    def __init__(self, *, eval_on_final: bool = False, eval_data_dir=None,
+                 logging_steps=None):
         self.eval_on_final = eval_on_final
         self.eval_data_dir = eval_data_dir
+        self.logging_steps = logging_steps
 
     def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
         world_size = spec.runtime.gpus if (spec.runtime.ddp and spec.runtime.gpus > 1) else 1
@@ -265,10 +279,11 @@ class SlurmLauncher(Launcher, _ScoresRuns):
     """Generates run_dir/launch.sbatch and submits it with `sbatch`."""
 
     def __init__(self, repo_root: str = ".", *, eval_on_final: bool = False,
-                 eval_data_dir=None):
+                 eval_data_dir=None, logging_steps=None):
         self.repo_root = repo_root
         self.eval_on_final = eval_on_final
         self.eval_data_dir = eval_data_dir
+        self.logging_steps = logging_steps
 
     def build_command(self, spec: RunSpec, run_dir, *, resume: bool = False) -> List[str]:
         world_size = spec.runtime.gpus * spec.runtime.nodes

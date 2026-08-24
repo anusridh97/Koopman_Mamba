@@ -304,6 +304,18 @@ def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher,
     print(f"[search] pruning      after step {study_spec.prune_after_step}, "
           f"reporting every {study_spec.logging_steps}, once "
           f"{prune_startup} trial(s) are COMPLETE")
+    # The prune points, spelled out. This one number was silently wrong: the
+    # cadence reached the PRUNER's interval_steps and not the TRAINER, so reports
+    # arrived every 10 (train.py's default) while the pruner only consulted where
+    # (step - warmup) % interval == 0 -- turning 7 opportunities into 4 while this
+    # line still said "reporting every 25". Printing the resulting steps makes the
+    # agreement checkable by eye instead of inferable from two numbers.
+    points = [s for s in range(study_spec.logging_steps,
+                               study_spec.max_steps + 1, study_spec.logging_steps)
+              if s >= study_spec.prune_after_step
+              and (s - study_spec.prune_after_step) % study_spec.logging_steps == 0]
+    shown = ", ".join(str(s) for s in points[:6]) + (" ..." if len(points) > 6 else "")
+    print(f"[search]              {len(points)} prune point(s): {shown}")
     if space is not None and base_model is not None:
         _print_space(study_spec, space, base_model, base_lr, base_optim)
     if study_spec.design_file:
@@ -481,7 +493,14 @@ def main(argv=None):
     # finds something. Set on the LAUNCHER rather than the spec, since whether a
     # run scores itself is a property of who launched it -- anything on the spec
     # would be hashed into run_id, and a scored run is not a different experiment.
-    scoring = {"eval_on_final": True, "eval_data_dir": study_spec.eval_data_dir}
+    # `logging_steps` rides along with the scoring kwargs, and belongs there for
+    # the same reason: it is a property of who launched the run, not of the
+    # experiment. It reached the PRUNER and not the TRAINER, so train.py kept its
+    # default of 10 while `interval_steps` was 25 -- the pruner was consulted at
+    # steps no trial had reported, and the plan printer's "reporting every 25"
+    # was false. One number now, on both sides.
+    scoring = {"eval_on_final": True, "eval_data_dir": study_spec.eval_data_dir,
+               "logging_steps": study_spec.logging_steps}
     launcher = (LocalLauncher(**scoring) if launcher_name == "local"
                 else SlurmLauncher(repo_root=str(repo_root), **scoring))
 
