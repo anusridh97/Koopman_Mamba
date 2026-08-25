@@ -177,7 +177,12 @@ echo "training -> $OUT"
 # from scratch rather than resumed, because `--deterministic` makes a fresh run
 # reproducible while a resume across a preemption boundary is not bit-exact and
 # would put two different training trajectories in one accuracy curve.
-python -m experimentation.experiments.mqar_finetune \
+# `-u`: stdout is a PIPE here (into tee), so python block-buffers it. A task
+# killed by the walltime or by preemption would then lose the tail of its
+# accuracy curve even though its checkpoints survived -- and the curve is what
+# the predeclared statistics are computed from. Unbuffered costs nothing at this
+# log volume and makes the log a live record rather than a post-mortem one.
+python -u -m experimentation.experiments.mqar_finetune \
     --model_type mamba_ska_swiglu \
     --model_size "$MODEL_YAML" \
     --ska_beta_policy "$POLICY" \

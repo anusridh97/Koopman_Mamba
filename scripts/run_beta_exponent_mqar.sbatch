@@ -319,7 +319,10 @@ launch_cell () {                     # $1=cell spec  $2=seed  $3=gpu  $4=steps
     local save=$(( steps / 4 > 0 ? steps / 4 : 1 ))
     local ev=$(( EVAL_EVERY < steps ? EVAL_EVERY : steps ))
     echo "  launch cell=$name policy=$policy ridge=$ridge seed=$seed gpu=$gpu"
-    CUDA_VISIBLE_DEVICES=$gpu python -m experimentation.experiments.mqar_finetune \
+    # `-u` for the same reason the array launcher gives: stdout is redirected to
+    # a file, so python block-buffers it, and a task killed by the walltime loses
+    # the tail of the accuracy curve its statistics are computed from.
+    CUDA_VISIBLE_DEVICES=$gpu python -u -m experimentation.experiments.mqar_finetune \
         --model_type mamba_ska_swiglu \
         --model_size "$RUN_ROOT/model-$name.yaml" \
         --ska_beta_policy "$policy" \
