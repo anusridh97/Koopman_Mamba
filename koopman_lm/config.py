@@ -407,6 +407,10 @@ _CONFIGS_ROOT = Path(__file__).parent.parent / "configs"
 CONFIG_REGISTRY = {
     # Synthetic-transfer scale (paper Sec 4.1 / Table 2).
     "1m": "1m.yaml",
+    "3m_nonembed": "3m-nonembed.yaml",
+    "10m_nonembed": "10m-nonembed.yaml",
+    "30m_nonembed": "30m-nonembed.yaml",
+    "50m_nonembed": "50m-nonembed.yaml",
     # Canonical fused-prefix production configurations.
     "50m": "50m.yaml",
     "180m": "180m.yaml",

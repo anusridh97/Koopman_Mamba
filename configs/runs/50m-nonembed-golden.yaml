@@ -1,0 +1,19 @@
+# 50M non-embedding scaling run. Materialize this 3B-token shard before launch
+# and set n_tokens to its exact meta.json value.
+extends: 3m-golden.yaml
+name: 50m-nonembed-golden
+model: 50m_nonembed
+data:
+  shard_dir: /anvil/scratch/x-ajohansen/data/fineweb_3b
+  n_tokens: 3000000000
+optim:
+  lr: 3.0e-4
+  warmup_steps: 900
+  max_steps: 22889
+  schedule: cosine
+  effective_batch: 64
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  per_device_batch_size: 16
+  time_limit: 2-00:00:00

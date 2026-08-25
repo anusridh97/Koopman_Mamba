@@ -125,7 +125,7 @@ class OptimSpec:
 
 _BATCH_REQUIRED_ACCOUNT = "marlowe-m000151-pm06"
 _BATCH_REQUIRED_QOS = "medium"
-_KNOWN_PARTITIONS = {"batch", "hero", "preempt"}
+_KNOWN_PARTITIONS = {"batch", "hero", "preempt", "ai", "gpu", "gpu-debug"}
 
 
 @dataclass(frozen=True)

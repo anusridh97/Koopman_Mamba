@@ -30,9 +30,9 @@ _SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --account={account}
 #SBATCH --partition={partition}
-#SBATCH --qos={qos}
+{qos_line}
 #SBATCH --nodes={nodes}
-#SBATCH --gpus-per-node={gpus}
+#SBATCH {gpu_directive}
 #SBATCH --time={time_limit}
 #SBATCH --signal=B:USR1@300
 #SBATCH --requeue
@@ -40,7 +40,7 @@ _SBATCH_TEMPLATE = """#!/bin/bash
 
 set -euo pipefail
 
-# Marlowe H100 nodes are compute capability 9.0 (sm_90) -- NOT B200/sm_100.
+{environment}
 export TORCH_CUDA_ARCH_LIST="{gpu_arch}"
 
 cd {repo_root}
@@ -58,9 +58,9 @@ _ARRAY_SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --account={account}
 #SBATCH --partition={partition}
-#SBATCH --qos={qos}
+{qos_line}
 #SBATCH --nodes={nodes}
-#SBATCH --gpus-per-node={gpus}
+#SBATCH {gpu_directive}
 #SBATCH --time={time_limit}
 #SBATCH --signal=B:USR1@300
 #SBATCH --requeue
@@ -69,7 +69,7 @@ _ARRAY_SBATCH_TEMPLATE = """#!/bin/bash
 
 set -euo pipefail
 
-# Marlowe H100 nodes are compute capability 9.0 (sm_90) -- NOT B200/sm_100.
+{environment}
 export TORCH_CUDA_ARCH_LIST="{gpu_arch}"
 
 cd {repo_root}
@@ -86,6 +86,24 @@ exec bash "$RUN_DIR/launch_line.sh"
 # as one array job (see _require_uniform_array_runtime).
 _ARRAY_RUNTIME_FIELDS = ("partition", "account", "qos", "gpus", "nodes",
                           "time_limit", "gpu_arch")
+
+
+def _slurm_resources(runtime: RuntimeSpec):
+    anvil = runtime.partition in {"ai", "gpu", "gpu-debug"}
+    gpu_directive = (f"--gres=gpu:{runtime.gpus}" if anvil
+                     else f"--gpus-per-node={runtime.gpus}")
+    qos_line = f"#SBATCH --qos={runtime.qos}" if runtime.qos else ""
+    if anvil:
+        environment = "\n".join([
+            "module purge",
+            "module load modtree/gpu",
+            "module load cuda/13.1.0",
+            "unset PYTHONPATH PYTHONHOME",
+            'source "$SCRATCH/research/Koopman_Mamba/.venv/bin/activate"',
+        ])
+    else:
+        environment = "# Marlowe environment is provided by the submission context."
+    return gpu_directive, qos_line, environment
 
 
 class Launcher(abc.ABC):
@@ -245,6 +263,9 @@ def render_array_sbatch(sweep_name: str, cells: List[Tuple[RunSpec, "Path"]],
     sweep_dir = Path(sweep_dir)
     concurrency_suffix = f"%{concurrency}" if concurrency else ""
     return _ARRAY_SBATCH_TEMPLATE.format(
+        gpu_directive=_slurm_resources(runtime)[0],
+        qos_line=_slurm_resources(runtime)[1],
+        environment=_slurm_resources(runtime)[2],
         job_name=sweep_name,
         account=runtime.account,
         partition=runtime.partition,
@@ -283,7 +304,11 @@ class SlurmLauncher(Launcher, _ScoresRuns):
     def render_sbatch(self, spec: RunSpec, run_dir, *, resume: bool = False) -> str:
         run_dir = Path(run_dir)
         launch_line = " ".join(self.build_command(spec, run_dir, resume=resume))
+        gpu_directive, qos_line, environment = _slurm_resources(spec.runtime)
         return _SBATCH_TEMPLATE.format(
+            gpu_directive=gpu_directive,
+            qos_line=qos_line,
+            environment=environment,
             job_name=spec.name,
             account=spec.runtime.account,
             partition=spec.runtime.partition,
@@ -310,8 +335,14 @@ class SlurmLauncher(Launcher, _ScoresRuns):
         atomic_write_text(sbatch_path, self.render_sbatch(spec, run_dir, resume=resume))
         if dry_run:
             return sbatch_path
-        result = subprocess.run(["sbatch", str(sbatch_path)],
-                                 check=True, capture_output=True, text=True)
+        try:
+            result = subprocess.run(["sbatch", str(sbatch_path)],
+                                    check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "no Slurm error output").strip()
+            raise RuntimeError(
+                f"Slurm rejected generated script {sbatch_path}: {detail}"
+            ) from exc
         return result.stdout.strip()
 
     def submit_array(self, sweep_name: str, cells: List[Tuple[RunSpec, "Path"]],

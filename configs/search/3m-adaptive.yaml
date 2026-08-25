@@ -1,0 +1,20 @@
+# Adaptive Optuna search for the branch's approximately 3M non-embedding model.
+name: 3m-adaptive
+base: configs/runs/3m-golden.yaml
+
+n_trials: 48
+max_steps: 1500
+prune_after_step: 400
+logging_steps: 25
+
+launcher: slurm
+n_jobs: 1
+seed: 2026
+direction: minimize
+design_file: configs/search/example_anchors.yaml
+
+run_root: /anvil/scratch/x-ajohansen/3m-optuna-runs
+storage: /anvil/scratch/x-ajohansen/3m-optuna-runs/optuna_journal.log
+trial_timeout_seconds: 1800
+
+objective: {}

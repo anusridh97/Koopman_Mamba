@@ -1,0 +1,27 @@
+# Branch-compatible 3M non-embedding-parameter training run.
+extends: 4m-golden.yaml
+name: 3m-golden
+model: 3m_nonembed
+data:
+  kind: shard
+  shard_dir: /anvil/scratch/x-ajohansen/data/fineweb_small_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix:
+    fineweb: 1.0
+    pg19: 0.0
+    scrolls: 0.0
+  n_tokens: 100000536
+runtime:
+  per_device_batch_size: 8
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: ai
+  account: cis261066-ai
+  qos: null
+  workers: 4
+  time_limit: 02:00:00
+  gpu_arch: '9.0'

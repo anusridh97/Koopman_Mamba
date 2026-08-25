@@ -1,0 +1,52 @@
+# Approximately 3M non-embedding parameters with the 32k FineWeb tokenizer.
+# Estimated non-embedding parameters: 3,161,248.
+# Estimated total parameters, including tied embeddings: 8,281,248.
+# This file follows the current branch schema used by configs/runs/4m-golden.yaml.
+d_model: 160
+n_layers: 8
+vocab_size: 32000
+d_state: 16
+d_conv: 4
+mamba_expand: 2
+
+ska_n_heads: 4
+ska_rank: 16
+ska_ridge: 0.001
+ska_power_K: 2
+ska_chunk_size: 16
+ska_layer_indices: [6, 7]
+ska_mode: parallel
+ska_backend: pytorch
+ska_inverse_cholesky: false
+ska_exact_intrachunk: false
+ska_prefix_scan: false
+ska_prefix_scan_block_size: 32
+ska_prefix_scan_jitter: 0.0
+ska_norm_clip: true
+ska_norm_clip_c: 4.0
+ska_eta_learnable: false
+ska_eta_value: 1.0
+ska_eta_bounds: null
+ska_gamma_learnable: false
+ska_gamma_value: 1.0
+ska_gamma_clamp: null
+ska_gamma_bounds: null
+ska_layerscale: true
+ska_layerscale_init: 0.01
+ska_out_proj_std: 0.02
+ska_short_conv: false
+
+mlp_type: swiglu
+mlp_expand: 2.667
+norm_type: rmsnorm
+norm_eps: 0.00001
+init_policy: mamba_safe
+initializer_range: 0.02
+rescale_prenorm_residual: true
+max_seq_len: 2048
+tie_embeddings: true
+
+# Current precision policy fields.
+compute_precision: bf16
+ska_precision: fp32
+mlp_precision: null

@@ -1,0 +1,19 @@
+# 10M non-embedding scaling run. Update n_tokens to the exact meta.json value
+# if pretokenization overshoots the nominal 700M target.
+extends: 3m-golden.yaml
+name: 10m-golden
+model: 10m_nonembed
+data:
+  shard_dir: /anvil/scratch/x-ajohansen/data/fineweb_700m_train
+  n_tokens: 700050443
+optim:
+  lr: 4.0e-4
+  warmup_steps: 320
+  max_steps: 5341
+  schedule: cosine
+  effective_batch: 64
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  per_device_batch_size: 16
+  time_limit: 12:00:00

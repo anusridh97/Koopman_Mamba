@@ -154,6 +154,15 @@ def make_pruner(*, prune_after_step: int = DEFAULT_PRUNE_AFTER_STEP,
 def make_storage(study_dir, storage_url: Optional[str] = None):
     """A journal file under `study_dir`, or an explicit RDB URL if given."""
     if storage_url:
+        # Study YAMLs use a filesystem path for the shared journal. Optuna
+        # interprets a bare path as a SQLAlchemy URL, so construct the journal
+        # backend explicitly. Keep accepting URLs for callers that intentionally
+        # use a database backend.
+        if "://" not in storage_url:
+            journal = Path(storage_url)
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            backend = optuna.storages.journal.JournalFileBackend(str(journal))
+            return optuna.storages.JournalStorage(backend)
         return storage_url
     study_dir = Path(study_dir)
     study_dir.mkdir(parents=True, exist_ok=True)
