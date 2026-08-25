@@ -23,10 +23,20 @@ discards real ones. The three relevant standard deviations, for n = 5:
     single trial vs 5-mean         sigma*sqrt(1 + 1/5) = 1.095*sigma
     5-mean vs 5-mean               sigma*sqrt(2/5)     = 0.632*sigma   <- here
 
-At the repo's 2-sd convention the resolvable effect is therefore 1.265*sigma,
+At the repo's 2-sd convention the resolvable effect would be 1.265*sigma,
 against 2.83*sigma for the trial-vs-trial comparison the noise-floor studies
-report. Using the wrong one would make this study look 2.2x less sensitive than
-it is.
+report. Using the wrong denominator would make this study look 2.2x less
+sensitive than it is.
+
+The threshold actually applied is 2.39 sigma, not 2, because three contrasts are
+made against one control (see `_BONFERRONI_SIGMAS`) -- so the resolvable effect
+is 2.39 * 0.632 = 1.51*sigma. Still 1.9x better than trial-vs-trial, and it is
+the correction rather than the sensitivity that matters here: at 2 sigma each
+the family-wise false-positive rate is 14%, and that error points toward
+declaring a winner in a comparison whose expected answer is a null.
+
+At the measured sigma = 7.5373e-3 (five seeds, 1500 steps, job 445994) that is a
+resolvable effect of 1.14e-2 on the cell means.
 
 ## Sigma is pooled, and pooled the right way
 
