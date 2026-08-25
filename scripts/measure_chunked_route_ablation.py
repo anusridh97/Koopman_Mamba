@@ -44,6 +44,50 @@ x {SKA on, SKA zeroed}. The route flag changes no parameter shape, so the swap i
 a pure evaluation of the same weights under the other operator: another paired
 contrast, and the cheapest one in the file.
 
+## MEASURED -- jobs 446363-446371, three seeds per cell, 1500 steps, H100.
+## Analysis: scripts/analyze_chunked_route_ablation.py
+
+    cell            n   held-out loss   ska_delta (64b)   t     swap penalty
+    -------------  --   -------------   ---------------   ---   ------------
+    exact-invchol   3        4.39688    +0.016732+-.0022  7.71     +0.001463
+    chunked-cs16    3        4.39697    +0.014523+-.0022  6.74     -0.000122
+    chunked-cs64    3        4.39633    +0.009703+-.0014  6.70     +0.000805
+
+    vs exact (Welch):  cs16 keeps 86.8% (t 0.72)   cs64 keeps 58.0% (t 2.69)
+
+Harness validated: on the exact cell train.py's own 8-batch `--eval_on_final`
+delta reads +0.025190 against the independently known +0.025139 +- 0.002976
+(job 445994), which used that same 8-batch path.
+
+**The hypothesis this was built to test is FALSE.** "If the chunked route's SKA
+contributes nothing measurable, that is the cleanest possible statement of the
+problem" -- it contributes plenty. At `1m`'s ska_chunk_size of 16 it retains 87%
+of the exact route's entire SKA contribution and the difference is not resolvable
+(t = 0.72). Even at chunk 64 it retains 58%.
+
+**And the route is nearly invisible to held-out loss.** The three cells span
+0.00064 in held-out loss -- 33x BELOW the 0.0213 that is resolvable trial-to-trial
+at this horizon. The paired swap penalty (same weights, same batches, other
+operator) is +0.0015 for the exact-trained model and -0.0001 at chunk 16, i.e.
+zero. So no amount of seeds would have let a loss comparison detect this; that is
+a fact about the instrument, and it is why REVIEW.md's earlier 2.3e-4 attempt was
+never going to resolve.
+
+**Which makes the dissociation the finding.** The same configuration that loses
+short-range recall for 93.8% of tokens at chunk 16, and whose gradient is ~100%
+wrong at cosine 0.14, pays essentially nothing in aggregate LM loss. Two
+consequences, and they point opposite ways:
+
+  * goldens, LM-loss studies and loss-ranked searches on chunked configs are SAFE,
+    and no amount of extra seeds would make them sensitive to the route;
+  * any claim about SKA's MECHANISM measured on a chunked config -- recall,
+    induction, `ska_beta_policy` -- is measuring an operator that is ~100% wrong,
+    and aggregate loss will never reveal it.
+
+The warning's "upper bound on SPEED and not a result" is therefore too broad as
+stated: a chunked LM-loss number is a fine LM-loss number. What it is not is
+evidence about SKA.
+
 Usage:
     python scripts/measure_chunked_route_ablation.py \
         --run_root $SCRATCH/chunked-route-ablation --json out.json
