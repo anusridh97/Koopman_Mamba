@@ -1,0 +1,48 @@
+# The reference configuration, five times, differing only in training seed.
+#
+# Lifted verbatim from the `reference` group in proxy-256x17-anchors.yaml so the
+# floor measured here is the floor that applies to that study. Nothing else is
+# copied: the 23 screen anchors are absent, because this file exists to measure
+# one quantity and adding a second factor would confound it.
+#
+# ## What this measures and why nothing else can
+#
+# Every anchor contrast in the interaction study is a difference between two
+# held-out losses. A difference is only a finding if it exceeds the difference
+# you would see from changing nothing. These five trials change nothing except
+# `runtime.seed`, so the spread of their losses IS that quantity.
+#
+# Job 445689 established the scale the floor has to resolve: four proxy trials
+# spanned 0.069 in held-out loss, and the best two were 0.004 apart. The study's
+# central question -- whether it can rank nearby configurations at all -- turns
+# on whether sigma is above or below roughly 1.4e-3. Above it, the 0.004 gap is
+# unresolvable and the search would be ranking noise; below it, the gap is real
+# and the study can do its job.
+#
+# ## Why five, and why seeds rather than repeats of one seed
+#
+# `runtime.deterministic: true` on the base spec means one seed re-run is
+# bit-identical -- a repeat of the same seed would measure zero and look like a
+# floor of zero, which is the most dangerous possible wrong answer here. The
+# variation being measured is initialisation and data order, and `runtime.seed`
+# is what selects both. It IS hashed into run_id, so each of these is a distinct
+# recorded datapoint rather than an overwrite.
+#
+# Five gives four degrees of freedom. That is few, and the resulting sigma has
+# wide error bars of its own -- which is a reason to report it with those bars,
+# not a reason to prefer no measurement.
+designs:
+  - name: reference-k1
+    reference_group: reference
+  - name: reference-seed-43
+    seed: 43
+    reference_group: reference
+  - name: reference-seed-44
+    seed: 44
+    reference_group: reference
+  - name: reference-seed-45
+    seed: 45
+    reference_group: reference
+  - name: reference-seed-46
+    seed: 46
+    reference_group: reference

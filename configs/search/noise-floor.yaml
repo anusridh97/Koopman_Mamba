@@ -1,0 +1,85 @@
+# The noise floor: five identical trials, five seeds. The gate on the 256x17 study.
+#
+# ~30 minutes on one GPU, and it decides whether the 256-trial interaction study
+# is worth submitting at all.
+#
+# ## The number this produces and what turns on it
+#
+# `analysis.noise_floor` reads the five `reference` members' held-out losses and
+# reports sigma plus the derived minimum resolvable effect:
+#
+#     trial vs trial      2 * sigma * sqrt(2)
+#     anchor vs the mean  2 * sigma * sqrt(1 + 1/5)
+#
+# Job 445689 measured four proxy configurations spanning 0.069 in held-out loss,
+# with the best two 0.004 apart. So:
+#
+#   * sigma around 4e-3 -> floor about 1.1e-2. The 0.004 gap is NOISE, most of
+#     the 0.069 span is unresolvable, and a 256-trial search over rank, depth and
+#     placement would produce a confident ranking of nothing. The study needs
+#     more steps per trial, or an objective SKA moves harder (MQAR recall, the
+#     `on_final` work HANDOFF-2026-08-21 section 4 describes).
+#   * sigma around 1e-3 -> floor about 2.8e-3. The 0.004 gap is real, the study
+#     can rank neighbouring configurations, and it should be submitted as-is.
+#
+# The threshold is roughly sigma = 1.4e-3. That single number is the decision.
+#
+# ## Deliberately not a search
+#
+# Five anchors, `n_trials: 5`, so the sampler is never asked for a point.
+# `sampler: random` for the same reason as the layerscale probe: if a
+# misconfiguration ever DID reach the sampler, uniform draws are obvious where
+# adaptive ones would hide.
+#
+# Nothing may be pruned, and here that is not a preference. A pruned reference
+# member is a missing observation in a five-point variance estimate, and it would
+# be missing precisely because it looked unusual -- truncating the distribution
+# whose width is the entire measurement. `prune_after_step: 599` with reports
+# every 25 means the earliest possible prune point is step 600, by which time the
+# trial has finished; the dry run confirms `0 prune point(s)`.
+#
+# `concurrent_trials: 1` on purpose, even though five trials would fan out
+# happily. Concurrent trials share a GPU, and job 445689 showed the first trial
+# in a process reporting 17,818 tok/s against ~110k for identical architecture
+# afterwards. Throughput is not this study's objective, so that alone would not
+# matter -- but contention is a source of variation that is NOT initialisation or
+# data order, and this measurement's whole validity rests on seed being the only
+# thing that differs. Serial costs about 25 extra minutes and removes the doubt.
+#
+# ## What this does NOT establish
+#
+# One sigma, at one point in the space, in deterministic mode. Applying it
+# space-wide is the optimistic assumption: a high-rank or K=2 configuration could
+# be noisier than the reference, and this cannot see that. Four degrees of freedom
+# also means sigma has wide error bars of its own. Both are recorded in the
+# study's CANNOT_ESTABLISH list rather than assumed away.
+name: noise-floor
+base: configs/runs/proxy-256x17.yaml
+
+# Five members, five trials -- every trial is an anchor.
+n_trials: 5
+# The interaction study's own horizon. A floor measured at 200 steps would not
+# describe the study that runs at 600.
+max_steps: 600
+
+prune_after_step: 599
+logging_steps: 25
+
+sampler: random
+
+launcher: local
+concurrent_trials: 1
+seed: 2026
+direction: minimize
+
+design_file: configs/search/noise-floor-anchors.yaml
+
+run_root: /scratch/m000151-pm06/jkli/study-noise-floor
+
+# Held out, as the interaction study is. A floor measured on training loss would
+# not describe the quantity the study ranks on.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+trial_timeout_seconds: 1800
+
+objective: {}
