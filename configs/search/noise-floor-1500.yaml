@@ -1,0 +1,69 @@
+# The noise floor at a LONGER horizon: does sigma shrink as the curve flattens?
+#
+# Same five reference replicates as noise-floor.yaml, at 1500 steps instead of
+# 600. ~1.5 h on one GPU. This decides whether the 256x17 proxy is usable as a
+# search instrument at all.
+#
+# ## Why this run exists
+#
+# Job 445832 measured sigma = 9.50e-3 over five seeds at 600 steps, giving a
+# trial-vs-trial resolvable effect of 2*sigma*sqrt(2) = 0.0269. That is larger
+# than almost every effect the interaction study wants to rank -- including the
+# SKA ablation delta at the default gate (1.17e-2) and the 0.0039 gap between the
+# two best layerscale points in job 445689. At that floor a 256-trial search
+# returns a confident ranking of noise.
+#
+# The hypothesis this tests: at 600 steps the loss curve is still steep, so much
+# of that spread is WHERE ON THE CURVE a seed happens to sit rather than a real
+# quality difference between seeds. If so, sigma should shrink as the curve
+# flattens, and the proxy becomes usable at a longer horizon. If sigma stays near
+# 9.5e-3, the horizon is not the problem and the objective is -- which points at
+# MQAR recall rather than more steps.
+#
+# ## Why 1500 and not more
+#
+# 1500 steps x 64 effective_batch x 1024 seq = 98,304,000 tokens against a
+# 100,000,536-token shard: 0.98 epochs. One epoch is 1525 steps. Going further
+# repeats data, which changes the regime (the model starts memorising) and would
+# confound the seed variance this measures with a data-repetition effect. So 1500
+# is the largest horizon that is still a single clean pass, and it is 2.5x the
+# 600-step measurement.
+#
+# warmup_steps is not pinned here: params_to_overrides computes
+# round(max_steps * warmup_ratio), and the reference resolves warmup_ratio 0.04,
+# so warmup scales with the horizon (24 -> 60 steps) instead of silently becoming
+# a smaller fraction.
+#
+# Everything else is deliberately identical to noise-floor.yaml -- same five
+# seeds, serial, unprunable, same shard -- so the two sigmas are comparable and
+# the only difference is the horizon.
+name: noise-floor-1500
+base: configs/runs/proxy-256x17.yaml
+
+# Five members, five trials -- every trial is an anchor.
+n_trials: 5
+# The interaction study's own horizon. A floor measured at 200 steps would not
+# describe the study that runs at 600.
+max_steps: 1500
+
+prune_after_step: 1499
+logging_steps: 25
+
+sampler: random
+
+launcher: local
+concurrent_trials: 1
+seed: 2026
+direction: minimize
+
+design_file: configs/search/noise-floor-anchors.yaml
+
+run_root: /scratch/m000151-pm06/jkli/study-noise-floor-1500
+
+# Held out, as the interaction study is. A floor measured on training loss would
+# not describe the quantity the study ranks on.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+trial_timeout_seconds: 3600
+
+objective: {}
