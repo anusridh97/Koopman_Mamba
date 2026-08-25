@@ -263,7 +263,7 @@ echo "############################################################"
 python "$REPO_ROOT/scripts/report_beta_contrast_on_mqar.py" \
     --kv "$KV" --gap "$GAP" --task_vocab "$TASK_VOCAB" \
     --json_out "$RUN_ROOT/beta-contrast.json" \
-    "$RUN_ROOT"/mqar-*-seed* 2>&1 || echo "WARN: contrast diagnostic failed"
+    "$RUN_ROOT"/mqar-*-seed[0-9]*/ 2>&1 || echo "WARN: contrast diagnostic failed"
 
 date -Is
 echo "=== END ==="

@@ -58,7 +58,7 @@ export TRITON_CACHE_DIR=$SCRATCH/triton-cache
 python "$REPO_ROOT/scripts/report_beta_contrast_on_mqar.py" \
     --kv "$KV" --gap "$GAP" --task_vocab "$TASK_VOCAB" \
     --json_out "$MQAR_ROOT/beta-contrast.json" \
-    "$MQAR_ROOT"/mqar-*-seed*
+    "$MQAR_ROOT"/mqar-*-seed[0-9]*/
 echo "STATUS contrast=$?"
 date -Is
 echo "=== END ==="

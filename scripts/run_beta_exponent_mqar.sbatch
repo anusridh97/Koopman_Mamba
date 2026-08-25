@@ -230,13 +230,36 @@ for name, policy, ridge_s in cells:
         failures.append(f"cell {name}: gamma is {cfg.ska_gamma_value} "
                         f"(learnable={cfg.ska_gamma_learnable}); the arm pins "
                         f"gamma = 1 so no cell can be rescued by amplification")
+    # Checked SEPARATELY from ska_gamma_learnable: ska.py:380-383 promotes gamma
+    # to an nn.Parameter whenever gamma_bounds is not None, REGARDLESS of the
+    # learnable flag (threaded at ska_block.py:57). Without this, bounds=[0.5,2.0]
+    # + value=1.0 + learnable=false passes a gate whose message claims "the arm
+    # pins gamma = 1" and then trains a drifting gamma. Latent today (the proxy's
+    # bounds are null) and one config edit from live.
+    if getattr(cfg, "ska_gamma_bounds", None) is not None:
+        failures.append(f"cell {name}: ska_gamma_bounds is "
+                        f"{cfg.ska_gamma_bounds!r}, which makes gamma an "
+                        f"nn.Parameter even at gamma_learnable=False")
     if int(cfg.ska_power_K) != 1:
         failures.append(f"cell {name}: power_K is {cfg.ska_power_K}, not 1")
 
     # ---- gate 3: the ridge is what the cell claims ------------------------
-    if float(cfg.ska_ridge) != ridge:
-        failures.append(f"cell {name}: ridge resolved to {cfg.ska_ridge}, "
-                        f"declared {ridge}")
+    # NOT `float(cfg.ska_ridge) != ridge`. `dataclasses.replace` above assigned
+    # exactly that value and __post_init__ never touches ska_ridge, so the
+    # comparison fired False for every ridge and the gate could not fail. A gate
+    # that cannot fail is worse than no gate: it reads as coverage.
+    #
+    # What can actually go wrong is the value not surviving the round trip
+    # through the flat YAML the cell trains from -- which is what `build_config`
+    # reads, and which the `reloaded != cfg` check below covers. So this gate
+    # checks the one thing left: that the dataclass produced a usable positive
+    # float at all.
+    if not isinstance(cfg.ska_ridge, float) or cfg.ska_ridge <= 0:
+        failures.append(f"cell {name}: ska_ridge came out of the dataclass as "
+                        f"{cfg.ska_ridge!r}; the ridge control needs a positive "
+                        f"float. (The declared-vs-resolved comparison lives in "
+                        f"the YAML round trip below, which is what build_config "
+                        f"actually reads.)")
 
     # Write the flat model YAML this cell will train from, and round-trip it so
     # a malformed extraction fails HERE and not on a GPU.

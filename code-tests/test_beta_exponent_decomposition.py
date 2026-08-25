@@ -688,14 +688,31 @@ def test_recurrent_accumulation_reproduces_the_prefill_statistics(policy):
 
 
 @pytest.mark.parametrize("policy", sorted(MIXED))
-def test_a_search_space_accepts_each_new_cell(policy):
-    """`beta_policy` is a searchable categorical, so a new cell the space does
-    not declare would be unreachable from a study file -- and one the validator
-    rejects would fail on trial 0 after a run directory is claimed."""
-    from experimentation.sweep.search.space import search_space
-    from experimentation.sweep.search.space import _check_beta_policy
+def test_a_search_space_can_OPT_IN_to_each_new_cell(policy):
+    """Reachable from a study, but NOT in the default space.
+
+    This test previously asserted the opposite -- that each new cell IS a default
+    `beta_policy` choice -- and that assertion was the bug. Widening the declared
+    default changes the recorded `CategoricalDistribution` of every study that
+    sampled it, and optuna raises `does not support dynamic value space` on
+    reattach: a HARD failure at `ask()`, after a worker has claimed a run root.
+    One archived journal (`smoke-fanout.5f93952c`) was broken by it.
+
+    So the requirement is the opt-in, not the default. `_check_beta_policy` must
+    accept the policy (it is a legal value of the axis), and `search_axes` must be
+    able to declare it, while `search_space()` must NOT offer it unasked. See
+    `test_beta_policy_axis_stability.py`.
+    """
+    from experimentation.sweep.search.space import (
+        _check_beta_policy, restrict_space, search_space)
     base = build_config("1m")
     space = search_space(base, base_lr=1e-3)
-    assert policy in space["beta_policy"]["choices"], (
-        f"{policy} is a legal config value but not a declared search choice")
-    _check_beta_policy(policy, base)      # must not raise
+    assert policy not in space["beta_policy"]["choices"], (
+        f"{policy} is in the DEFAULT search space; widening that default breaks "
+        f"reattachment to every journal that sampled the narrower support")
+    _check_beta_policy(policy, base)      # a legal value of the axis
+    opted_in = restrict_space(
+        space, base,
+        axes={"beta_policy": {"kind": "categorical",
+                              "choices": ["learned", policy]}})
+    assert policy in opted_in["beta_policy"]["choices"]

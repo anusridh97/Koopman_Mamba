@@ -195,6 +195,34 @@ exclude it is honoured -- but the stated reason for excluding it does not surviv
 the longer budget, and a future decision about it should start from the 24000-step
 number rather than the 4000-step one.
 
+### Two instructions in the original brief did not survive measurement
+
+Both corrections are confirmed by the coordinator, recorded here so they are not
+re-derived from the superseded premises.
+
+**1. "Make SKA-on-vs-SKA-zeroed retrieval a PRIMARY discriminator" was wrong at
+this cell.** `ska_acc_zeroed` lies in [0.0000, 0.1055] across all 24 runs of jobs
+446145 and 446106, against a 1/128 chance floor, so the delta is collinear with
+accuracy and carries no independent information. Demoted to a validity check, as
+described above. The instruction was right in general -- LM loss really is blind
+to SKA damage -- and wrong here, because at this cell *everything* is SKA.
+
+**2. "Do NOT include head_scalar" rested on a false premise.** The stated reason
+was 0/3 grokked; that is job 446106 at ~4000 steps. At 24000 steps it groks on
+seed 42 at step 12000 with `ska_delta_acc` = +0.9746. The exclusion is honoured
+for this screening wave as a BUDGET decision, and it is no longer justified as a
+finding about the policy.
+
+**Decision on head_scalar, and why it is not simply added now.** Adding an eighth
+cell would change `manifest()`'s index mapping, and array 446697 is in flight:
+every task resolves its own (cell, seed) from `CELLS` by index, so a mid-flight
+edit would make unstarted tasks run a different cell than their index was
+prepared for, mixing two designs in one run root with nothing in the output
+distinguishing them. That hazard is now a hard gate (the array task cross-checks
+its resolved cell against the frozen `manifest.json` and refuses on disagreement),
+but the gate's correct response is to refuse, not to proceed -- so `head_scalar`
+belongs in a SEPARATE wave with its own prepared run root, not in this one.
+
 ## 5. The mandatory control: the ridge confound
 
 `linear` puts `beta^2` in `G`. At the shared `beta = 0.5` initialisation its

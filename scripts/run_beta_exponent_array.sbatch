@@ -136,6 +136,37 @@ base = resolve_run_spec(repo / "configs/runs/proxy-256x17.yaml").model
 
 fails = preflight_failures([task.cell], base)
 
+# The index -> (cell, seed) map comes from the MODULE, but `manifest.json` froze
+# that map when the run root was prepared. If someone edits `CELLS` while an
+# array is in flight -- adds a cell, reorders one -- every task that has not
+# started yet silently resolves a DIFFERENT cell than the one its index was
+# prepared for, and the run root ends up with a mix of two designs that nothing
+# in the output distinguishes. Cross-checking the two turns that into a loud
+# failure. A no-op whenever the module and the manifest agree, which is the
+# normal case.
+import json
+mf = run_root / "manifest.json"
+if not mf.exists():
+    fails.append(f"{mf} is missing -- run prepare_beta_exponent_arm.py against "
+                 f"this RUN_ROOT before submitting the array")
+else:
+    entries = {e["index"]: e for e in json.loads(mf.read_text())["tasks"]}
+    frozen = entries.get(task.index)
+    if frozen is None:
+        fails.append(f"manifest.json has no task at index {task.index}; the "
+                     f"array is wider than the arm it was prepared for")
+    elif (frozen["cell"] != task.cell.name or frozen["seed"] != task.seed
+          or float(frozen["ridge"]) != float(task.cell.ridge)
+          or frozen["policy"] != task.cell.policy):
+        fails.append(
+            f"index {task.index} resolves to cell={task.cell.name} "
+            f"policy={task.cell.policy} ridge={task.cell.ridge} seed={task.seed}, "
+            f"but manifest.json froze cell={frozen['cell']} "
+            f"policy={frozen['policy']} ridge={frozen['ridge']} "
+            f"seed={frozen['seed']}. The cell list changed after this run root "
+            f"was prepared -- re-prepare into a NEW run root rather than mixing "
+            f"two designs in one.")
+
 # The YAML this task will actually train from must exist (the preparer wrote it)
 # and must still round-trip to the cell's resolved config. Checking the FILE and
 # not just the in-memory config is what makes the ridge control real: the file is
