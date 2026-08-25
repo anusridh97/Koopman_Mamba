@@ -1,0 +1,251 @@
+# The 3M joint architecture + optimizer search.
+#
+# Launched by `scripts/search_3m_joint.py`, NOT by
+# `python -m experimentation.sweep.search`. The shared CLI would load this file
+# fine and run a valid study -- it would just be missing the four macro axes,
+# which live in the script because `space.py` is the space every other study
+# inherits by omission and widening it would change their dimensionality and
+# their study_id. Read that script's docstring first; it is where the macro axes,
+# the parameter-band enumeration and the reasons for both are written down.
+#
+#     python scripts/search_3m_joint.py configs/search/3m-joint-v1.yaml --dry_run
+#
+# ## The question
+#
+# At ~3M total parameters and a FIXED token budget, which architecture wins, and
+# does the answer depend on the training recipe? That second half is why this is
+# one joint search and not an architecture study with the optimizer pinned. Rank,
+# SKA depth and LayerScale initialization all plausibly want different learning
+# rates, and an architecture chosen under one fixed LR is an architecture chosen
+# under a recipe that may disadvantage it. With ~2000 trials the dimensionality
+# argument for separating them is weak; with 256 it would not be.
+#
+# The corresponding cost: a fully joint winner cannot be attributed. "Rank 32
+# won" and "the trial that drew rank 32 also drew a good LR" look identical in a
+# ranking. That is what `analysis.main_effects`, `conditional_effects` and the
+# pairwise tables are for, and it is why the plan is broad-here then NARROW at
+# 10M/30M rather than one search at the largest scale.
+#
+# ## What is fixed, and by whom
+#
+# By the base spec (`configs/runs/3m-joint-base.yaml`): NTP-only FineWeb-Edu, the
+# Llama-2 32K tokenizer, tied embeddings, d_model 64, seq_len 2048, effective
+# batch 96, cosine-to-zero, fused AdamW at betas (0.9, 0.95), seed 42.
+#
+# By this file: 1068 updates for every trial, one exact inverse-Cholesky SKA
+# route, and a token budget that does NOT scale with the sampled parameter count.
+#
+#     96 sequences x 2048 tokens x 1068 updates = 209,977,344 tokens
+#
+# ~70 tokens per parameter at the 3M target, as requested. Holding it constant is
+# load-bearing: the space spans ~12% in parameter count, and paying the larger
+# candidates proportionally more data would confound architecture with data.
+#
+# ## Cost
+#
+# The six historical NTP 3M controls cost 2.62 H100-hours for six 6000-step runs
+# = 0.437 h each at 1.18B tokens. A 1068-step trial is 17.8% of that horizon, so
+# ~4.7 minutes for a Mamba-only 3M model; the SKA branch and the deeper
+# geometries make the real figure higher, so budget 6-9 minutes. 2000 trials is
+# then roughly 200-300 H100-hours before pruning, which on 8 GPUs is a bit over a
+# day of wall clock. Pruning from step 400 removes most of the bad tail.
+#
+# BENCHMARK THIS BEFORE ASKING FOR THE ALLOCATION. Those controls predate several
+# architecture changes and were measured on a different route.
+#
+# ## Pre-launch gates, in order
+#
+#   1. `--dry_run` on any machine. Verifies the space, the parameter band and the
+#      SKA-clamp check without a GPU.
+#   2. One GPU smoke per (mamba_expand, depth_tier) cell -- six trials, a few
+#      dozen steps each. `mamba_headdim` is pinned at 16, so expansion 1/2/3 give
+#      4/8/12 Mamba-2 heads, and only a real instantiation proves mamba_ssm's
+#      kernels accept all three. A kernel that rejects nheads=4 would fail a
+#      third of the study, and it would fail it as 660 identical FAILs.
+#   3. Confirm `run_root` and `eval_data_dir` exist on Marlowe and that
+#      `eval_data_dir` is DISJOINT from the training shard.
+#   4. Time one full-length trial to replace the cost estimate above with a
+#      measurement, then get the GPU-hour approval.
+name: 3m-joint-v1
+base: configs/runs/3m-joint-base.yaml
+
+n_trials: 2000
+max_steps: 1068
+
+# ------------------------------------------------------------------ sampler
+# Multivariate, and that is the whole point of the study. Independent TPE fits
+# one marginal per parameter, so "depth 17 wants a lower LR" or "rank 32 wants a
+# heavier ridge" appears in neither p(depth | good) nor p(lr | good) and a joint
+# architecture/optimizer search would be structurally incapable of finding the
+# interactions it was launched for.
+sampler: tpe_multivariate
+# 256 random draws before the joint KDE is fitted. A 16-dimensional joint
+# estimate over fewer than that is noise, and 256/2000 is 13% of the budget spent
+# buying an unbiased picture of the whole space -- which is also the sample the
+# post-hoc main-effect tables are least biased on.
+sampler_startup_trials: 256
+# Pruning waits for 128 COMPLETED trials. Note optuna's asymmetry, verified in
+# test_sampler_and_pruner_startup.py: TPE's startup counts COMPLETE and PRUNED,
+# MedianPruner's counts COMPLETE only. So the pruner cannot start before 128 real
+# completions even though the sampler will have moved on sooner.
+prune_startup_trials: 128
+# Step 400 of 1068, i.e. 78.6M tokens. Two reasons for late-ish rather than
+# early: warmup is 1-6% of 1068 (11-64 steps) and the transient outlasts the
+# schedule, so pruning at step 100 would rank how fast a config warms up rather
+# than how good it is -- and this study SEARCHES warmup_ratio and learning rate,
+# which is exactly the axis pair that confound would corrupt. The intermediate
+# signal is parsed TRAINING loss; the final ranking is held-out loss.
+prune_after_step: 400
+logging_steps: 25
+
+# ------------------------------------------------------------------- fleet
+# One trial per GPU, 8 GPUs, one node. `concurrent_trials` both sizes the fleet
+# and sets the sampler's constant_liar, so the two cannot disagree. The script
+# spawns the workers itself and pins each to a visible GPU round-robin.
+#
+# Overshoot is bounded, not prevented: 8 workers evaluate the stop condition
+# independently, so the study can finish with up to 2007 trials.
+launcher: local
+concurrent_trials: 8
+seed: 2026
+direction: minimize
+
+# ----------------------------------------------------------- the search space
+#
+# 13 axes here + 4 macro axes in the script (mamba_expand, depth_tier, d_state,
+# ska_n_heads) = 17 dimensions. Declared explicitly rather than inherited,
+# because `search_space()` widens some axes by folding in the base config's own
+# value and derives `learning_rate` from the base LR, and a study's space is part
+# of its claim.
+search_axes:
+  # ---- SKA architecture -------------------------------------------------
+  # The four ranks the repo's configs and kernels actually use. Multiples of 8
+  # because KoopmanLMConfig asserts it.
+  ska_rank:
+    kind: categorical
+    choices: [8, 16, 24, 32]
+  # How many layers carry an SKA branch. Bounded at 6 for two reasons that
+  # coincide: the shallowest geometry the script can sample is depth 10 (expand
+  # 3, lean), whose usable window is 8 slots (layer 0 and the last layer are
+  # reserved), and 6 is where the parameter band runs out at the expensive
+  # corner (rank 32, 8 heads).
+  # A count past the window would CLAMP rather than raise, making two choices one
+  # config -- `scripts/search_3m_joint.py --dry_run` checks for exactly that.
+  n_ska_layers:
+    kind: categorical
+    choices: [2, 3, 4, 6]
+  # `baseline` is deliberately absent and the script refuses it. It means
+  # "reproduce the base spec's own indices", and with depth searched there is no
+  # single base backbone to reproduce: make_layer_indices falls back to
+  # interpolating across the base indices clipped to the sampled depth, which is
+  # a near-duplicate of `even` -- a wasted level, not a placement.
+  placement:
+    kind: categorical
+    choices: [even, midlate, late]
+  # A diagonal loading, so log scale. One decade around the base's 0.01.
+  ska_ridge:
+    kind: float
+    low: 0.003
+    high: 0.03
+    log: true
+  # [0.005, 0.3], the interval the 25M proxy study widened to on measured
+  # evidence (job 445689: best loss at 0.1, which was outside the old bound, and
+  # the 0.01 gate GREW 2.36x during training while larger inits stayed put).
+  # Carried over as a prior, not as a result -- that was a 25M model at 600 steps.
+  ska_layerscale_init:
+    kind: float
+    low: 0.005
+    high: 0.3
+    log: true
+  # A MULTIPLIER on sqrt(rank), so one value means the same thing at every rank.
+  # 0.8164965809277261 is exactly 4/sqrt(24), the base spec's ska_norm_clip_c of
+  # 4.0, written out in full because YAML cannot compute and a rounded 0.8165
+  # would put the reference point outside its own space.
+  norm_clip_multiplier:
+    kind: categorical
+    choices: [0.75, 0.8164965809277261, 1.0, 1.25]
+  gamma_value:
+    kind: categorical
+    choices: [0.9, 1.0, 1.05]
+  # The SKA matrix power. Nearly free to search: job 440135 measured 0.00542 s
+  # (K=1) against 0.00559 s (K=2) on the exact route. K>=3 is untested here.
+  ska_power_K:
+    kind: categorical
+    choices: [1, 2]
+  # The write gate. All four CONTRACTIVE policies in the current repo; the
+  # retired asymmetric convention is not available. Searched rather than pinned
+  # because the later measurements did not establish `learned` as best, and this
+  # is the budget that can afford to ask. Note the policies differ in parameter
+  # count (`one` has no gate at all), which the band check accounts for.
+  beta_policy:
+    kind: categorical
+    choices: [head_scalar, learned, linear, one]
+
+  # ---- optimizer --------------------------------------------------------
+  # Around the 4e-3 that the six historical 3M controls were trained at -- a
+  # CALIBRATED reference point, not a searched optimum, so the interval is wide
+  # (0.375x to 1.375x) rather than the +/-20% an architecture-only study would
+  # use. This is the axis most likely to interact with depth and with LayerScale.
+  learning_rate:
+    kind: float
+    low: 0.0015
+    high: 0.0055
+    log: true
+  # 0.0 is included on purpose: at 3M with 70 tokens/param the models are
+  # underfitting, and whether decay helps at all is an open question rather than
+  # a nuisance to marginalize over.
+  weight_decay:
+    kind: categorical
+    choices: [0.0, 0.05, 0.1, 0.15]
+  # As a RATIO of max_steps, so 0.01-0.06 is 11-64 updates. The reference
+  # protocol's value is 0.02.
+  warmup_ratio:
+    kind: categorical
+    choices: [0.01, 0.02, 0.04, 0.06]
+  grad_clip:
+    kind: categorical
+    choices: [0.5, 1.0]
+
+# --------------------------------------------------------- what is NOT searched
+# Nothing. Every axis space.py declares is above, which is the point of a joint
+# search. `fixed_params` is left empty rather than deleted so that pinning one
+# later is a one-line diff whose effect on study_id is visible.
+fixed_params: {}
+
+# ------------------------------------------------------------------- backend
+# The exact inverse-Cholesky route for every trial. NOT `exact_auto`: the fused
+# kernel needs rank exactly 24 and value width exactly 64, and this space samples
+# four ranks and four head counts, so most of the space would fall off a
+# 167x-738x cliff CORRELATED WITH TWO SEARCHED VARIABLES. NOT the retired
+# `proxy_chunked`, which is a different operator (92%-152% wrong in the forward).
+backend_policy: exact_invchol
+seq_len: 2048
+
+# CHANGE THIS BEFORE THE FIRST LAUNCH if the scratch path is wrong. It is not
+# hashed into study_id, so moving it does not fork the study -- but resubmitting
+# against a different root starts a second journal that knows nothing about the
+# GPU-hours already spent.
+run_root: /scratch/m000151-pm06/cqiu/study-3m-joint-v1
+
+# HELD OUT, and required. The default is the base spec's own training shard,
+# which would make this a training-loss ranking -- and the whole point of the 3M
+# search is to hand a trustworthy ranking to the 10M/30M stage.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# 45 minutes. A 1068-step trial at 3M is minutes, so this is generous by roughly
+# an order of magnitude -- and the 2-hour default would idle one of eight GPUs
+# for two hours on a single dead trial.
+trial_timeout_seconds: 2700
+
+# The OOM ladder. Eight concurrent trainers on one node, and (expand 3, full,
+# rank 32, 8 heads, 6 SKA layers) is the expensive corner. Since
+# per_device_batch_size lives on RuntimeSpec it is not hashed into run_id, so
+# descending a rung reuses the run directory and appends to attempts.jsonl rather
+# than forking a second identity.
+batch_ladder: true
+
+# EMPTY, and the script REFUSES a non-empty value. A parameter penalty would be
+# computed against a baseline that, in this study, is the trial itself -- see the
+# script's `main`. Parameter count and throughput are recorded per trial and
+# become Pareto fronts post hoc, where the exchange rate is the reader's.
+objective: {}

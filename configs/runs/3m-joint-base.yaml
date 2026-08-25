@@ -1,0 +1,110 @@
+# Reference point for the 3M joint architecture + optimizer search.
+#
+# This is not a claim that 64x13 is the winning architecture. It is only the
+# RunSpec every trial is derived from, and `scripts/search_3m_joint.py` overrides
+# n_layers, mamba_expand, d_state and ska_n_heads on every single trial. It is
+# also the config `param_count_estimate` reports as "base" in the plan printout,
+# and the one to hand-launch if you want a single reference run.
+#
+# 2,991,928 parameters as written, inside the approved 2.8M-3.25M band.
+#
+# Token accounting is fixed across architectures:
+#   96 sequences/update * 2048 tokens * 1068 updates = 209,977,344 tokens
+# That is 69.99 tokens per the 3M target. Keeping tokens fixed (instead of giving
+# larger candidates proportionally more data) makes held-out loss comparable.
+name: 3m-joint-base
+model:
+  d_model: 64
+  n_layers: 13
+  vocab_size: 32000
+  d_state: 24
+  d_conv: 4
+  mamba_expand: 2
+  # PINNED at 16, and the search does not touch it: with mamba_expand searched
+  # over {1, 2, 3}, d_inner is 64/128/192 and this gives 4/8/12 Mamba-2 heads.
+  # Pinning headdim rather than nheads is what makes the expansion axis mean
+  # "more SSM width", not "more SSM width at a different head shape".
+  mamba_headdim: 16
+
+  # Overridden per trial (searched over {1, 2, 4, 8}); head_dim = 64 // this.
+  ska_n_heads: 4
+  ska_rank: 24
+  ska_ridge: 0.01
+  ska_power_K: 1
+  ska_chunk_size: 64
+  ska_layer_indices: [2, 5, 8, 11]
+  ska_mode: parallel
+
+  # One exact route for every rank/head/depth combination. The StudySpec's
+  # backend_policy re-pins these fields on every sampled trial.
+  ska_prefix_scan: false
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+
+  ska_norm_clip: true
+  ska_norm_clip_c: 4.0
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.0
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+  ska_beta_policy: learned
+
+  compute_precision: bf16
+  ska_precision: fp32
+  tie_embeddings: true
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 1.0e-05
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 2048
+
+# Reuse the exact tokenizer and FineWeb-Edu shard already named by Jack's
+# committed proxy studies. At seq_len=2048 the 100M-token shard is traversed
+# about 2.1 times during a full 210M-token trial; held-out ranking uses the
+# disjoint fineweb_small_val shard named by the StudySpec.
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix:
+    fineweb: 1.0
+    pg19: 0.0
+    scrolls: 0.0
+  n_tokens: 100000536
+
+optim:
+  # Calibrated 3M reference; the joint study searches around it.
+  lr: 0.004
+  warmup_steps: 21
+  max_steps: 1068
+  schedule: cosine
+  effective_batch: 96
+  weight_decay: 0.1
+  grad_clip: 1.0
+
+runtime:
+  per_device_batch_size: 24
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: 00:45:00
+  gpu_arch: '9.0'
