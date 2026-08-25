@@ -40,7 +40,34 @@ from koopman_lm.kernels.chunk_stats import (
 #: KoopmanLMConfig -- it is config-free numerics, and ska_block.py threads every
 #: scalar in. `code-tests/test_ska_beta_policy.py` pins the two lists together
 #: so the duplicate cannot drift silently.
-BETA_POLICIES = frozenset({"learned", "one", "head_scalar", "linear"})
+BETA_POLICIES = frozenset({
+    "learned", "one", "head_scalar", "linear",
+    "key_linear_value_sqrt", "key_sqrt_value_linear",
+})
+
+#: (key exponent, value exponent) for every policy that applies a beta power to
+#: the key and value streams. `beta ** exponent`, so 0.5 is sqrt(beta) and 1.0 is
+#: beta. `one` is absent because it constructs no gate at all and short-circuits
+#: in `_resolve_beta`; `head_scalar` shares `learned`'s exponents.
+#:
+#: A table rather than a chain of `if`s because the exponents ARE the design: the
+#: 2x2 is legible here, and a new cell is a row rather than a branch.
+BETA_EXPONENTS = {
+    "learned":               (0.5, 0.5),
+    "head_scalar":           (0.5, 0.5),
+    "one":                   (0.5, 0.5),   # beta == 1, so any exponent agrees
+    "linear":                (1.0, 1.0),
+    "key_linear_value_sqrt": (1.0, 0.5),
+    "key_sqrt_value_linear": (0.5, 1.0),
+}
+
+#: Policies that build the full `Linear(d_model, n_heads)` write gate. `one`
+#: builds nothing and `head_scalar` builds H scalars; both are deliberately
+#: SIMPLER MODELS, so a disabled-but-present projection would still be seen by
+#: weight decay and still show in the parameter count.
+_PROJECTION_POLICIES = frozenset({
+    "learned", "linear", "key_linear_value_sqrt", "key_sqrt_value_linear",
+})
 
 # ============================================================================
 # Backend detection
@@ -293,7 +320,7 @@ class SKAModule(nn.Module):
         # not be measuring what it claims.
         self.beta_proj = None
         self.beta_logit = None
-        if beta_policy in ("learned", "linear"):
+        if beta_policy in _PROJECTION_POLICIES:
             self.beta_proj = nn.Linear(d_model, n_heads, bias=True)
             nn.init.zeros_(self.beta_proj.weight)
             nn.init.zeros_(self.beta_proj.bias)   # beta = sigmoid(0) = 0.5 at init
@@ -410,22 +437,55 @@ class SKAModule(nn.Module):
     def _weight_key_value(self, z_n, beta, v):
         """Apply the policy's key/value weighting. Returns (x, vbar).
 
-        `learned`, `one` and `head_scalar` all use the v1.1 symmetric
-        sqrt(beta) form (for `one` that is the identity, since sqrt(1) == 1).
-        `linear` uses beta in both slots instead, which is still a single key
-        stream -- so still contractive -- and redefines the own-weight statistic
-        as G = sum beta^2 z z^T. That difference IS the 'linear' arm: it is what
-        tests whether the square root is carrying anything.
+        The policy selects a pair of EXPONENTS on beta, one for the key stream
+        and one for the value stream (`BETA_EXPONENTS`):
+
+            learned / head_scalar / one   (sqrt, sqrt)   the v1.1 default
+            linear                        (beta, beta)
+            key_linear_value_sqrt         (beta, sqrt)   the mixed cell C
+            key_sqrt_value_linear         (sqrt, beta)   the mixed cell D
+
+        THE KEY EXPONENT IS THE ONE WITH SPECTRAL CONSEQUENCES, and the value
+        exponent has none. `G = ridge*I + sum x x^T` and `M = sum x_t x_{t-1}^T`
+        are built entirely from the key stream, and contractivity of
+        `W = L^-1 M L^-T` is a statement about exactly those two matrices. The
+        value weighting enters only `C = sum vbar x^T`, which `ska_core` applies
+        after the whitened operator. So:
+
+          * every policy here is contractive, because every one of them puts a
+            SINGLE key stream into BOTH slots of M -- which is all the
+            Cauchy-Schwarz argument in `symmetric_key_value`'s docstring needs.
+            Nothing in that argument mentions beta.
+          * the value exponent cannot move sigma_max at all, pinned bit-for-bit
+            by `test_the_value_exponent_cannot_change_sigma_max`.
+
+        What the square root buys is therefore not safety but MEANING: at
+        exponent 0.5 the Gram is `G = sum beta z z^T`, so beta is literally the
+        per-token write weight. At exponent 1.0 it is `sum beta^2 z z^T`, which
+        silently redefines the write weight as its square -- and at the shared
+        `beta = 0.5` initialisation halves the own-weight against a fixed ridge,
+        making a linear-key cell twice as ridge-regularised at step 0. That is a
+        confound rather than a feature; `test_the_key_exponent_changes_the_
+        effective_ridge_at_init` measures the factor the ridge-matched control
+        cell is built from.
+
+        `clamp_min(0)` before the power, as `symmetric_key_value` does: it keeps
+        a negative beta out of a fractional power. `_resolve_beta` returns a
+        sigmoid or ones, so beta is in (0,1] regardless -- the clamp costs
+        nothing and means the helper is safe if a future policy widens the range.
         """
-        if self.beta_policy == "linear":
-            # No `clamp_min(0)` here, unlike `symmetric_key_value`: that clamp
-            # exists to keep a negative beta out of a SQUARE ROOT, and there is
-            # no square root on this branch. `_resolve_beta` returns sigmoid or
-            # ones, so beta is in (0,1] regardless; mirroring the clamp would
-            # have implied a guard against something that cannot happen.
-            w = beta.unsqueeze(-1)
-            return w * z_n, w * v
-        return symmetric_key_value(z_n, beta, v)
+        key_exp, val_exp = BETA_EXPONENTS[self.beta_policy]
+        if (key_exp, val_exp) == (0.5, 0.5):
+            # The default convention, kept on its own dedicated helper so the
+            # shared accumulation sites (chunk_stats, chunk_stats_exact,
+            # decode) all continue to name ONE function for it, and so this
+            # branch is bit-identical to what it was before the exponent table
+            # existed.
+            return symmetric_key_value(z_n, beta, v)
+        b = beta.clamp_min(0).unsqueeze(-1)
+        w_key = b if key_exp == 1.0 else b.sqrt()
+        w_val = b if val_exp == 1.0 else b.sqrt()
+        return w_key * z_n, w_val * v
 
     def forward(self, hidden_states):
         B, T, _ = hidden_states.shape

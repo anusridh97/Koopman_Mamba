@@ -30,6 +30,7 @@ import pytest
 from koopman_lm.config import BETA_POLICIES, build_config
 from experimentation.sweep.search.anchors import Design, resolve_design
 from experimentation.sweep.search.space import (
+    DEFAULT_BETA_POLICIES,
     _AXIS_DOMAINS, REQUIRED_PARAMS, base_reference_point, params_to_overrides,
     search_space)
 
@@ -51,10 +52,22 @@ def _space(base_model):
 # The axis exists, is complete, and contains the base config.
 # ---------------------------------------------------------------------------
 
-def test_beta_policy_is_a_declared_axis_over_all_four_policies():
+def test_beta_policy_is_a_declared_axis_over_the_DEFAULT_policies():
+    """The declared default, which is NOT `BETA_POLICIES`.
+
+    These were the same set until the key/value exponent decomposition. Keeping
+    them the same would widen the recorded `CategoricalDistribution` of every
+    study that sampled this axis, and optuna raises `does not support dynamic
+    value space` on reattach -- a hard failure at `ask()`, after a worker has
+    claimed a run root. One archived journal was broken by it. So the SEARCHED
+    set is frozen and the LEGAL set is wide; see
+    `test_beta_policy_axis_stability.py` and `space.DEFAULT_BETA_POLICIES`.
+    """
     space = _space(_base().model)
     assert space["beta_policy"]["kind"] == "categorical"
-    assert set(space["beta_policy"]["choices"]) == set(BETA_POLICIES)
+    assert tuple(space["beta_policy"]["choices"]) == DEFAULT_BETA_POLICIES
+    assert set(DEFAULT_BETA_POLICIES) < set(BETA_POLICIES), (
+        "the default axis must be a strict subset of the legal domain")
 
 
 def test_the_axis_is_wired_end_to_end():
@@ -127,12 +140,38 @@ def test_a_design_inherits_the_base_policy_by_default():
     assert params["beta_policy"] == "learned"
 
 
-@pytest.mark.parametrize("policy", sorted(BETA_POLICIES))
-def test_a_design_can_name_a_policy_explicitly(policy):
+@pytest.mark.parametrize("policy", sorted(DEFAULT_BETA_POLICIES))
+def test_a_design_can_name_a_policy_the_study_declares(policy):
     base = _base()
     space = _space(base.model)
     params = resolve_design(Design(name=f"beta-{policy}", beta_policy=policy),
                             base.model, space, base_lr=base.optim.lr)
+    assert params["beta_policy"] == policy
+
+
+@pytest.mark.parametrize("policy", ["key_linear_value_sqrt",
+                                    "key_sqrt_value_linear"])
+def test_a_design_naming_a_mixed_cell_needs_the_study_to_declare_it(policy):
+    """The mixed exponent cells are legal config values but not default search
+    choices, so an anchor naming one must be REFUSED unless the study widened the
+    axis -- and must work once it has.
+
+    That refusal is the same mechanism as
+    `test_an_explicit_policy_the_study_does_not_declare_raises_rather_than_snaps`:
+    an undeclared value raises instead of snapping to the nearest choice, because
+    snapping would silently run a different cell than the anchor names.
+    """
+    base = _base()
+    default_space = _space(base.model)
+    with pytest.raises(ValueError, match="beta_policy"):
+        resolve_design(Design(name=f"beta-{policy}", beta_policy=policy),
+                       base.model, default_space, base_lr=base.optim.lr)
+
+    widened = dict(default_space)
+    widened["beta_policy"] = {"kind": "categorical",
+                              "choices": ["learned", policy]}
+    params = resolve_design(Design(name=f"beta-{policy}", beta_policy=policy),
+                            base.model, widened, base_lr=base.optim.lr)
     assert params["beta_policy"] == policy
 
 

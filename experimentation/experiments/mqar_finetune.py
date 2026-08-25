@@ -203,6 +203,61 @@ def run_eval(model, seq_len, num_kv_pairs, vocab_size, eval_batch, device, step,
 
 
 # ---------------------------------------------------------------------------
+# Optimizer groups
+# ---------------------------------------------------------------------------
+
+#: The parameter-name pattern that means "inside an SKA module". `SKABlock` names
+#: its inner module `ska`, so every SKA parameter in every model this trainer
+#: builds is spelled `...ska.<something>` -- including `layerscale_gate` and
+#: `beta_proj`, which are the two the Phase 4 activation wave is actually about.
+#: An fnmatch pattern, as `ParamGroupSpec.match` requires.
+_SKA_PATTERN = "*.ska.*"
+
+
+def ska_param_groups(model, *, weight_decay, lr, ska_lr_mult=1.0):
+    """`param_groups` with an optional learning-rate multiplier on SKA only.
+
+    Thin on purpose. `optim.param_groups` already implements per-group `lr_mult`
+    (19 tests in `code-tests/test_optim_groups.py`); this trainer simply never
+    passed `groups`, so the mechanism was unreachable from it. What is added here
+    is the wiring and the refusals -- NOT a second multiplier, and not a mutation
+    of the optimizer after construction.
+
+    **A unit multiplier takes the `groups=None` path deliberately.** That is not
+    an optimisation: `param_groups`' contract is that an absent `groups` leaves
+    the output bit-identical to the historical two-bucket policy, and passing a
+    spec with `lr_mult=1.0` would instead stamp an explicit `lr` on every group,
+    giving LambdaLR different `initial_lr` bookkeeping than every archived MQAR
+    run had. The default has to reproduce those runs exactly.
+
+    **Why the refusals.** `param_groups` only multiplies when `lr` is supplied,
+    and silently does nothing otherwise -- so a Phase 4 wave that forgot `lr`
+    would run as N replicates of the reference cell and report itself as an LR
+    sweep. `ska_lr_mult=0` would freeze SKA while claiming to be a learning rate.
+    Both fail here rather than train.
+    """
+    if ska_lr_mult is None:
+        ska_lr_mult = 1.0
+    ska_lr_mult = float(ska_lr_mult)
+    if ska_lr_mult <= 0:
+        raise ValueError(
+            f"ska_lr_mult={ska_lr_mult}; must be > 0. Zero would freeze the SKA "
+            f"branch while reporting itself as a learning-rate setting, and a "
+            f"negative value is gradient ascent on it.")
+    if ska_lr_mult == 1.0:
+        return param_groups(model, weight_decay=weight_decay)
+    if lr is None:
+        raise ValueError(
+            f"ska_lr_mult={ska_lr_mult} needs a base `lr` to multiply; "
+            f"optim.param_groups applies a multiplier only when `lr` is given, "
+            f"so omitting it is a SILENT no-op -- an LR sweep that is really N "
+            f"replicates of the reference cell.")
+    return param_groups(
+        model, weight_decay=weight_decay, lr=lr,
+        groups=[{"match": _SKA_PATTERN, "lr_mult": ska_lr_mult}])
+
+
+# ---------------------------------------------------------------------------
 # Training loop (single cell)
 # ---------------------------------------------------------------------------
 
@@ -245,8 +300,9 @@ def train(args):
     # coefficient. Published MQAR fine-tune numbers were produced under the old,
     # unfiltered-decay optimizer and are superseded.
     optimizer = torch.optim.AdamW(
-        param_groups(model, weight_decay=0.1), lr=args.lr,
-        betas=(0.9, 0.95), weight_decay=0.1)
+        ska_param_groups(model, weight_decay=0.1, lr=args.lr,
+                         ska_lr_mult=getattr(args, "ska_lr_mult", 1.0)),
+        lr=args.lr, betas=(0.9, 0.95), weight_decay=0.1)
 
     def lr_lambda(step):
         if step < args.warmup_steps:
@@ -595,6 +651,12 @@ def parse_args(argv=None):
                    choices=sorted(BETA_POLICIES),
                    help="override the SKA write-gate parameterisation for this "
                         "cell; omit to inherit the model config's own")
+    # Phase 4's second axis. Reaches `optim.param_groups`' EXISTING per-group
+    # `lr_mult`; see `ska_param_groups`. Default 1.0 is the value that reproduces
+    # every archived MQAR run bit-for-bit.
+    p.add_argument("--ska_lr_mult", type=float, default=1.0,
+                   help="multiply the learning rate of SKA parameters only "
+                        "(LayerScale gate and beta gate included). 1.0 = off")
     return p.parse_args(argv)
 
 

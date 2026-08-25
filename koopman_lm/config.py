@@ -10,7 +10,18 @@ import yaml
 #: rather than imported from `modules/seq/ska.py` because this module must stay
 #: importable without touching the model code, and pinned against that module's
 #: own copy by `code-tests/test_ska_beta_policy.py`.
-BETA_POLICIES = frozenset({"learned", "one", "head_scalar", "linear"})
+#:
+#: `key_linear_value_sqrt` and `key_sqrt_value_linear` are the two MIXED cells
+#: that complete the (key exponent) x (value exponent) square whose diagonal
+#: `learned` (sqrt, sqrt) and `linear` (linear, linear) already occupied. Without
+#: them a learned-vs-linear difference cannot be attributed to the key exponent,
+#: the value exponent, or their interaction -- see
+#: `code-tests/test_beta_exponent_decomposition.py` for the decomposition and
+#: for the ridge confound the key exponent carries.
+BETA_POLICIES = frozenset({
+    "learned", "one", "head_scalar", "linear",
+    "key_linear_value_sqrt", "key_sqrt_value_linear",
+})
 
 #: Model fields added AFTER run identity was pinned, mapped to the value an
 #: archived run implicitly had. A field at that value is OMITTED from every
@@ -176,34 +187,50 @@ class KoopmanLMConfig:
 
     # --- The write gate's parameterisation ---
     #
-    # `beta` is the per-token, per-head SKA write weight. Four spellings, all of
+    # `beta` is the per-token, per-head SKA write weight. SIX spellings, all of
     # which feed the SAME key stream into both slots of the cross-weight M and
     # are therefore contractive (which is what lets the inverse-Cholesky and
     # prefix-scan backends omit the spectral clamp -- see
-    # code-tests/test_ska_contractivity_contract.py). So all four can be
+    # code-tests/test_ska_contractivity_contract.py). So all six can be
     # compared on one backend, and no contrast is confounded by a change of
     # kernel:
     #
     #   'learned'      beta = sigmoid(W h + b), per token and head; key weight
-    #                  sqrt(beta). The default, and what every config ran before
-    #                  this field existed.
+    #                  sqrt(beta), value weight sqrt(beta). The default, and what
+    #                  every config ran before this field existed.
     #   'one'          beta = 1. No gate, and `beta_proj` is not constructed --
     #                  a strictly simpler model, not a disabled one, so weight
     #                  decay has nothing dead to act on.
     #   'head_scalar'  beta = sigmoid(b_h): H learnable scalars, no token
     #                  dependence. Isolates "the gate supplies a per-head write
     #                  scale" from "the gate is content-dependent".
-    #   'linear'       beta as in 'learned', key weight beta rather than
-    #                  sqrt(beta). Contractive, and it silently redefines the
-    #                  write weight: G becomes sum beta^2 z z^T. The square root
-    #                  is not what buys the bound, it is what keeps
-    #                  G = sum beta z z^T, i.e. what keeps "beta is the write
-    #                  weight" true.
+    #   'linear'       beta as in 'learned', key AND value weight beta rather
+    #                  than sqrt(beta). Contractive, and it silently redefines
+    #                  the write weight: G becomes sum beta^2 z z^T.
+    #
+    # `learned` and `linear` are the DIAGONAL of a 2x2 over (key exponent) x
+    # (value exponent), so a difference between them cannot be attributed to
+    # either slot. These two complete the square:
+    #
+    #   'key_linear_value_sqrt'   key weight beta, value weight sqrt(beta)
+    #   'key_sqrt_value_linear'   key weight sqrt(beta), value weight beta
+    #
+    # THE KEY EXPONENT IS THE ONE WITH SPECTRAL CONSEQUENCES. G and M are built
+    # entirely from the key stream and the bound is a statement about exactly
+    # those two, so the value exponent cannot move sigma_max at all -- pinned
+    # bit-for-bit by code-tests/test_beta_exponent_decomposition.py. The square
+    # root is therefore not what buys the bound; it is what keeps
+    # G = sum beta z z^T, i.e. what keeps "beta is the write weight" literally
+    # true. A linear key exponent also halves the own-weight against a fixed
+    # ridge at the shared beta = 0.5 init, which is a confound the screening
+    # design has to control for rather than a feature.
     #
     # The retired asymmetric convention (beta on one slot of M only) is
     # deliberately NOT offered. It is not contractive -- measured 23x over the
     # bound on a sharp gate -- so on either clamp-free backend it would apply an
-    # expansive operator K times without failing loudly.
+    # expansive operator K times without failing loudly. Note that none of the
+    # six above is that form: each applies ONE exponent to ONE key stream which
+    # then goes into both slots.
     ska_beta_policy: str = 'learned'
 
     # SKA adaptive chunking

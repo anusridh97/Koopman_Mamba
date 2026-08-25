@@ -145,6 +145,37 @@ DEFAULT_GAMMAS = (0.90, 1.00, 1.05)
 DEFAULT_POWER_KS = (1, 2)
 DEFAULT_NORM_CLIP_MULTIPLIERS = (0.75, 1.00, 1.25)
 
+#: The `beta_policy` values a study searches BY DEFAULT.
+#:
+#: **Deliberately NOT `sorted(BETA_POLICIES)`.** `BETA_POLICIES` is the set of
+#: values a CONFIG may legally hold; this is the set a study SAMPLES unless it
+#: says otherwise. Those were the same tuple until the key/value exponent
+#: decomposition added `key_linear_value_sqrt` and `key_sqrt_value_linear`, and
+#: keeping them the same would have been a silent, BREAKING change to every
+#: archived study that searched this axis:
+#:
+#:     recorded on disk: CategoricalDistribution(('learned','one','head_scalar',
+#:                                                'linear'))
+#:     code declared   : CategoricalDistribution(('head_scalar',
+#:                                                'key_linear_value_sqrt',
+#:                                                'key_sqrt_value_linear',
+#:                                                'learned','linear','one'))
+#:     study.ask(...)  -> ValueError: CategoricalDistribution does not support
+#:                        dynamic value space.
+#:
+#: A HARD RAISE, not a warning -- reproduced against the real journal at
+#: `study-smoke-446074/_studies/beta-policy-1500.bff5ef39` (25 trials) and
+#: `study-smoke-446055/_studies/smoke-fanout.5f93952c`. Resuming either would
+#: have been impossible. Pinned by `test_beta_policy_axis_stability.py`.
+#:
+#: The two mixed cells are experimental and belong to ONE controlled arm, so they
+#: should not silently join every study's default space in any case. A study that
+#: wants them opts in through `search_axes`, which REPLACES the declaration and
+#: validates each choice against the axis's real domain (`BETA_POLICIES`) rather
+#: than against this tuple -- so widening is already supported and needs no
+#: change to `restrict_space`.
+DEFAULT_BETA_POLICIES = ("head_scalar", "learned", "linear", "one")
+
 RIDGE_BOUNDS = (3e-3, 3e-2)
 LAYERSCALE_BOUNDS = (2e-3, 3e-2)
 LR_FACTOR_BOUNDS = (0.65, 1.35)
@@ -250,8 +281,13 @@ def search_space(base_model: KoopmanLMConfig, *,
         # is legal on the clamp-free backends this study pins -- which is what
         # makes this axis safe to search rather than something that has to be
         # crossed with `backend_policy`.
+        #
+        # `DEFAULT_BETA_POLICIES`, NOT `sorted(BETA_POLICIES)`: see that
+        # constant's note. Widening this axis is a HARD RAISE on any journal that
+        # recorded the narrower support, so the default set is frozen and a study
+        # wanting the mixed exponent cells declares them in `search_axes`.
         "beta_policy": {"kind": "categorical",
-                        "choices": sorted(BETA_POLICIES)},
+                        "choices": list(DEFAULT_BETA_POLICIES)},
         "learning_rate": {"kind": "float", "log": True,
                           "low": lr * LR_FACTOR_BOUNDS[0], "high": lr * LR_FACTOR_BOUNDS[1]},
         "weight_decay": {"kind": "categorical", "choices": list(DEFAULT_WEIGHT_DECAYS)},
