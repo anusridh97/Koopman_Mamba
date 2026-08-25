@@ -176,6 +176,27 @@
 # reasoned about. Not run here -- it is a different experiment, and it is the
 # obvious follow-up if the retrieval separation replicates.
 #
+# ## A second thing `linear` changes, which this design cannot attribute
+#
+# `_weight_key_value` applies the SAME exponent to the key and to the value:
+# `learned` gives (sqrt(beta) z, sqrt(beta) v) and `linear` gives
+# (beta z, beta v). So the `linear` cell moves two things at once -- what enters
+# the Gram and cross-weight (G, M), and what enters the readout (C_v) -- and a
+# difference at that cell is not attributable between them.
+#
+# That matters because the two have different consequences. The key exponent
+# changes the OPERATOR the model applies; the value exponent changes only the
+# magnitude of what it reads out, which `out_proj` and `ska_layerscale` can
+# absorb. If the retrieval effect were entirely the value exponent it would be a
+# scale artefact rather than a statement about the write gate.
+#
+# Separating them needs a fifth policy -- key weighted by beta, value by
+# sqrt(beta) -- and that is deliberately NOT added here. Adding a cell after
+# seeing the retrieval result would make this study a different, post-hoc
+# experiment; the four cells were chosen before any of it ran. It is the first
+# follow-up to run, and it is cheap: one more arm on the MQAR sweep, where the
+# effect is large enough that three seeds settle it.
+#
 # ============================= CONCURRENCY =============================
 #
 # This study fans out, which noise-floor.yaml deliberately did NOT. The
