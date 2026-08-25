@@ -1,0 +1,160 @@
+# Pre-registration: the key/value exponent decomposition on MQAR
+
+**Written before any run of `key_linear_value_sqrt` or `key_sqrt_value_linear`
+existed.** Committed as its own commit, ahead of the launcher, so the commit
+order is the evidence that the cell and the statistics were chosen before the
+results were visible. Everything below is fixed; a departure from it must be
+recorded as a departure, not silently substituted.
+
+## 1. The question
+
+`learned` is (sqrt-beta key, sqrt-beta value). `linear` is (beta, beta). These
+are the diagonal of a 2x2, so the earlier arm's result -- `linear` grokked 3/3
+on MQAR where `learned` grokked 1/3, Fisher p = 0.045 raw and **0.182 after the
+x4 best-of-four penalty** -- is uninterpretable as an exponent finding. The two
+mixed cells decide which slot, if either, carries it:
+
+| cell | key | value | reads as |
+|---|---|---|---|
+| `learned` | sqrt(beta) | sqrt(beta) | the default |
+| `linear` | beta | beta | the earlier nominal winner |
+| `key_linear_value_sqrt` (C) | beta | sqrt(beta) | operator/key exponent alone |
+| `key_sqrt_value_linear` (D) | sqrt(beta) | beta | readout/value exponent alone |
+| `one` | 1 | 1 | no gate at all |
+
+## 2. The cell, and the rule that selected it
+
+**Rule, stated as a rule rather than as a choice: reuse the cell the earlier arm
+already ran -- `num_kv_pairs = 8`, `distractor_gap = 128`, proxy-256x17
+geometry, `task_vocab_size = 128` -- unchanged.**
+
+Three reasons, all checkable without reference to any new result:
+
+1. **It was selected before the new cells existed.** Job 446102 fixed it. A cell
+   chosen now could be chosen, consciously or not, to favour whichever mixed
+   policy the exponent story predicts. This one cannot be.
+2. **It is neither floor nor ceiling, and it straddles grokking.** Observed grok
+   rates were 3/3, 1/3, 1/3, 0/3 across four policies. A cell where every policy
+   groks discriminates nothing (rule 3); one where none does likewise (rule 2).
+   Straddling is what exposes time-to-grok, which is the statistic with the most
+   resolution here.
+3. **Reusing it makes the earlier arm a replication rather than a separate
+   experiment.** `learned`, `linear` and `one` are re-run at the same cell, so
+   the earlier 3/3-vs-1/3 either reproduces or does not -- and that is itself one
+   of the most informative things this arm can report.
+
+**The one departure from the earlier arm, declared here: the step budget goes
+from ~4000 to 8000, with evaluation every 250 steps.** Adaptive rule 4 requires
+extending censored runs rather than scoring "not yet grokked" as permanent
+failure, and at 4000 steps most non-`linear` runs were censored. A longer
+horizon cannot manufacture a `linear` advantage; it can only remove one, so this
+change is conservative with respect to the hypothesis under test.
+
+## 3. Predeclared statistics
+
+Reported **per run**, never averaged across the grokking transition. Averaging
+pre-grok and post-grok accuracies is explicitly refused -- the earlier arm's own
+analysis refused it and was right.
+
+| statistic | definition, fixed now |
+|---|---|
+| `grokked` | did accuracy reach **>= 0.90** at any eval |
+| `grok_step` | the FIRST eval step at which accuracy >= 0.90; `null` if never |
+| `censored` | `true` iff `grokked` is false at the end of the budget. A censored run is NOT a 0 and is NOT dropped |
+| `lc_area` | **sample efficiency.** Trapezoidal area under the accuracy-vs-step curve, divided by the step span, over the WHOLE budget. Bounded in [0,1], higher is earlier learning. Chosen over "steps to threshold" as the primary continuous statistic because it is defined for censored runs |
+| `final_acc` | accuracy at the last eval |
+| `best_acc` | max accuracy over all evals, so a run that solved then degraded is visible |
+| `ska_delta_acc` | **SKA-on accuracy minus SKA-zeroed accuracy** at the final checkpoint. THE PRIMARY DISCRIMINATOR -- see section 4 |
+| `beta_contrast` | fact-block vs filler-block key weight, from `report_beta_contrast_on_mqar.py`. Separates "the gate tried and failed" from "the gate never moved" |
+
+**Grok threshold 0.90 is fixed here** and matches `analyze_beta_policy_mqar.py`'s
+existing default, so it is not a new choice made to suit a new result.
+
+## 4. Why SKA-on vs SKA-zeroed is the primary discriminator
+
+Held-out LM loss is **proven non-responsive to SKA damage** in this repo: 18
+trials across three SKA routes (jobs 446363-446420) destroyed 44% of SKA's
+contribution -- ablation delta 0.024418 -> 0.013693 on the 8-batch statistic --
+and mean held-out loss moved from 4.39030 to 4.39014, i.e. *down*, and far below
+the 7.54e-3 noise floor. A change can gut the mechanism and be invisible in
+aggregate loss.
+
+The ablation delta is not like that. It separates conditions at t = 7-22 in the
+very runs where loss does not move. So the decisive question for each policy is
+not "what accuracy did it reach" but **"is the SKA branch what reached it"**. A
+policy that groks with `ska_delta_acc` ~ 0 has learned the task in Mamba and the
+write gate is decoration; a policy that groks with a large `ska_delta_acc` is the
+functional anchor this task exists to look for.
+
+**Statistic discipline:** the LM ablation delta exists in two versions that
+differ by ~1.47x -- the 8-batch `quick_eval` figure (0.025139 +- 0.002976 SEM,
+t = 8.4, group c7b818ff) and the 64-batch harness figure (0.016402) for the same
+cells. Every number reported must name which. `ska_delta_acc` here is a THIRD,
+unrelated quantity (MQAR accuracy, not LM loss) and is never to be compared
+against either.
+
+## 5. The mandatory control: the ridge confound
+
+`linear` puts `beta^2` in `G`. At the shared `beta = 0.5` initialisation its
+own-weight is 0.25 against `learned`'s 0.5, so **against the fixed
+`ska_ridge = 0.01` of the proxy, `linear` is exactly twice as ridge-regularised
+at step 0.** The factor 2.0 is measured, not assumed:
+`test_the_key_exponent_changes_the_effective_ridge_at_init`.
+
+So any `linear`-vs-`learned` difference may be an effective-ridge effect with
+nothing to do with the exponent. Screening therefore includes, as cells and not
+as contingencies:
+
+* `learned` at `ska_ridge = 0.02` (2x) -- matches `linear`'s ratio from below
+* `linear` at `ska_ridge = 0.005` (1/2x) -- matches `learned`'s ratio from above
+
+**Predeclared reading:** if `learned@2x` behaves like `linear@1x`, or
+`linear@0.5x` behaves like `learned@1x`, the exponent story is dead and the
+finding is about ridge. That is reported as the finding, not buried.
+
+C inherits `linear`'s halved own-weight (linear key exponent) and D inherits
+`learned`'s (sqrt key exponent) -- pinned by
+`test_a_mixed_policy_inherits_the_ridge_confound_from_its_key_exponent`. So the
+ridge confound tracks the KEY exponent exactly, which gives a second, independent
+handle on the same question: if the effect follows ridge it should follow C, and
+if it follows the value exponent it should follow D.
+
+## 6. Predeclared inference rules
+
+Fixed now, so the mapping from result to conclusion is not chosen after seeing
+the result.
+
+| observation | conclusion |
+|---|---|
+| C reproduces `linear`, D does not | the **key/operator exponent** carries it |
+| D reproduces `linear`, C does not | the **value/readout exponent** carries it |
+| neither mixed cell reproduces `linear` | genuinely interactive; test the combination |
+| both reproduce `linear` | neither slot alone; suspect a shared cause (ridge) |
+| ridge controls converge with the exponent cells | **ridge, not exponent.** Report as a scale interaction |
+| no cell separates beyond uncertainty | **null.** Report a quantitative bound and the strongest failed hypothesis |
+
+A null is a valid and complete result and will be reported as one.
+
+## 7. Multiplicity
+
+Screening has 7 cells. **No p-value from screening is a finding.** Screening
+exists only to eliminate cells that fail every seed with no healthy SKA
+residual. Any cell promoted to confirmation was selected as a best-of-7, so the
+confirmation report must carry that penalty explicitly -- the earlier arm's
+Fisher p went from 0.045 to 0.182 under a mere x4 correction, which is the whole
+reason this section exists.
+
+## 8. Pre-flight gates, enforced in the launcher and not by comment
+
+1. **Refuse the chunked route.** `mqar_finetune` defaults to `--model_size 50m`
+   (prefix_scan, exact); table2's default `1m` is CHUNKED, and on a chunked route
+   `beta_proj.bias` gradient cosine is ~0.00 -- a beta comparison there measures
+   a gate receiving no usable gradient. The launcher asserts on the RESOLVED
+   `ska_prefix_scan or ska_inverse_cholesky or ska_exact_intrachunk` and exits
+   non-zero.
+2. **Pin gamma = 1, K = 1** and assert them, so no policy silently changes
+   amplification or operator depth.
+3. **Assert the beta policy actually reached the model**, per run, from the
+   checkpoint -- not from the command line that was supposed to set it.
+4. **Assert the ridge each cell claims**, so the ridge control cannot silently
+   run at the base ridge.
