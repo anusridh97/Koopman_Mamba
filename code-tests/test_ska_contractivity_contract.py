@@ -22,10 +22,30 @@ comments now say "single key stream" and cite this file; the quotes above are
 kept so the correction is legible rather than invisible.
 
 That last one is the production path for `configs/50m.yaml`,
-`configs/180m.yaml` and `configs/runs/50m-first-real.yaml`
-(`ska_prefix_scan: true`), and `configs/runs/proxy-256x17.yaml` takes the
-inverse-Cholesky route. **So no committed production config runs `spec_w`.**
-The only clamped route is the chunked approximation `4m-golden.yaml` uses.
+`configs/180m.yaml` and the three `configs/runs/50m-*.yaml` specs
+(`ska_prefix_scan: true`); `configs/runs/proxy-256x17.yaml` takes the
+inverse-Cholesky route. Six committed configs are therefore clamp-free.
+
+An earlier version of this docstring said "no committed production config runs
+`spec_w`". That is FALSE, and enumerating it is worth the space because the
+answer is more interesting than the claim was. Ten committed configs still take
+a clamped route -- meaning they set none of the three exact flags, i.e. they run
+the CHUNKED APPROXIMATION:
+
+    configs/1m.yaml            configs/370m.yaml     configs/1p5b.yaml
+    configs/180m_dense.yaml    configs/440m.yaml     configs/3b.yaml
+    configs/180m_gated.yaml    configs/880m.yaml
+    configs/180m_v2.yaml       configs/runs/4m-golden.yaml
+
+That is the entire large-scale ladder above 180m. They get the clamp, and they
+also get the thing `SKAModule.__init__` warns about at construction: the chunked
+route drops every within-chunk lag-1..lag-(S-1) cross-covariance term, measured
+at ~100% relative error against a per-token-causal reference ON SHORT-RANGE
+RECALL. So for those configs the clamp is not inert-but-harmless -- it is
+attached to an operator that is not the one SKA is supposed to compute. Out of
+scope here and flagged rather than fixed; verified by enumerating
+`CONFIG_REGISTRY` plus `configs/runs/*.yaml` and checking
+`ska_prefix_scan or ska_inverse_cholesky`.
 
 Before this file the guarantee was pinned in exactly one place --
 `test_inverse_cholesky.py::test_whitened_operator_is_contractive`, one path,
@@ -403,6 +423,44 @@ def test_beta_in_both_slots_is_also_contractive_but_squares_the_write_weight():
 # ---------------------------------------------------------------------------
 # The consequence: the clamp is inert, so the backends agree on the operator.
 # ---------------------------------------------------------------------------
+
+def test_which_committed_configs_still_take_a_clamped_route():
+    """The enumeration in this module's docstring, pinned so it cannot go stale.
+
+    A route is clamp-free iff `ska_prefix_scan or ska_inverse_cholesky`; setting
+    neither (nor `ska_exact_intrachunk`) is the CHUNKED approximation, which both
+    keeps `spec_w` and drops the within-chunk cross-covariance terms.
+
+    Pinned as data rather than described in prose because it is exactly the kind
+    of claim `test_docs_are_not_stale.py` exists for: a count and a membership
+    list. If someone switches `440m.yaml` to the prefix scan, this fails with the
+    old and new sets side by side, which is the right way to learn that the
+    docstring above needs editing.
+    """
+    from koopman_lm.config import CONFIG_REGISTRY, build_config
+
+    expected_clamped = {
+        "180m_dense", "180m_gated", "180m_v2", "1m", "1p5b", "370m", "3b",
+        "440m", "880m",
+    }
+    clamped = {
+        name for name in CONFIG_REGISTRY
+        if not (build_config(name).ska_prefix_scan
+                or build_config(name).ska_inverse_cholesky)
+    }
+    assert clamped == expected_clamped, (
+        f"the set of registry configs on a clamped (chunked) route changed.\n"
+        f"  now:      {sorted(clamped)}\n"
+        f"  expected: {sorted(expected_clamped)}\n"
+        f"Update this test AND the enumeration in this module's docstring -- and "
+        f"note that a config moving OFF this list is good news (it gains an "
+        f"exact route), while one moving ON is a regression.")
+    # And the complement, stated so the pass is not vacuous if the registry
+    # shrinks: the canonical production sizes must stay clamp-free.
+    assert {"50m", "180m"}.isdisjoint(clamped), (
+        "50m and 180m are the canonical production configs and must keep an "
+        "exact route")
+
 
 @pytest.mark.parametrize("stats", ("chunked", "exact"))
 @pytest.mark.parametrize("beta_kind", BETA_KINDS)
