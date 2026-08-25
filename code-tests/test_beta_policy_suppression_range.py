@@ -46,6 +46,40 @@ reparameterisation. The two policies have materially different reachable
 behaviour at fixed logit scale, so a difference between them in either arm has a
 mechanism to point at -- and an ABSENCE of difference is then informative too,
 because it says the gate is not operating in the regime where the two diverge.
+
+## THE PREDICTION WAS TESTED AND IS NOT THE EXPLANATION
+
+Recorded here because the file's whole purpose was to be a prediction rather
+than a post-hoc story, and it would be worthless if a falsification were then
+quietly dropped.
+
+The retrieval arm (job 446102, kv=8 gap=128, one seed) separates hugely:
+`linear` and `one` reach 1.0000 accuracy, `learned` 0.3672 and `head_scalar`
+0.3203. The reading this file predicts is "`learned` tried to suppress and the
+square root threw the suppression away". `scripts/report_beta_contrast_on_mqar.py`
+measured it directly, and the numbers do not say that:
+
+    policy       mean beta_fact/beta_filler   mean KEY-WEIGHT ratio
+    learned                           2.278                   1.408
+    linear                            1.284                   1.284
+    head_scalar                       1.000                   1.000
+    one                               1.000  (no gate, by construction)
+
+`learned` DID learn a gate -- 2.3x on beta overall, and 4.95x in its deepest SKA
+layer (beta 0.394 on facts against 0.080 on filler). And after the square root it
+still achieved a HIGHER key-weight contrast than `linear` did (1.408 vs 1.284).
+So the compression is real arithmetic and it is NOT what separated the accuracy:
+the policy with more achieved contrast is the one that failed.
+
+What co-varies with success at n=1 is the absolute key-weight LEVEL, not the
+contrast -- `one` at 1.0 and `linear` at 0.65-0.81 solve the task; `learned` at
+0.28-0.63 does not. But `head_scalar` sits at a constant 0.707, inside
+`linear`'s range, and also fails, so even that is not a clean account.
+
+The honest position: a large, reproducible-looking effect whose mechanism is
+open, with the most obvious candidate ruled out by direct measurement. The
+arithmetic in this file stands -- it is arithmetic -- but it should not be cited
+as the reason for the retrieval result.
 """
 import math
 
