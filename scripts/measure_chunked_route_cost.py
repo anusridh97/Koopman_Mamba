@@ -23,7 +23,48 @@ flatters the exact route. The one-layer ratio is the pessimistic, mechanism-leve
 number; `space.py`'s is the optimistic full-model one. Both are worth having and
 confusing them is how "0.92x" came to sound like a free lunch.
 
+## MEASURED -- job 446319, H100 80GB, one SKA layer, fwd+bwd, batch 1, each
+## config at its OWN max_seq_len. `ratio` is against that config's chunked time.
+
+    config      geometry              chunked   invchol        exact_intrachunk
+    ----------  --------------------  --------  -------------  ----------------
+    1m          r24 CS16  seq4096      7.88 ms  1.61x  0.5 GiB   89.8x
+    50m         r24 CS64  seq8192      5.15 ms  5.60x  1.6 GiB  409.7x
+    180m        r24 CS64  seq8192      5.63 ms  6.51x  2.6 GiB  623.2x
+    180m_dense  r48 CS64  seq8192      8.52 ms 10.20x  9.4 GiB  533.3x
+    180m_gated  r48 CS64  seq8192      8.50 ms 10.21x  9.4 GiB  534.2x
+    180m_v2     r48 CS64  seq8192      8.50 ms 10.21x  9.4 GiB  534.3x
+    370m        r64 CS64  seq8192     14.14 ms 12.57x 20.6 GiB  434.1x
+    440m        r96 CS96  seq8192     20.23 ms  REFUSED (r>64)  488.4x 42.7 GiB
+    880m        r96 CS128 seq8192     27.38 ms  REFUSED (r>64)  495.1x 58.8 GiB
+    1p5b       r128 CS128 seq8192     50.56 ms  REFUSED (r>64)  OOM at batch 1
+    3b         r128 CS128 seq8192     71.32 ms  REFUSED (r>64)  OOM at batch 1
+
+Three things this settles.
+
+**"Exactness is free" does not travel, and `1m` is the exception that matters.**
+At `1m`'s own geometry inverse_cholesky is 1.61x one SKA layer -- and `1m` has 2
+SKA layers out of 4, so the full-model cost is a fraction of that. `1m` is the
+Echo section 4.1 config that `golden_table2_curve.json` and
+`golden_mqar_curve.json` both record, i.e. the one config where being on the
+approximate route has the most scientific consequence, and it is the cheapest one
+to move. Everything above it is 5x-13x per SKA layer, which is a real cost, not a
+free lunch.
+
+**`space.py`'s 0.92x/1.41x is not contradicted, it is differently scoped.** At the
+50m geometry this measures 5.60x for ONE LAYER at seq 8192; space.py measured a
+FULL-MODEL micro-step, which includes the embedding, Mamba and MLP time both
+routes share. Both can be true. What fails is the inference drawn from it -- that
+the route can be flipped anywhere at no cost.
+
+**For `1p5b` and `3b` there is no exact route that RUNS.** Not "expensive":
+inverse_cholesky is refused by the rank assert and exact_intrachunk OOMs at batch
+1 on an 80GB H100. So for the top of the ladder the question is not which exact
+route to choose, it is whether rank 128 is compatible with an exact operator at
+all -- which is a decision about the architecture, not about a flag.
+
 Usage:  python scripts/measure_chunked_route_cost.py [--json OUT] [--batch 1]
+        [--routes chunked,inverse_cholesky]   # skip the 500x route
 """
 from __future__ import annotations
 
@@ -116,7 +157,17 @@ def main(argv=None):
                     help="override every config's max_seq_len (for a cheap probe)")
     ap.add_argument("--configs", default=None,
                     help="comma-separated subset of CONFIG_REGISTRY")
+    ap.add_argument("--routes", default=",".join(ROUTES),
+                    help="comma-separated subset of %s. exact_intrachunk is "
+                         "400x-600x chunked at seq 8192 and dominates the "
+                         "runtime while telling you nothing you did not already "
+                         "know -- drop it to finish inside a short walltime."
+                         % (ROUTES,))
     args = ap.parse_args(argv)
+    routes = [r for r in ROUTES if r in set(args.routes.split(","))]
+    if "chunked" not in routes:
+        ap.error("--routes must include 'chunked'; it is the baseline every "
+                 "ratio is taken against")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     names = (args.configs.split(",") if args.configs else list(CONFIG_REGISTRY))
@@ -133,7 +184,7 @@ def main(argv=None):
         print(f"\n=== {name}  (rank {geom['rank']}, heads {geom['n_heads']}, "
               f"vwidth {geom['value_width']}, CS {geom['chunk_size']}, "
               f"seq {seq}, currently {geom['current_route']}) ===", flush=True)
-        for route in ROUTES:
+        for route in routes:
             dt, peak, err = time_one(geom, route, device, args.batch, seq)
             rec["routes"][route] = ({"error": err} if err else
                                     {"sec_per_step": dt, "peak_gib": peak})
@@ -143,15 +194,20 @@ def main(argv=None):
                 print(f"  {route:18s} {dt*1e3:9.2f} ms   peak {peak:7.2f} GiB",
                       flush=True)
         base = rec["routes"]["chunked"].get("sec_per_step")
-        for route in ROUTES[1:]:
+        for route in routes[1:]:
             got = rec["routes"][route].get("sec_per_step")
             if base and got:
                 rec["routes"][route]["ratio_vs_chunked"] = got / base
                 print(f"  -> {route} is {got/base:.2f}x chunked", flush=True)
         out["configs"][name] = rec
+        # Written after EVERY config, not once at the end. exact_intrachunk is
+        # ~500x chunked at seq 8192, so the large configs can push a run past its
+        # walltime -- and a final-only write would then lose every geometry that
+        # HAD finished, including all the decisive ones.
+        if args.json:
+            Path(args.json).write_text(json.dumps(out, indent=2) + "\n")
 
     if args.json:
-        Path(args.json).write_text(json.dumps(out, indent=2) + "\n")
         print(f"\nwrote {args.json}")
     return 0
 
