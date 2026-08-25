@@ -189,15 +189,20 @@ until something writes it.
 constant was.
 
 **`--group-by group_id`**, ~40 lines on top of the above: emit `n`, `mean`, `sd`,
-`SEM` per (group_id, checkpoint, task, metric, **n_batches**), with `sd`/`SEM` as
-`None` at n = 1, deduplicating on `run_id` so the same group appearing in two roots
-is one group. Named metric, or an argument -- a sigma over `peak_memory_gib` is
+`SEM` per (group_id, checkpoint, task, metric), with `sd`/`SEM` as `None` at
+n = 1, deduplicating on `run_id` so the same group appearing in two roots is one
+group. Named metric, or an argument -- a sigma over `peak_memory_gib` is
 meaningless.
 
-`n_batches` is in the key because of §7: the same runs yield ablation deltas
-~1.47x apart at 8 versus 64 eval batches, with different verdicts on whether a
-contrast is resolvable. Pooling them would average two statistics into a number
-that is neither.
+**Scope, stated in the output:** the index reads `eval/**/quick_eval.json` and
+nothing else. All 89 such files on the store are 8-batch, so the index is
+internally consistent -- but other measurement artefacts exist outside the walk
+(`route_ablation.json`, written by
+`scripts/measure_chunked_route_ablation.py` at `--eval_batches 64`), and a number
+taken from one of those will not match the index. The generated file must name
+the artefact it read, so a reader comparing against an outside number sees why
+they differ instead of concluding one is wrong. See §7 for the case that made
+this concrete.
 
 **No resolvable-effect verdict.** There are already two conventions in the tree
 (`_RESOLVE_SIGMAS = 2.0` in `analysis.py`; `2.39` family-wise corrected in
@@ -390,11 +395,24 @@ two statistics give *different verdicts* on whether cs16's shortfall is
 resolvable (marginally, versus not at all). The 64-batch figure is the better
 measurement and the one to quote; the qualitative finding is the same either way.
 
-That is exactly why an index entry must name its statistic and not only its job.
-A generated index reading `quick_eval.json` would silently publish the 8-batch
-column while the investigation's own report quoted the 64-batch one, and nothing
-would flag the contradiction. **§3.2's `--group-by` must therefore emit
-`n_batches` (or the metric path) as part of the group key, not just `group_id`.**
+**The design consequence is narrower than it first looked, and the first attempt
+at stating it was over-fitted.** I initially concluded that `--group-by` must key
+on `n_batches`. It must not: all 89 `quick_eval.json` files on the store are
+8-batch, so no tool reading them could ever pool the two statistics. The
+64-batch numbers live in `route_ablation.json`, which the walk does not read. The
+two figures met only because a human compared one aggregation against another
+report.
+
+The distinction the first attempt missed: `max_steps` is a **run** condition --
+recorded in `spec.yaml`, genuinely varying on the store (20 versus 1500), and
+pooling across it *did* corrupt the numbers above. `n_batches` is a
+**measurement** condition, uniform in the source, and its hazard is hypothetical.
+Generalising from the first to the second without checking is the same
+unverified-inference habit this revision exists to break.
+
+What survives is a scoping requirement, not a key requirement: the index must
+name the artefact it read, because measurement artefacts exist outside its walk
+and a number from one of them will legitimately disagree.
 
 Chunked-route ablation, 8-batch, filtered to `max_steps == 1500`, grouped by route
 and chunk size, every contributing job named:
