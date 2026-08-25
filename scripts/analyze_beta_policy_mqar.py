@@ -105,12 +105,20 @@ def main(argv=None) -> int:
         by_policy[row["policy"]].append(row)
 
     print()
-    print(f"{'policy':>13} {'n':>3} {'final min':>10} {'final max':>10} "
-          f"{'grok min':>9} {'grok max':>9}")
+    print(f"{'policy':>13} {'n':>3} {'grokked':>8} {'final min':>10} "
+          f"{'final max':>10} {'grok min':>9} {'grok max':>9}")
     for policy, group in sorted(by_policy.items()):
         finals = [r["final"] for r in group]
         groks = [r["grok_step"] for r in group if r["grok_step"] is not None]
-        print(f"{policy:>13} {len(group):>3} {min(finals):>10.4f} "
+        # GROKKED / n is the statistic this task actually has. Accuracy at a
+        # fixed budget on a phase-transition task is very nearly Bernoulli --
+        # "did this seed cross before the steps ran out" -- and averaging it
+        # with the pre-transition values produces a number that describes
+        # neither state. Reported as a fraction so the seed count is always
+        # visible next to it: 2/3 and 200/300 are not the same evidence, and a
+        # bare 0.67 hides which one you have.
+        print(f"{policy:>13} {len(group):>3} "
+              f"{f'{len(groks)}/{len(group)}':>8} {min(finals):>10.4f} "
               f"{max(finals):>10.4f} "
               f"{(str(min(groks)) if groks else '-'):>9} "
               f"{(str(max(groks)) if groks else '-'):>9}")
@@ -152,6 +160,29 @@ def main(argv=None) -> int:
               "step, so a spread here is not a policy effect.")
         print("  Re-run with SEEDS='42 43 44' before reading any ordering.")
     else:
+        # If ANY policy both grokked and failed to grok across its own seeds,
+        # the budget straddles the phase transition and accuracy at that budget
+        # is a coin flip about timing rather than a capability measurement.
+        # Checked before the spread comparison, because a large between-policy
+        # spread is exactly what a straddling budget produces.
+        straddling = sorted(
+            p for p, g in by_policy.items()
+            if 0 < sum(1 for r in g if r["grok_step"] is not None) < len(g))
+        if straddling:
+            print(f"VERDICT: BUDGET STRADDLES THE TRANSITION for {straddling}. "
+                  f"Those policies both grokked and failed to grok across their "
+                  f"own seeds, so accuracy at this budget is measuring WHETHER "
+                  f"each seed crossed in time -- not what the policy can do.")
+            print("  Any ordering read from the means here is grokking-time "
+                  "noise. This is not a")
+            print("  small effect being missed: it is a large one that changes "
+                  "sign with the seed.")
+            print("  Fix by raising --max_steps until every seed of every "
+                  "policy grokks (then final")
+            print("  accuracy is a ceiling and grok_step is the live "
+                  "quantity), or by using a cell")
+            print("  hard enough that none of them does.")
+            return 0
         # The honest substitute for a noise floor: compare the between-policy
         # spread of cell means against the largest WITHIN-policy spread.
         means = {p: sum(r["final"] for r in g) / len(g)
