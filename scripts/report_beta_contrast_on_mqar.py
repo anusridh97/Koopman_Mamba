@@ -15,13 +15,24 @@ low weight on the filler. So the quantity of interest is not beta's variance --
 it is the CONTRAST between the two blocks, in KEY WEIGHT rather than in beta:
 
     key weight = sqrt(beta)   under `learned` / `head_scalar` / `one`
+                              and under `key_sqrt_value_linear`
     key weight = beta         under `linear`
+                              and under `key_linear_value_sqrt`
 
 That distinction is the whole point. `beta_policy` changes the map from beta to
 key weight, so two policies can reach the same beta contrast and different
 OPERATOR contrast -- and the operator contrast is what suppresses a distractor
 in G, M and C. Reporting only beta would compare the policies in units none of
 them uses.
+
+The `weight()` closure below reads the exponent off `mod._weight_key_value`
+rather than off this list, so the numbers stay right for any policy the module
+supports -- including one added after this docstring was last edited. The list is
+here to be read, not to be dispatched on. Note that the KEY weight is all this
+script reports: under the two mixed cells the VALUE exponent differs from the key
+exponent, and the value weighting never enters G or M, so it cannot appear in a
+suppression contrast at all (see
+`code-tests/test_beta_exponent_decomposition.py`).
 
 ## What it can settle that an accuracy number cannot
 

@@ -146,6 +146,55 @@ cells. Every number reported must name which. `ska_delta_acc` here is a THIRD,
 unrelated quantity (MQAR accuracy, not LM loss) and is never to be compared
 against either.
 
+### MEASURED, 2026-08-25 (job 446640): the ablation delta is at CEILING here
+
+Measured on the checkpoints of jobs 446145 and 446106 -- 24 runs, four
+pre-existing policies, no `key_*` cell involved, so this is prior information
+about the CELL and not a new-policy result:
+
+    ska_acc_zeroed lies in [0.0000, 0.1055] in ALL 24 runs
+    ska_delta_acc  therefore equals final_acc - ~0.02, i.e. it is COLLINEAR
+                   with accuracy
+
+Regenerate with:
+
+    sbatch scripts/measure_ska_ablation_on_existing_mqar.sbatch
+    # or, given a GPU:
+    python scripts/report_beta_exponent_arm.py \
+        /scratch/m000151-pm06/jkli/beta-mqar-446145 --kv 8 --gap 128
+
+**What this settles, decisively and in the good direction.** MQAR at this cell is
+carried ENTIRELY by the SKA branch. Zeroing SKA takes a grokked run from 1.0000
+to ~0.02, which is near the 1/128 chance floor -- and it takes a *censored* run
+from ~0.33 to ~0.02 too, so SKA carries even the partial performance. The failure
+mode section 4 was built to detect -- "the model groks in Mamba and the write gate
+is decoration" -- **does not occur at this cell in any of 24 runs.**
+
+It also validates the measurement path: `ska_acc_on` equals the trainer's own
+`final_acc` to the printed digit in all 24 runs, via an independently written eval
+call, so the ablation column is reading the same quantity the accuracy column is.
+
+**The declared consequence for this arm.** `ska_delta_acc` cannot RANK the
+policies, because it carries no information beyond accuracy at this cell. It is
+therefore demoted, explicitly and in advance, from *primary discriminator* to
+**validity check**: its job is to confirm that whatever a cell achieves, it
+achieves in SKA. A cell that grokked with `ska_delta_acc` near zero would be
+disqualified rather than ranked.
+
+The discriminators that retain resolution are the three the pre-registration
+already fixed: **grok rate, `grok_step`, and `lc_area`.** No new statistic is
+introduced to replace the demoted one -- inventing one after seeing that the
+planned one is degenerate is exactly the move this document exists to prevent.
+
+**A note on `head_scalar`, recorded because it bears on the design.** The task
+brief drops `head_scalar` on the grounds that it grokked 0/3. That is job 446106
+at ~4000 steps. At 24000 steps it groks on seed 42 at step 12000, with
+`ska_delta_acc` = +0.9746. So "0/3" is a horizon artefact and not a property of
+the policy. `head_scalar` is still excluded from this arm -- the instruction to
+exclude it is honoured -- but the stated reason for excluding it does not survive
+the longer budget, and a future decision about it should start from the 24000-step
+number rather than the 4000-step one.
+
 ## 5. The mandatory control: the ridge confound
 
 `linear` puts `beta^2` in `G`. At the shared `beta = 0.5` initialisation its
