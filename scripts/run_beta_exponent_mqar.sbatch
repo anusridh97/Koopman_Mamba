@@ -253,10 +253,18 @@ echo "############################################################"
 echo "### training: one run per GPU, paired seeds across cells"
 echo "############################################################"
 
+# `launch_cell` sets --save_steps to a QUARTER of the budget rather than to the
+# budget. Two reasons, both about a job that does not finish: a censored run needs
+# a checkpoint to be RESUMED from rather than restarted, and the SKA ablation
+# delta -- the primary discriminator -- can only be measured on a checkpoint that
+# exists. A run killed at 90% of the walltime with save_steps == STEPS
+# contributes an accuracy curve and no mechanism measurement at all.
+echo "save_steps: $(( STEPS / 4 )) (quarters of $STEPS)"
+
 declare -a PIDS=()
 declare -a TAGS=()
-gpu=0
 launched=0
+failed=0
 
 flush_wave () {
     local i=0
@@ -264,50 +272,145 @@ flush_wave () {
         if wait "$pid"; then
             echo "  OK   ${TAGS[$i]}"
         else
-            echo "  FAIL ${TAGS[$i]} (exit $?) -- see its log; classify as "\
-                 "complete/censored/preempted/OOM/numerical before reporting"
+            code=$?
+            failed=$((failed + 1))
+            echo "  FAIL ${TAGS[$i]} (exit $code) -- classify as complete /"
+            echo "       censored / preempted / OOM / numerical / cancelled from"
+            echo "       its own log before this appears in any table"
         fi
         i=$((i + 1))
     done
     PIDS=(); TAGS=()
 }
 
-for seed in $SEEDS; do
-  for spec in "${CELLS[@]}"; do
-    name="${spec%%:*}"
-    rest="${spec#*:}"
-    policy="${rest%%:*}"
-    ridge="${rest#*:}"
-    out="$RUN_ROOT/mqar-$name-seed$seed"
-    log="$RUN_ROOT/mqar-$name-seed$seed.log"
-    model_yaml="$RUN_ROOT/model-$name.yaml"
-    echo "launch cell=$name policy=$policy ridge=$ridge seed=$seed -> gpu=$gpu"
+launch_cell () {                     # $1=cell spec  $2=seed  $3=gpu  $4=steps
+    local spec="$1" seed="$2" gpu="$3" steps="$4"
+    local name="${spec%%:*}"
+    local rest="${spec#*:}"
+    local policy="${rest%%:*}"
+    local ridge="${rest#*:}"
+    local out="$RUN_ROOT/mqar-$name-seed$seed"
+    local log="$RUN_ROOT/mqar-$name-seed$seed.log"
+    local save=$(( steps / 4 > 0 ? steps / 4 : 1 ))
+    local ev=$(( EVAL_EVERY < steps ? EVAL_EVERY : steps ))
+    echo "  launch cell=$name policy=$policy ridge=$ridge seed=$seed gpu=$gpu"
     CUDA_VISIBLE_DEVICES=$gpu python -m experimentation.experiments.mqar_finetune \
         --model_type mamba_ska_swiglu \
-        --model_size "$model_yaml" \
+        --model_size "$RUN_ROOT/model-$name.yaml" \
         --ska_beta_policy "$policy" \
         --num_kv_pairs "$KV" \
         --distractor_gap "$GAP" \
         --task_vocab_size "$TASK_VOCAB" \
-        --max_steps "$STEPS" \
-        --eval_every "$EVAL_EVERY" \
-        --save_steps "$STEPS" \
+        --max_steps "$steps" \
+        --eval_every "$ev" \
+        --save_steps "$save" \
         --seed "$seed" \
         --deterministic \
         --output_dir "$out" > "$log" 2>&1 &
     PIDS+=($!)
     TAGS+=("cell=$name seed=$seed")
     launched=$((launched + 1))
+}
+
+##############################################################################
+# GPU SMOKE, IN THIS JOB. The cluster is GPU-saturated, so a separate smoke job
+# costs a second multi-hour queue wait. Running 60 steps of every cell here
+# proves each one constructs, trains, evaluates, checkpoints and ablates on a
+# real device -- and measures throughput, so the budget below is a calculation
+# rather than a hope. Costs ~2 minutes against an 8-hour job.
+##############################################################################
+if [ "${SKIP_SMOKE:-0}" != "1" ]; then
+  echo "############################################################"
+  echo "### in-job GPU smoke: 60 steps x every cell"
+  echo "############################################################"
+  SMOKE_ROOT="$RUN_ROOT/_smoke"
+  mkdir -p "$SMOKE_ROOT"
+  for f in "$RUN_ROOT"/model-*.yaml; do cp "$f" "$SMOKE_ROOT/"; done
+  smoke_t0=$SECONDS
+  ( RUN_ROOT="$SMOKE_ROOT"
+    gpu=0
+    for spec in "${CELLS[@]}"; do
+        launch_cell "$spec" 42 "$gpu" 60
+        gpu=$(( (gpu + 1) % NGPU ))
+        if [ "${#PIDS[@]}" -eq "$NGPU" ]; then flush_wave; fi
+    done
+    [ "${#PIDS[@]}" -gt 0 ] && flush_wave
+    exit 0
+  )
+  smoke_secs=$((SECONDS - smoke_t0))
+  echo "smoke wall time: ${smoke_secs}s for 60 steps"
+  # A gate, not a print: if any cell produced no eval, the arm would report that
+  # cell as "no data" for every seed and the job would have burnt 8 hours to
+  # discover it.
+  python - <<'PY' || { echo "FATAL: GPU smoke gate FAILED -- not spending the budget."; exit 1; }
+import os, pathlib, re, sys
+root = pathlib.Path(os.environ["RUN_ROOT"]) / "_smoke"
+acc = re.compile(r"\[step\s+(\d+)\]\s+in-task accuracy\s*\([^)]*\):\s*([0-9.]+)")
+logs = sorted(root.glob("mqar-*.log"))
+bad = []
+if not logs:
+    bad.append("no smoke logs at all")
+for log in logs:
+    text = log.read_text(errors="replace")
+    evals = acc.findall(text)
+    ckpts = list((root / log.stem).glob("step_*/model.pt"))
+    if not evals:
+        tail = "\n      ".join(text.strip().splitlines()[-6:])
+        bad.append(f"{log.stem}: NO eval line. tail:\n      {tail}")
+    elif not ckpts:
+        bad.append(f"{log.stem}: {len(evals)} eval(s) but NO checkpoint written")
+    else:
+        print(f"  ok {log.stem:<40} {len(evals)} eval(s), "
+              f"{len(ckpts)} ckpt, last acc {evals[-1][1]}")
+if bad:
+    print("\n".join(f"SMOKE FAILURE: {b}" for b in bad), file=sys.stderr)
+    raise SystemExit(1)
+print(f"smoke gate passed: {len(logs)} cells trained on GPU")
+PY
+  # Throughput -> is the real budget reachable? Reported either way; a job that
+  # silently cannot finish its own design is worse than one that says so.
+  python - <<PY
+steps, secs, n = 60, max($smoke_secs, 1), ${#CELLS[@]}
+ngpu, nseeds = $NGPU, len("$SEEDS".split())
+waves_smoke = -(-n // ngpu)
+per_step = secs / (steps * waves_smoke)
+waves_real = -(-n // ngpu) * nseeds
+est = per_step * $STEPS * waves_real
+print(f"  ~{per_step:.3f}s/step/wave -> {waves_real} wave(s) x $STEPS steps "
+      f"= ~{est/3600:.2f}h of training")
+print(f"  (excludes the ablation + contrast passes at the end)")
+PY
+fi
+
+##############################################################################
+echo "############################################################"
+echo "### screening: one wave per SEED, so a wave is a complete paired set"
+echo "############################################################"
+# Waves are per SEED rather than a flat fill of the GPUs. If the walltime runs
+# out mid-job, that leaves N COMPLETE paired seeds across all seven cells rather
+# than a ragged set with some cells at three seeds and others at one -- and a
+# ragged set is not a paired design.
+for seed in $SEEDS; do
+  echo "--- seed $seed (${#CELLS[@]} cells, $NGPU GPUs) ---"
+  gpu=0
+  for spec in "${CELLS[@]}"; do
+    launch_cell "$spec" "$seed" "$gpu" "$STEPS"
     gpu=$(( (gpu + 1) % NGPU ))
-    # One wave per NGPU launches, so no two runs share a GPU. Sharing would not
-    # change any accuracy (--deterministic) but it would make an OOM look like a
-    # policy effect, and would invalidate the throughput number SMOKE exists to
-    # measure.
+    # No two runs share a GPU. Sharing would not change any accuracy
+    # (--deterministic) but it would make an OOM look like a policy effect.
     if [ "${#PIDS[@]}" -eq "$NGPU" ]; then flush_wave; fi
   done
+  [ "${#PIDS[@]}" -gt 0 ] && flush_wave
+  echo "--- seed $seed complete; interim report ---"
+  # Reported after EVERY seed, not only at the end: if the walltime expires the
+  # job has still emitted a readable, complete result for the seeds that
+  # finished. `--no_ablation` here because the ablation pass is the expensive
+  # part and the final report does it once over everything.
+  python "$REPO_ROOT/scripts/report_beta_exponent_arm.py" "$RUN_ROOT" \
+      --kv "$KV" --gap "$GAP" --task_vocab "$TASK_VOCAB" --no_ablation \
+      2>&1 | tail -30 || echo "WARN: interim report failed"
 done
-[ "${#PIDS[@]}" -gt 0 ] && flush_wave
-echo "launched $launched run(s)"
+echo "launched $launched run(s), $failed nonzero exit(s)"
 
 ##############################################################################
 echo "############################################################"
