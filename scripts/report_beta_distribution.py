@@ -75,6 +75,12 @@ def _hidden_states(model, input_ids, layer_index):
     # one of them. `named_modules` walks in registration order, which is layer
     # order, so the nth SKAModule is the nth SKA layer.
     skas = [m for _n, m in model.named_modules() if isinstance(m, SKAModule)]
+    if layer_index >= len(skas):
+        raise IndexError(
+            f"asked for SKA layer {layer_index} but the model has {len(skas)}. "
+            f"The caller derives the count from spec.ska_layer_indices, so this "
+            f"means the checkpoint's architecture disagrees with its spec.yaml "
+            f"-- a bare IndexError here would be cryptic.")
     target = skas[layer_index]
     handle = target.register_forward_hook(hook, with_kwargs=False)
     try:
@@ -144,7 +150,9 @@ def main(argv=None) -> int:
                 print(f"SKIP {run_dir} layer {layer}: hook captured nothing",
                       file=sys.stderr)
                 continue
-            health = ska_health(ska, h)
+            # max_batch=args.batch: ska_health defaults to 2 and TRUNCATES, so
+            # `--batch 4` silently reported statistics over two sequences.
+            health = ska_health(ska, h, max_batch=args.batch)
             rows.append({
                 "run_dir": str(run_dir),
                 "beta_policy": spec.model.ska_beta_policy,

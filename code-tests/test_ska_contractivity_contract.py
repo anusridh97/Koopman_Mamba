@@ -404,8 +404,9 @@ def test_beta_in_both_slots_is_also_contractive_but_squares_the_write_weight():
 # The consequence: the clamp is inert, so the backends agree on the operator.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("stats", ("chunked", "exact"))
 @pytest.mark.parametrize("beta_kind", BETA_KINDS)
-def test_spectral_clamp_is_inert_under_single_stream_keys(beta_kind):
+def test_spectral_clamp_is_inert_under_single_stream_keys(beta_kind, stats):
     """`spec_w` returns exactly alpha == 1, so the clamped and clamp-free
     backends compute the SAME operator.
 
@@ -422,11 +423,21 @@ def test_spectral_clamp_is_inert_under_single_stream_keys(beta_kind):
     z_n, zq_n, v, g = _stream(T=200, seed=7)
     beta = _beta(beta_kind, z_n.shape[:-1], g)
     x, vbar = symmetric_key_value(z_n, beta, v)
-    G, M, _, _, _ = chunk_stats(x, x, zq_n, vbar, RIDGE, 64)
+    # BOTH statistics families, because the docstring above reasons about
+    # (B*nc*H) AND (B*T*H) and the two routes that pay for the clamp are one of
+    # each: `chunk_stats` feeds the chunked route's `ska_core`, `exact_stats`
+    # feeds exact-intrachunk's `ska_core_given_L`. Logically the second follows
+    # from the contractivity tests plus alpha = 1/clamp(sigma, min=1), but the
+    # claim is about a specific call and it costs one parametrize to check it.
+    if stats == "chunked":
+        G, M, _, _, _ = chunk_stats(x, x, zq_n, vbar, RIDGE, 64)
+    else:
+        G, M, _, _, _ = exact_stats(x, x, zq_n, vbar, RIDGE)
     alpha = spec_w(whiten_M(torch.linalg.cholesky(G), M))
     assert torch.all(alpha == 1.0), (
-        f"beta={beta_kind}: spec_w fired on {int((alpha != 1.0).sum())} of "
-        f"{alpha.numel()} chunk operators (min alpha "
+        f"beta={beta_kind}, stats={stats}: spec_w fired on "
+        f"{int((alpha != 1.0).sum())} of "
+        f"{alpha.numel()} operators (min alpha "
         f"{float(alpha.min()):.9f}). Under a single key stream it cannot, so "
         f"either the convention broke or the clamp is now doing something the "
         f"clamp-free backends are not.")

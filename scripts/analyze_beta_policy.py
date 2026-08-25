@@ -97,6 +97,10 @@ VALUE_COL = "objective"
 POLICY_COL = "param_beta_policy"
 SEED_COL = "attr_model_seed"
 
+#: One-shot warning guard, so a missing column is reported once rather than per
+#: row -- a 20-trial csv would otherwise print it 20 times and bury the table.
+_WARNED: set = set()
+
 
 def _rows(path: Path):
     with path.open() as handle:
@@ -112,7 +116,19 @@ def _rows(path: Path):
                 continue
             if not math.isfinite(value):
                 continue
-            yield group, row.get(POLICY_COL) or group, value, row.get(SEED_COL)
+            policy = row.get(POLICY_COL)
+            if not policy and POLICY_COL not in _WARNED:
+                # Falling back to the group name is fail-safe (the deltas then
+                # compare groups, which is what the caller wanted) but it prints
+                # group names under a `policy` header, so say so once rather
+                # than let a reader assume the column was read.
+                print(f"WARNING: {POLICY_COL} is absent from this trials.csv; "
+                      f"keying cells by {GROUP_COL} instead. The rows below are "
+                      f"reference groups, not policies -- correct for a study "
+                      f"that predates the beta_policy axis, wrong if you "
+                      f"expected policies.", file=sys.stderr)
+                _WARNED.add(POLICY_COL)
+            yield group, policy or group, value, row.get(SEED_COL)
 
 
 def main(argv=None) -> int:

@@ -356,7 +356,12 @@ class SKAModule(nn.Module):
         tests whether the square root is carrying anything.
         """
         if self.beta_policy == "linear":
-            w = beta.clamp_min(0).unsqueeze(-1)
+            # No `clamp_min(0)` here, unlike `symmetric_key_value`: that clamp
+            # exists to keep a negative beta out of a SQUARE ROOT, and there is
+            # no square root on this branch. `_resolve_beta` returns sigmoid or
+            # ones, so beta is in (0,1] regardless; mirroring the clamp would
+            # have implied a guard against something that cannot happen.
+            w = beta.unsqueeze(-1)
             return w * z_n, w * v
         return symmetric_key_value(z_n, beta, v)
 
