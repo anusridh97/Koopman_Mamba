@@ -34,6 +34,14 @@ from koopman_lm.kernels.ska_operator import ska_core
 from koopman_lm.kernels.chunk_stats import (
     chunk_stats as _causal_chunk_stats, symmetric_key_value, causal_normalize)
 
+#: The write-gate parameterisations `beta_policy` may name. Duplicated from
+#: `koopman_lm/config.py` rather than imported, for the reason the `precision`
+#: kwarg's comment gives at length: this module deliberately never imports
+#: KoopmanLMConfig -- it is config-free numerics, and ska_block.py threads every
+#: scalar in. `code-tests/test_ska_beta_policy.py` pins the two lists together
+#: so the duplicate cannot drift silently.
+BETA_POLICIES = frozenset({"learned", "one", "head_scalar", "linear"})
+
 # ============================================================================
 # Backend detection
 # ============================================================================
@@ -86,8 +94,13 @@ class SKAModule(nn.Module):
                  exact_intrachunk=False, inverse_cholesky=False,
                  prefix_scan=False, prefix_scan_block_size=32,
                  prefix_scan_jitter=0.0, norm_clip_c=None,
-                 precision='fp32'):
+                 precision='fp32', beta_policy='learned'):
         super().__init__()
+        if beta_policy not in BETA_POLICIES:
+            raise ValueError(
+                f"SKAModule ska_beta_policy={beta_policy!r}; expected one of "
+                f"{sorted(BETA_POLICIES)}")
+        self.beta_policy = beta_policy
         # The dtype the whitened core computes in. Arg 29 of 29 scalars: this
         # module deliberately never imports KoopmanLMConfig -- it is config-free
         # numerics -- so ska_block.py threads cfg.ska_precision in, exactly as it
@@ -209,13 +222,29 @@ class SKAModule(nn.Module):
         self.out_proj = nn.Linear(n_heads * self.P, d_model, bias=False)
         # beta write-gate (GDN-style causal normalization, matches echo_jax.py).
         # bias init 0 -> sigmoid -> beta=0.5 at start.
-        self.beta_proj = nn.Linear(d_model, n_heads, bias=True)
+        #
+        # `one` constructs NOTHING, and `head_scalar` constructs H scalars
+        # rather than a projection. Both are the point: these policies exist to
+        # be SIMPLER MODELS, and a disabled-but-present beta_proj would still be
+        # seen by weight decay, still appear in the parameter count, and still
+        # show up in an optimizer param-group regex -- so the comparison would
+        # not be measuring what it claims.
+        self.beta_proj = None
+        self.beta_logit = None
+        if beta_policy in ("learned", "linear"):
+            self.beta_proj = nn.Linear(d_model, n_heads, bias=True)
+            nn.init.zeros_(self.beta_proj.weight)
+            nn.init.zeros_(self.beta_proj.bias)   # beta = sigmoid(0) = 0.5 at init
+        elif beta_policy == "head_scalar":
+            # Same initialisation SEMANTICS as the learned gate: logit 0 ->
+            # beta = 0.5 at step 0, so `learned` and `head_scalar` start from
+            # the identical operator and the contrast is about the
+            # parameterisation rather than about where each one starts.
+            self.beta_logit = nn.Parameter(torch.zeros(n_heads))
 
         nn.init.orthogonal_(self.key_proj.weight)
         nn.init.orthogonal_(self.query_proj.weight)
         nn.init.xavier_uniform_(self.value_proj.weight)
-        nn.init.zeros_(self.beta_proj.weight)
-        nn.init.zeros_(self.beta_proj.bias)        # beta = sigmoid(0) = 0.5 at init
         # out_proj is now full-rank (small std), NOT zeros -- LayerScale handles
         # the near-zero start so internals still receive gradient from step 1.
         # out_proj: full-rank small-std when layerscale gates it (440M),
@@ -293,6 +322,44 @@ class SKAModule(nn.Module):
             return torch.clamp(self.ssn_gamma, min=lo, max=hi)
         return self.ssn_gamma
 
+    def _resolve_beta(self, hidden_states):
+        """The per-token, per-head write weight this forward will apply: (B,T,H).
+
+        One method, called by the training forward, by the decode path
+        (`models/recurrent.py`) and by the diagnostics (`diagnostics/ska.py`),
+        for the same reason `symmetric_key_value` is one helper: a second site
+        that recomputed beta from `beta_proj` directly would silently ignore the
+        policy, and the train/decode divergence would show up as a quality
+        regression rather than as an error.
+
+        `one` returns an ones tensor rather than the scalar 1.0. Slightly
+        wasteful and worth it: every caller then handles one shape, and the
+        alternative is a `if isinstance(beta, float)` branch at four call sites,
+        which is exactly the shape of the gamma fast path that has already
+        caused one drift.
+        """
+        B, T, _ = hidden_states.shape
+        if self.beta_policy == "one":
+            return hidden_states.new_ones(B, T, self.H)
+        if self.beta_policy == "head_scalar":
+            return torch.sigmoid(self.beta_logit).expand(B, T, self.H)
+        return torch.sigmoid(self.beta_proj(hidden_states))            # (B,T,H)
+
+    def _weight_key_value(self, z_n, beta, v):
+        """Apply the policy's key/value weighting. Returns (x, vbar).
+
+        `learned`, `one` and `head_scalar` all use the v1.1 symmetric
+        sqrt(beta) form (for `one` that is the identity, since sqrt(1) == 1).
+        `linear` uses beta in both slots instead, which is still a single key
+        stream -- so still contractive -- and redefines the own-weight statistic
+        as G = sum beta^2 z z^T. That difference IS the 'linear' arm: it is what
+        tests whether the square root is carrying anything.
+        """
+        if self.beta_policy == "linear":
+            w = beta.clamp_min(0).unsqueeze(-1)
+            return w * z_n, w * v
+        return symmetric_key_value(z_n, beta, v)
+
     def forward(self, hidden_states):
         B, T, _ = hidden_states.shape
         r = self.rank
@@ -320,7 +387,7 @@ class SKAModule(nn.Module):
         z = combined[..., :H * r].reshape(B, T, H, r)
         zq = combined[..., H * r:2 * H * r].reshape(B, T, H, r)
         v = combined[..., 2 * H * r:].reshape(B, T, H, P)
-        beta = torch.sigmoid(self.beta_proj(hidden_states))            # (B,T,H)
+        beta = self._resolve_beta(hidden_states)                       # (B,T,H)
 
         ctx = torch.amp.autocast('cuda', enabled=False) if hidden_states.is_cuda \
               else nullcontext()
@@ -347,7 +414,9 @@ class SKAModule(nn.Module):
             # key slots, vbar=sqrt(beta)*v. G,C invariant; M/boundary become the
             # contractive cross-weight sqrt(beta_t beta_{t-1}). One helper, every
             # site -> no norm-based beta re-inference (the train/decode trap).
-            x_n, v_w = symmetric_key_value(z_n, beta_f, v_f)
+            # Routed through `_weight_key_value` so `ska_beta_policy` selects the
+            # exponent; every policy is single-stream, hence contractive.
+            x_n, v_w = self._weight_key_value(z_n, beta_f, v_f)
 
             if self.prefix_scan:
                 # Exact two-level prefix scan.  Raw sufficient statistics form
@@ -441,6 +510,7 @@ class SKAModule(nn.Module):
             f'chunk_size={self.chunk_size}', f'backend={self.backend}',
             f'chunk_strategy={self.chunk_strategy}',
             f'eta={eta_val:.4f}', f'gamma={gamma_val:.4f}',
+            f'beta_policy={self.beta_policy}',
             f'eta_bounds={self.eta_bounds}', f'gamma_bounds={self.gamma_bounds}',
             f'layerscale={self.layerscale}',
             f'inverse_cholesky={self.inverse_cholesky}',

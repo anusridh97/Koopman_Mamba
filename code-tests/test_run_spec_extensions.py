@@ -115,6 +115,7 @@ def test_absent_sections_do_not_perturb_existing_run_ids():
     """
     import dataclasses
 
+    from koopman_lm.config import identity_payload
     from experimentation.run.spec import (_json_stable, _scientific_payload,
                                           group_id, run_id)
 
@@ -124,7 +125,15 @@ def test_absent_sections_do_not_perturb_existing_run_ids():
     # What the payload would have been before either field existed: the same
     # dict, with any trace of them removed. Byte-identical means an old run's
     # identity is untouched.
-    legacy = {"model": dataclasses.asdict(spec.model),
+    #
+    # `identity_payload` for the model section, not `dataclasses.asdict`: the
+    # rule for what a model contributes to identity now has one definition
+    # (koopman_lm/config.py::IDENTITY_TRANSPARENT_DEFAULTS), and re-deriving it
+    # here with asdict would make this test assert that the rule does not exist.
+    # The invariant under test is unaffected -- it is about `schedules` and
+    # `optim.groups` -- and the pinned run_id below is the real check that the
+    # model rule did not renumber anything.
+    legacy = {"model": identity_payload(spec.model),
               "data": dataclasses.asdict(spec.data),
               "optim": {k: v for k, v in dataclasses.asdict(spec.optim).items()
                         if k != "groups"},

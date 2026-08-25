@@ -6,6 +6,62 @@ from pathlib import Path
 
 import yaml
 
+#: The write-gate parameterisations `ska_beta_policy` may name. Declared here
+#: rather than imported from `modules/seq/ska.py` because this module must stay
+#: importable without touching the model code, and pinned against that module's
+#: own copy by `code-tests/test_ska_beta_policy.py`.
+BETA_POLICIES = frozenset({"learned", "one", "head_scalar", "linear"})
+
+#: Model fields added AFTER run identity was pinned, mapped to the value an
+#: archived run implicitly had. A field at that value is OMITTED from every
+#: identity hash (`config_hash`, and `run/spec.py`'s `group_id`/`run_id`).
+#:
+#: **Why this exists.** `KoopmanLMConfig` is hashed field-for-field, so adding
+#: any field renumbers every run ever recorded -- `configs/runs/4m-golden.yaml`
+#: would stop hashing to `run_id 2e63f16e` / `group_id d812e412`, and
+#: `code-tests/test_identity_baseline.py` exists precisely to refuse that.
+#: Renumbering finished science should not be the price of adding a knob.
+#:
+#: `run/spec.py::_scientific_payload` already solves the same problem for
+#: `schedules` and `optim.groups`: an absent section is omitted rather than
+#: emitted empty, so that introducing those mechanisms did not renumber the runs
+#: that predate them. A model field cannot be absent -- this dataclass is total
+#: by design, and `run/resolve.py::_check_model_key_set` depends on that
+#: totality -- so the same idea needs an explicit spelling.
+#:
+#: **Why it is faithful, not merely convenient.** A run recorded before
+#: `ska_beta_policy` existed really did have `learned` behaviour. Hashing it as
+#: "absent == learned" therefore states something true about that run rather
+#: than hiding a difference.
+#:
+#: **The one requirement.** A NON-default value must change the hash. Omitting
+#: the field at any value would let two scientifically different runs share a
+#: run_id, hence a directory, hence one set of checkpoints. Pinned by
+#: `test_a_non_default_policy_changes_config_hash_group_id_and_run_id`.
+#:
+#: Adding an entry here is a deliberate act with a repo-wide consequence, not a
+#: routine step when adding a field. A field whose default is a NEW behaviour --
+#: rather than the behaviour archived runs already had -- must NOT be listed:
+#: that would omit a value no archived run held.
+IDENTITY_TRANSPARENT_DEFAULTS = {
+    "ska_beta_policy": "learned",
+}
+
+
+def identity_payload(cfg: "KoopmanLMConfig") -> dict:
+    """The config as a dict, with identity-transparent defaults dropped.
+
+    The single definition of "what a config's identity is made of", used by
+    `config_hash` here and by `run/spec.py::_scientific_payload`. Two copies of
+    this rule would be two chances for `config_hash` and `run_id` to disagree
+    about whether a run is the same run.
+    """
+    payload = asdict(cfg)
+    for name, legacy in IDENTITY_TRANSPARENT_DEFAULTS.items():
+        if payload.get(name, object()) == legacy:
+            del payload[name]
+    return payload
+
 
 @dataclass(frozen=True)
 class KoopmanLMConfig:
@@ -118,6 +174,38 @@ class KoopmanLMConfig:
     ska_norm_clip: bool = True
     ska_norm_clip_c: Optional[float] = None   # threshold c; None -> sqrt(rank)
 
+    # --- The write gate's parameterisation ---
+    #
+    # `beta` is the per-token, per-head SKA write weight. Four spellings, all of
+    # which feed the SAME key stream into both slots of the cross-weight M and
+    # are therefore contractive (which is what lets the inverse-Cholesky and
+    # prefix-scan backends omit the spectral clamp -- see
+    # code-tests/test_ska_contractivity_contract.py). So all four can be
+    # compared on one backend, and no contrast is confounded by a change of
+    # kernel:
+    #
+    #   'learned'      beta = sigmoid(W h + b), per token and head; key weight
+    #                  sqrt(beta). The default, and what every config ran before
+    #                  this field existed.
+    #   'one'          beta = 1. No gate, and `beta_proj` is not constructed --
+    #                  a strictly simpler model, not a disabled one, so weight
+    #                  decay has nothing dead to act on.
+    #   'head_scalar'  beta = sigmoid(b_h): H learnable scalars, no token
+    #                  dependence. Isolates "the gate supplies a per-head write
+    #                  scale" from "the gate is content-dependent".
+    #   'linear'       beta as in 'learned', key weight beta rather than
+    #                  sqrt(beta). Contractive, and it silently redefines the
+    #                  write weight: G becomes sum beta^2 z z^T. The square root
+    #                  is not what buys the bound, it is what keeps
+    #                  G = sum beta z z^T, i.e. what keeps "beta is the write
+    #                  weight" true.
+    #
+    # The retired asymmetric convention (beta on one slot of M only) is
+    # deliberately NOT offered. It is not contractive -- measured 23x over the
+    # bound on a sharp gate -- so on either clamp-free backend it would apply an
+    # expansive operator K times without failing loudly.
+    ska_beta_policy: str = 'learned'
+
     # SKA adaptive chunking
     ska_chunk_strategy: str = 'standard'
     ska_overlap_fraction: float = 0.5
@@ -227,6 +315,15 @@ class KoopmanLMConfig:
             raise ValueError(f"mlp_type={self.mlp_type!r}; expected one of {sorted(valid_mlp)}")
         if self.ska_mode not in {'replace', 'parallel'}:
             raise ValueError("ska_mode must be 'replace' or 'parallel'")
+        if self.ska_beta_policy not in BETA_POLICIES:
+            raise ValueError(
+                f"ska_beta_policy={self.ska_beta_policy!r}; expected one of "
+                f"{sorted(BETA_POLICIES)}. Validated here so a typo fails on a "
+                f"login node rather than after a run directory has been claimed "
+                f"and a job queued. The retired asymmetric convention is not "
+                f"among them on purpose: it is not contractive, so on the "
+                f"clamp-free backends (ska_inverse_cholesky, ska_prefix_scan) "
+                f"it would apply an expansive operator without failing.")
         if self.norm_type.lower().replace('_', '') not in {'layernorm', 'ln', 'rmsnorm', 'rms'}:
             raise ValueError("norm_type must be layernorm or rmsnorm")
         if self.init_policy not in {'mamba_safe', 'legacy'}:
@@ -347,7 +444,15 @@ class KoopmanLMConfig:
             d * self.ska_n_heads * self.ska_rank * 2 +
             d * self.ska_n_heads * self.head_dim +
             self.ska_n_heads * self.head_dim * d +
-            d * self.ska_n_heads + self.ska_n_heads +
+            # The write gate, whose size is what `ska_beta_policy` selects:
+            #   learned/linear  beta_proj is Linear(d, H, bias=True)
+            #   head_scalar     H learnable logits, no projection
+            #   one             nothing at all -- `one` is a strictly simpler
+            #                   model, so it must not be counted as carrying
+            #                   parameters it does not construct
+            (0 if self.ska_beta_policy == 'one' else
+             self.ska_n_heads if self.ska_beta_policy == 'head_scalar' else
+             d * self.ska_n_heads + self.ska_n_heads) +
             (self.d_model if self.ska_layerscale else 0) +
             (d * (self.ska_short_conv_kernel + 1) + d
              if self.ska_short_conv else 0) +
@@ -396,8 +501,14 @@ class KoopmanLMConfig:
 # ============================================================================
 
 def config_hash(cfg: KoopmanLMConfig) -> str:
-    """Stable SHA-256 hex digest of a config's contents."""
-    payload = json.dumps(asdict(cfg), sort_keys=True, default=str)
+    """Stable SHA-256 hex digest of a config's contents.
+
+    Via `identity_payload`, so a field sitting at an identity-transparent
+    default hashes as though it were absent -- which is what lets a new knob be
+    added without renaming every archived checkpoint's stored `cfg_hash`. See
+    `IDENTITY_TRANSPARENT_DEFAULTS`.
+    """
+    payload = json.dumps(identity_payload(cfg), sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

@@ -103,14 +103,18 @@ def ska_health(ska, hidden_states, max_batch=2):
     z = ska.key_proj(x).reshape(B, T, H, r).float()
     zq = ska.query_proj(x).reshape(B, T, H, r).float()
     v = ska.value_proj(x).reshape(B, T, H, P).float()
-    beta = torch.sigmoid(ska.beta_proj(x)).float()                # (B,T,H)
+    # Via the module's own resolver so the diagnostic describes the policy the
+    # model runs. A local sigmoid(beta_proj(x)) would report a `learned` gate
+    # for every policy -- and crash outright under `one`, where beta_proj does
+    # not exist.
+    beta = ska._resolve_beta(x).float()                            # (B,T,H)
 
     # SAME normalization + symmetric sqrt(beta) key/value convention the
     # forward uses (v1.1): G/C are own-weight and beta-invariant; M
     # becomes the contractive cross-weight sqrt(beta_t beta_{t-1}).
     z_n = causal_normalize(z, ska.norm_clip_c)
     zq_n = causal_normalize(zq, ska.norm_clip_c)
-    x_n, v_w = symmetric_key_value(z_n, beta, v)
+    x_n, v_w = ska._weight_key_value(z_n, beta, v)
 
     # SAME strictly-causal, beta-gated, exclusive-prefix chunk statistics
     # the training forward consumes. Gf already carries ridge + jitter.

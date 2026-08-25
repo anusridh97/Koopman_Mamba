@@ -119,10 +119,17 @@ class RecurrentKoopmanLM(nn.Module):
         z = ska.key_proj(h).reshape(B, t, H, r).float()
         zq = ska.query_proj(h).reshape(B, t, H, r).float()
         v = ska.value_proj(h).reshape(B, t, H, P).float()
-        beta = torch.sigmoid(ska.beta_proj(h)).float()           # (B,t,H)
+        # `ska._resolve_beta` / `ska._weight_key_value`, not a local
+        # `sigmoid(beta_proj(h))` + `symmetric_key_value`: those two lines
+        # ignored `ska_beta_policy` entirely, so a model trained with any policy
+        # other than the default would have decoded as though it were `learned`
+        # -- a train/decode divergence that shows up as a quality regression
+        # rather than an error, which is the exact trap the one-helper rule in
+        # `symmetric_key_value`'s docstring exists to close.
+        beta = ska._resolve_beta(h).float()                      # (B,t,H)
         z_n = causal_normalize(z, ska.norm_clip_c)
         zq_n = causal_normalize(zq, ska.norm_clip_c)
-        x, vbar = symmetric_key_value(z_n, beta, v)
+        x, vbar = ska._weight_key_value(z_n, beta, v)
         return x, zq_n, vbar
 
     @torch.no_grad()
