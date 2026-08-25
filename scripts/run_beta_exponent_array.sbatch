@@ -40,11 +40,29 @@
 #        sbatch --array=0-41 --export=ALL,RUN_ROOT=$RUN_ROOT \
 #            scripts/run_beta_exponent_array.sbatch
 #
+#      **The `medium` QOS caps submissions at 32 per ACCOUNT, and an array counts
+#      once per task.** So 0-41 is refused with `MaxSubmitJobsPerAccount`. Submit
+#      in slices, and slice ON A SEED BOUNDARY -- the manifest is seed-major (7
+#      cells per seed), so 0-27 is exactly seeds 42-45 and 28-41 is seeds 46-47.
+#      Slicing mid-seed would leave a ragged, unpaired set:
+#
+#        sbatch --array=0-27  … # seeds 42,43,44,45
+#        sbatch --array=28-41 … # seeds 46,47, once the first slice has drained
+#
+#      Re-running a slice against the SAME RUN_ROOT is safe and idempotent: each
+#      task writes only its own `mqar-<cell>-seed<N>/`, so a failed task can be
+#      re-submitted alone (`--array=<idx>`) without disturbing its neighbours.
+#
 #   3. Report, once the array is done (needs a GPU for the ablation pass):
 #
 #        sbatch --dependency=afterany:<ARRAYJOBID> \
 #            --export=ALL,RUN_ROOTS=$RUN_ROOT \
 #            scripts/measure_ska_ablation_on_existing_mqar.sbatch
+#
+#      Or, for the curve statistics alone, with no GPU and no ablation:
+#
+#        PYTHONPATH=$PWD python scripts/report_beta_exponent_arm.py \
+#            $RUN_ROOT --kv 8 --gap 128 --no_ablation
 #
 # ===================== WHY EACH TASK RE-CHECKS ITS OWN CELL =================
 #
