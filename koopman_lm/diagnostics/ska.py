@@ -157,6 +157,35 @@ def ska_health(ska, hidden_states, max_batch=2):
         'n_chunks': int(nc),
         'gate_mag': gate_mag.detach(),
         'beta_mean': beta.mean().detach(),
+        # Beta's DISTRIBUTION, decomposed, because the mean cannot answer the
+        # question anyone asks of a write gate. A gate pinned at 0.5 everywhere
+        # and one alternating between 0.01 and 0.99 have the same mean, so
+        # `beta_mean` alone cannot distinguish a working gate from a dead one.
+        #
+        # Two variances rather than one pooled sd, and the split is the point:
+        #
+        #   beta_sd_token  sd across TOKENS within a head, averaged over heads
+        #                  and batch. This is the CONTENT dependence -- what the
+        #                  gate exists for. `ska_beta_policy='head_scalar'` has
+        #                  exactly zero of it by construction.
+        #   beta_sd_head   sd of the per-head MEANS. A per-head write scale,
+        #                  which `out_proj` could absorb, so a gate showing only
+        #                  this is not obviously earning its parameters.
+        #
+        # A single pooled sd would be nonzero for `head_scalar` and would be
+        # read as content dependence. That misreading is the reason these are
+        # separate keys. Pinned by
+        # code-tests/test_beta_distribution_diagnostic.py.
+        #
+        # NOT evidence that the gate helps. Variation is a necessary condition;
+        # the loss/retrieval effect is measured elsewhere and neither number
+        # stands in for the other.
+        'beta_sd_token': beta.std(dim=1).mean().detach() if beta.shape[1] > 1
+                         else torch.zeros((), device=beta.device, dtype=beta.dtype),
+        'beta_sd_head': beta.mean(dim=(0, 1)).std().detach() if beta.shape[-1] > 1
+                        else torch.zeros((), device=beta.device, dtype=beta.dtype),
+        'beta_min': beta.amin().detach(),
+        'beta_max': beta.amax().detach(),
         'outproj_norm': ska.out_proj.weight.detach().float().norm(),
         'eta': eta,
         'gamma': torch.tensor(gamma_val, device=x.device),
