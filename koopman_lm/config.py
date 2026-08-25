@@ -10,7 +10,18 @@ import yaml
 #: rather than imported from `modules/seq/ska.py` because this module must stay
 #: importable without touching the model code, and pinned against that module's
 #: own copy by `code-tests/test_ska_beta_policy.py`.
-BETA_POLICIES = frozenset({"learned", "one", "head_scalar", "linear"})
+#:
+#: `key_linear_value_sqrt` and `key_sqrt_value_linear` are the two MIXED cells
+#: that complete the (key exponent) x (value exponent) square whose diagonal
+#: `learned` (sqrt, sqrt) and `linear` (linear, linear) already occupied. Without
+#: them a learned-vs-linear difference cannot be attributed to the key exponent,
+#: the value exponent, or their interaction -- see
+#: `code-tests/test_beta_exponent_decomposition.py` for the decomposition and
+#: for the ridge confound the key exponent carries.
+BETA_POLICIES = frozenset({
+    "learned", "one", "head_scalar", "linear",
+    "key_linear_value_sqrt", "key_sqrt_value_linear",
+})
 
 #: Model fields added AFTER run identity was pinned, mapped to the value an
 #: archived run implicitly had. A field at that value is OMITTED from every
