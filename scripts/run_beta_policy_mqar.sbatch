@@ -249,5 +249,21 @@ else:
           f"reporting any ordering as a finding.")
 print(f"\nrun_root: {root}")
 PY
+
+##############################################################################
+echo "############################################################"
+echo "### did the gate try and fail, or never try?"
+echo "############################################################"
+# Run HERE rather than as a follow-up job, because it needs the CUDA venv
+# (Mamba2Block imports mamba_ssm) and the checkpoints are already on this
+# node's filesystem. An accuracy table cannot distinguish "the gate separated
+# facts from filler and the parameterisation threw the separation away" from
+# "the gate never moved off its 0.5 init", and those call for opposite
+# responses.
+python "$REPO_ROOT/scripts/report_beta_contrast_on_mqar.py" \
+    --kv "$KV" --gap "$GAP" --task_vocab "$TASK_VOCAB" \
+    --json_out "$RUN_ROOT/beta-contrast.json" \
+    "$RUN_ROOT"/mqar-*-seed* 2>&1 || echo "WARN: contrast diagnostic failed"
+
 date -Is
 echo "=== END ==="
