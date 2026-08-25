@@ -35,7 +35,8 @@ import math
 import pytest
 
 from experimentation.evaluation.mqar_curves import (
-    lc_area, run_statistics, summarise_policy, parse_curve)
+    lc_area, run_statistics, spans_are_comparable, summarise_policy,
+    parse_curve)
 
 pytestmark = pytest.mark.correctness
 
@@ -198,6 +199,61 @@ def test_summarise_policy_of_an_empty_cell_does_not_pretend_to_have_measured():
 # Parsing the real log format.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# The span `lc_area` is normalised by has to travel with it.
+# ---------------------------------------------------------------------------
+
+def test_lc_area_is_a_rate_over_the_observed_span_not_over_a_declared_budget():
+    """The documented convention, asserted so it cannot drift into the other one.
+
+    A run truncated at 3000 steps that reached 1.0 by 2000 and a complete
+    24000-step run that reached 1.0 by 16000 both score ~0.33 here. That is the
+    intended behaviour -- the statistic is a rate -- and it is precisely why the
+    span must be reported next to it.
+    """
+    short = [(0, 0.0), (2000, 0.0), (3000, 1.0)]
+    long = [(0, 0.0), (16000, 0.0), (24000, 1.0)]
+    assert lc_area(short) == pytest.approx(lc_area(long), abs=1e-9)
+
+
+def test_spans_are_comparable_detects_a_truncated_run_in_a_cell():
+    """The launcher is explicitly designed to survive being cut short, so
+    mismatched spans are an expected state and not a hypothetical."""
+    full = run_statistics([(0, 0.0), (24000, 1.0)], threshold=0.9)
+    cut = run_statistics([(0, 0.0), (3000, 1.0)], threshold=0.9)
+    assert spans_are_comparable([full, full])
+    assert not spans_are_comparable([full, cut])
+
+
+def test_a_no_data_run_does_not_make_spans_incomparable():
+    """A run that produced no eval has no span to disagree about; treating it as
+    a mismatch would flag every cell that had one infrastructure failure."""
+    full = run_statistics([(0, 0.0), (24000, 1.0)], threshold=0.9)
+    none = run_statistics([], threshold=0.9)
+    assert spans_are_comparable([full, none])
+
+
+def test_summarise_policy_reports_the_spans_and_whether_they_agree():
+    full = run_statistics([(0, 0.0), (24000, 1.0)], threshold=0.9)
+    cut = run_statistics([(0, 0.0), (3000, 0.2)], threshold=0.9)
+    s = summarise_policy([full, cut])
+    assert s["last_steps"] == [3000, 24000]
+    assert s["spans_comparable"] is False
+    same = summarise_policy([full, full])
+    assert same["last_steps"] == [24000]
+    assert same["spans_comparable"] is True
+
+
+def test_summarise_policy_counts_runs_that_produced_no_data_at_all():
+    """`n_no_data` distinguishes "the cell failed" from "the cell was never
+    launched". Collapsing them would report an OOM as a scientific null."""
+    ok = run_statistics([(0, 0.0), (100, 1.0)], threshold=0.9)
+    nothing = run_statistics([], threshold=0.9)
+    s = summarise_policy([ok, nothing, nothing])
+    assert s["n"] == 1
+    assert s["n_no_data"] == 2
+
+
 def test_parse_curve_reads_the_format_mqar_finetune_actually_prints():
     """The exact line `mqar_finetune.py:199` emits. A parser tested against a
     hand-written approximation is a parser that silently returns [] on a real
@@ -217,9 +273,17 @@ def test_parse_curve_returns_empty_for_a_log_with_no_evals():
 
 
 def test_parse_curve_keeps_evals_in_step_order_even_if_the_log_does_not():
-    """Two eval sequence lengths interleave in `--eval_seq_lens` mode, and a
-    resumed run appends steps that restart. Order is by step, deduplicated to
-    the LAST value seen for a step, so a resume overrides a preempted partial.
+    """A RESUMED run re-evaluates steps a preempted attempt already logged, and
+    the resumed value is the one describing the surviving checkpoint. Order is by
+    step, deduplicated to the LAST value seen.
+
+    Note on a rationale this docstring used to give and which is WRONG:
+    `--eval_seq_lens` does not produce duplicate steps here, because in that mode
+    `mqar_finetune.run_eval` prints `seq=T: acc` lines and never prints
+    `in-task accuracy` at all -- so `parse_curve` would return [] and every run
+    would report as no-data. The arm does not pass that flag. Recorded rather
+    than deleted because "the parser handles eval_seq_lens" is exactly the kind
+    of belief that gets a future arm launched with it.
     """
     text = ("  [step 500] in-task accuracy (seq=160, kv=8): 0.5000\n"
             "  [step 250] in-task accuracy (seq=160, kv=8): 0.2000\n"

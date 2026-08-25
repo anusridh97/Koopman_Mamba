@@ -94,34 +94,11 @@ export SCRATCH=/scratch/m000151-pm06/jkli
 export VENV=$SCRATCH/venvs/koopman-cuda
 
 export SMOKE="${SMOKE:-0}"
-export KV="${KV:-8}"
-export GAP="${GAP:-128}"
-export TASK_VOCAB="${TASK_VOCAB:-128}"
 if [ "$SMOKE" = "1" ]; then
-    export STEPS="${STEPS:-60}"
-    export SEEDS="${SEEDS:-42}"
-    export EVAL_EVERY="${EVAL_EVERY:-20}"
     export RUN_ROOT="${RUN_ROOT:-$SCRATCH/beta-exponent-smoke-${SLURM_JOB_ID:-manual}}"
 else
-    export STEPS="${STEPS:-24000}"
-    export SEEDS="${SEEDS:-42 43 44 45 46 47}"
-    export EVAL_EVERY="${EVAL_EVERY:-250}"
     export RUN_ROOT="${RUN_ROOT:-$SCRATCH/beta-exponent-${SLURM_JOB_ID:-manual}}"
 fi
-
-# The seven cells, as "name:policy:ridge". `name` is what the report groups on,
-# so the two ridge controls stay distinct rows from the policies they share a
-# `policy` with -- collapsing them would average a control into its own
-# treatment.
-CELLS=(
-  "learned:learned:0.01"
-  "one:one:0.01"
-  "linear:linear:0.01"
-  "key_linear_value_sqrt:key_linear_value_sqrt:0.01"
-  "key_sqrt_value_linear:key_sqrt_value_linear:0.01"
-  "learned-ridge2x:learned:0.02"
-  "linear-ridge0.5x:linear:0.005"
-)
 
 echo "=== job ${SLURM_JOB_ID:-<interactive>} on $(hostname) ==="
 date -Is
@@ -129,10 +106,10 @@ cd "$REPO_ROOT" || { echo "FATAL: no repo root"; exit 1; }
 echo "commit:  $(git rev-parse HEAD)"
 echo "dirty:   $(git status --porcelain | wc -l) modified path(s)"
 echo "smoke:   $SMOKE"
-echo "cell:    kv=$KV gap=$GAP steps=$STEPS eval_every=$EVAL_EVERY"
-echo "seeds:   $SEEDS"
 echo "run_root:$RUN_ROOT"
-printf 'cells:   %s\n' "${CELLS[@]}"
+# The budget, the seeds and the cell list are printed AFTER the module read
+# below -- they do not exist yet, and naming them here would be an unbound
+# variable under `set -u`.
 
 module purge
 module load cuda12.9/toolkit/12.9.1
@@ -154,6 +131,47 @@ import torch
 assert torch.cuda.is_available(), 'no CUDA device visible to torch'
 print('torch', torch.__version__, 'devices', torch.cuda.device_count())
 " || { echo "FATAL: torch cannot see a GPU."; exit 1; }
+
+##############################################################################
+# The design comes from `experimentation/experiments/beta_exponent_cells.py`, NOT
+# from constants in this file. That module is tested
+# (code-tests/test_beta_exponent_cells.py); a second copy here would be a second
+# chance for the arm this script launches to differ from the arm the tests check
+# -- which is exactly what happened when STEPS and SEEDS were edited here and no
+# test noticed.
+#
+# Read AFTER the venv is activated, because before that `python` is whatever the
+# login environment happens to expose.
+##############################################################################
+PLAN=$(SMOKE="$SMOKE" python - <<'PYPLAN'
+import os, sys
+sys.path.insert(0, os.environ["REPO_ROOT"])
+from experimentation.experiments.beta_exponent_cells import (
+    CELLS, EVAL_EVERY, GAP, KV, SEEDS, STEPS, TASK_VOCAB)
+smoke = os.environ.get("SMOKE") == "1"
+print(f"MOD_STEPS={60 if smoke else STEPS}")
+print(f"MOD_SEEDS=\"{'42' if smoke else ' '.join(str(s) for s in SEEDS)}\"")
+print(f"MOD_EVAL_EVERY={20 if smoke else EVAL_EVERY}")
+print(f"MOD_KV={KV}")
+print(f"MOD_GAP={GAP}")
+print(f"MOD_TASK_VOCAB={TASK_VOCAB}")
+print("CELL_LINES=\"" + "\n".join(
+    f"{c.name}:{c.policy}:{c.ridge}" for c in CELLS) + "\"")
+PYPLAN
+) || { echo "FATAL: cannot read the design from beta_exponent_cells.py"; exit 1; }
+eval "$PLAN"
+export STEPS="${STEPS:-$MOD_STEPS}"
+export SEEDS="${SEEDS:-$MOD_SEEDS}"
+export EVAL_EVERY="${EVAL_EVERY:-$MOD_EVAL_EVERY}"
+export KV="${KV:-$MOD_KV}"
+export GAP="${GAP:-$MOD_GAP}"
+export TASK_VOCAB="${TASK_VOCAB:-$MOD_TASK_VOCAB}"
+mapfile -t CELLS <<< "$CELL_LINES"
+[ "${#CELLS[@]}" -ge 5 ] || { echo "FATAL: only ${#CELLS[@]} cell(s) read"; exit 1; }
+echo "cell:    kv=$KV gap=$GAP steps=$STEPS eval_every=$EVAL_EVERY"
+echo "seeds:   $SEEDS"
+printf 'cells:   %s\n' "${CELLS[@]}"
+echo "save_steps: $(( STEPS / 4 )) (quarters of $STEPS)"
 
 mkdir -p "$RUN_ROOT" || { echo "FATAL: cannot create $RUN_ROOT"; exit 1; }
 
@@ -267,7 +285,6 @@ echo "############################################################"
 # delta -- the primary discriminator -- can only be measured on a checkpoint that
 # exists. A run killed at 90% of the walltime with save_steps == STEPS
 # contributes an accuracy curve and no mechanism measurement at all.
-echo "save_steps: $(( STEPS / 4 )) (quarters of $STEPS)"
 
 declare -a PIDS=()
 declare -a TAGS=()
@@ -442,7 +459,7 @@ echo "############################################################"
 python "$REPO_ROOT/scripts/report_beta_contrast_on_mqar.py" \
     --kv "$KV" --gap "$GAP" --task_vocab "$TASK_VOCAB" \
     --json_out "$RUN_ROOT/beta-contrast.json" \
-    "$RUN_ROOT"/mqar-*-seed* 2>&1 || echo "WARN: contrast diagnostic failed"
+    "$RUN_ROOT"/mqar-*-seed[0-9]*/ 2>&1 || echo "WARN: contrast diagnostic failed"
 
 echo
 echo "run_root: $RUN_ROOT"

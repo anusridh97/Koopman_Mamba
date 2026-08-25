@@ -39,7 +39,11 @@ from koopman_lm.models.koopman_lm import KoopmanLM
 from koopman_lm.models.recurrent_state import SKAState, PrefixSKAState  # noqa: F401 (re-exported)
 from koopman_lm.modules.seq.mamba import Mamba2Block
 from koopman_lm.modules.seq.ska_block import SKABlock, MambaSKAParallelBlock
-from koopman_lm.kernels.chunk_stats import symmetric_key_value, causal_normalize
+# `symmetric_key_value` is deliberately NOT imported here. `_proj_norm` goes
+# through `ska._weight_key_value`, which dispatches on the policy; an unused
+# import of the sqrt-only helper is an invitation to the exact drift this
+# file's header documents at length.
+from koopman_lm.kernels.chunk_stats import causal_normalize
 from koopman_lm.kernels.ska_operator import ska_decode_whitened
 from koopman_lm.kernels.prefix_scan import (
     _advance_whitened_state,

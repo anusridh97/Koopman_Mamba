@@ -21,9 +21,12 @@ This file adds the two mixed cells that complete the square:
 
 with `one` (key = z, value = v) retained as the no-gate control.
 
-`head_scalar` is deliberately NOT extended into this decomposition. It measured
-worst on both prior arms (0/3 grokked on MQAR; +4.50e-3 on held-out LM), and
-seeds spent re-litigating it are seeds not spent on the confirmation wave.
+`head_scalar` is deliberately NOT extended into this decomposition: seeds spent
+re-litigating it are seeds not spent on the confirmation wave. Note that the
+usual justification -- "0/3 grokked on MQAR" -- is job 446106 at ~4000 steps, and
+job 446145 groks it at step 12000 with an SKA ablation delta of +0.9746. So the
+exclusion is a budget decision, not a finding about the policy. It remains a
+fully supported policy in the module; only the arm omits it.
 
 ## The mathematical claim these tests are here to VERIFY, not assume
 
@@ -193,13 +196,64 @@ def test_both_mixed_cells_are_declared_in_both_policy_lists():
     assert BETA_POLICIES == CONFIG_BETA_POLICIES
 
 
-def test_the_two_by_two_is_complete_and_head_scalar_is_not_in_it():
-    """The design claim, as an assertion: every (key, value) exponent pair in
-    {sqrt, linear}^2 is reachable, and the 0/3-grokking cell is not part of the
-    decomposition."""
-    pairs = {EXPONENTS[p] for p in EXPONENTS if p != "one"}
-    assert pairs == {(0.5, 0.5), (1.0, 1.0), (1.0, 0.5), (0.5, 1.0)}
-    assert "head_scalar" not in EXPONENTS
+def test_the_two_by_two_is_complete_in_the_PRODUCTION_exponent_table():
+    """The design claim, read off `ska.BETA_EXPONENTS` rather than off this
+    file's own `EXPONENTS`.
+
+    An earlier version of this test asserted properties of `EXPONENTS`, a
+    constant defined thirty lines above it -- so it passed unchanged if the
+    production table were wrong, or if both mixed cells were deleted. That is a
+    test of a literal, not of the code.
+    """
+    from koopman_lm.modules.seq.ska import BETA_EXPONENTS
+    gated = {p: BETA_EXPONENTS[p] for p in BETA_EXPONENTS if p != "one"}
+    # Every corner of {sqrt, linear} x {sqrt, linear} is reachable in production.
+    assert set(gated.values()) == {(0.5, 0.5), (1.0, 1.0), (1.0, 0.5), (0.5, 1.0)}
+    # ... and each mixed corner is reachable by EXACTLY ONE policy, so a result
+    # attributes to a named cell rather than to a set of aliases.
+    for corner in ((1.0, 0.5), (0.5, 1.0)):
+        owners = [p for p, e in gated.items() if e == corner]
+        assert len(owners) == 1, f"{corner} has owners {owners}"
+    assert BETA_EXPONENTS["key_linear_value_sqrt"] == (1.0, 0.5)
+    assert BETA_EXPONENTS["key_sqrt_value_linear"] == (0.5, 1.0)
+    # The production table must cover every declared policy, or a legal config
+    # value would KeyError inside `_weight_key_value` on a GPU.
+    assert set(BETA_EXPONENTS) == set(BETA_POLICIES)
+
+
+def test_head_scalar_is_excluded_from_the_ARM_not_from_the_module():
+    """The exclusion is a design decision about seed budget, not a claim that the
+    policy is illegal. So `head_scalar` must remain a working policy in the
+    module while being absent from the arm's cell list -- and the assertion
+    belongs against the cell list, which is where the decision lives.
+    """
+    from experimentation.experiments.beta_exponent_cells import CELLS
+    assert "head_scalar" in BETA_POLICIES, (
+        "head_scalar is excluded from the arm, not removed from the repo")
+    assert all(c.policy != "head_scalar" for c in CELLS)
+
+
+def test_this_files_exponent_table_agrees_with_the_production_one():
+    """`EXPONENTS` is a readable restatement of the design, used to parametrise
+    the tests below. It must not be allowed to drift from what the module does --
+    a test fixture that disagrees with production tests the fixture.
+
+    `one` is the one deliberate difference and it is recorded as such: production
+    maps it to (0.5, 0.5) because beta == 1 makes every exponent agree, while
+    this file writes (0.0, 0.0) to say "no weighting at all". The equivalence is
+    asserted rather than assumed.
+    """
+    from koopman_lm.modules.seq.ska import BETA_EXPONENTS
+    for policy, pair in EXPONENTS.items():
+        if policy == "one":
+            assert BETA_EXPONENTS["one"] == (0.5, 0.5)
+            mod = _module("one")
+            beta = mod._resolve_beta(_hidden())
+            assert torch.all(beta == 1.0), (
+                "the (0.0,0.0) vs (0.5,0.5) discrepancy is only harmless while "
+                "beta is identically 1")
+            continue
+        assert BETA_EXPONENTS[policy] == pair, policy
 
 
 @pytest.mark.parametrize("policy,key_exp,val_exp",

@@ -1,196 +1,196 @@
-"""The exponent arm's pre-flight gates, run as code rather than trusted.
+"""The exponent arm's launchers, checked against the design they claim to run.
 
-`scripts/run_beta_exponent_mqar.sbatch` embeds a python block that refuses to
-launch a cell whose resolved config is wrong. The task brief requires that to be
-"a gate, not a comment", and a gate nobody executes on the CPU side is a comment
-with an `exit 1` in it: its only consumer is Slurm, so a mistake in it surfaces
-after the queue wait, on the job whose runs are the experiment.
+## The failure this file exists to prevent
 
-So this file EXTRACTS that block from the sbatch and runs it, once with the real
-cell list (must pass) and once per mutation that should make it fail. The
-mutations are the point -- a gate that passes on good input proves nothing about
-whether it would catch bad input.
+An earlier version of this file extracted the gate block from
+`run_beta_exponent_mqar.sbatch` and drove it through mutations -- good -- but it
+ALSO hardcoded its own copy of the cell list. So the assertion "7 cells, 7
+distinct configs" said nothing about the arm the sbatch would launch: adding an
+eighth cell, or a duplicate, or a typo'd policy to the sbatch's own `CELLS=( … )`
+left every test passing. That was not hypothetical; `STEPS` and `SEEDS` were
+edited in that file and no test noticed.
 
-Extraction rather than a second copy of the checks, deliberately: two copies of a
-gate are two chances for the copy that runs on the login node to disagree with
-the copy that runs on the GPU, and the one that matters is the one in the sbatch.
-If the marker this file greps for ever moves, the test errors loudly rather than
-silently checking nothing.
+The fix was to delete the duplication rather than test around it. Both launchers
+now read `experimentation/experiments/beta_exponent_cells.py`, which is tested
+directly in `test_beta_exponent_cells.py` -- gates, cell list, budget and
+array-index map. What is left for this file is the part that module cannot check:
+**that the shell scripts actually go through it, and that the preparer CLI works
+end to end.**
 
-## The four gates, and what each one is protecting
-
-  1. **Route.** `mqar_finetune`'s default `--model_size 50m` is prefix_scan and
-     table2's default `1m` is CHUNKED. On a chunked route `beta_proj.bias`
-     gradient cosine is ~0.00, so a beta comparison there measures a gate that
-     receives no usable gradient -- it would return numbers, and they would mean
-     nothing.
-  2. **gamma == 1, K == 1.** gamma > 1 could rescue a weak configuration by
-     amplification, which confounds function with scale.
-  3. **Ridge.** The ridge-matched control is the arm's mandatory confound
-     control. A control that silently ran at the base ridge would be a duplicate
-     of its own treatment, and the arm would report "ridge does not explain it"
-     having never varied ridge.
-  4. **The cells exist.** A checkout predating the exponent decomposition would
-     run a 5-cell arm and the log would call it 7.
+A test that greps a shell script is a weak test. It is the right strength here:
+the strong assertions live against the module, and the only remaining risk is a
+launcher that stops consulting it.
 """
 from __future__ import annotations
 
+import json
 import os
-import pathlib
+import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-SBATCH = REPO / "scripts" / "run_beta_exponent_mqar.sbatch"
+REPO = Path(__file__).resolve().parents[1]
+WHOLE_NODE = REPO / "scripts" / "run_beta_exponent_mqar.sbatch"
+ARRAY = REPO / "scripts" / "run_beta_exponent_array.sbatch"
+PREPARE = REPO / "scripts" / "prepare_beta_exponent_arm.py"
 
 pytestmark = pytest.mark.correctness
 
-#: The line the gate block starts after. Kept as a constant so a rename gives a
-#: clear failure here instead of a silently empty extraction.
-_MARKER = "python - <<'PY' || { echo \"FATAL: pre-flight gate FAILED"
 
-#: The arm's real cells, in the launcher's `name:policy:ridge` encoding.
-CELLS = "\n".join([
-    "learned:learned:0.01",
-    "one:one:0.01",
-    "linear:linear:0.01",
-    "key_linear_value_sqrt:key_linear_value_sqrt:0.01",
-    "key_sqrt_value_linear:key_sqrt_value_linear:0.01",
-    "learned-ridge2x:learned:0.02",
-    "linear-ridge0.5x:linear:0.005",
-])
-
-
-def _gate_source() -> str:
-    text = SBATCH.read_text()
-    assert _MARKER in text, (
-        f"the gate block's marker moved; this test would otherwise extract "
-        f"nothing and pass. Looked for {_MARKER!r} in {SBATCH}")
-    body = text[text.index("\n", text.index(_MARKER)) + 1:]
-    end = body.index("\nPY\n")
-    src = body[:end]
-    assert "SystemExit(1)" in src, "the extracted block does not exit nonzero"
-    return src
-
-
-def _run_gate(src: str, cells: str, tmp_path) -> subprocess.CompletedProcess:
-    script = tmp_path / "gate.py"
-    script.write_text(src)
-    env = dict(os.environ)
-    env.update(REPO_ROOT=str(REPO), RUN_ROOT=str(tmp_path),
-               CELL_SPEC=cells, PYTHONPATH=str(REPO))
-    return subprocess.run([sys.executable, str(script)], env=env,
-                          capture_output=True, text=True, timeout=600)
+def _text(p: Path) -> str:
+    assert p.exists(), f"{p} is missing"
+    return p.read_text()
 
 
 # ---------------------------------------------------------------------------
-# The gate passes on the arm it is going to launch.
+# Neither launcher may carry its own copy of the design.
 # ---------------------------------------------------------------------------
 
-def test_the_real_cell_list_passes_every_gate(tmp_path):
-    r = _run_gate(_gate_source(), CELLS, tmp_path)
-    assert r.returncode == 0, f"gate rejected the real arm:\n{r.stdout}\n{r.stderr}"
-    assert "all gates passed: 7 cells, 7 distinct configs" in r.stdout
+@pytest.mark.parametrize("script", [WHOLE_NODE, ARRAY], ids=lambda p: p.name)
+def test_the_launcher_reads_the_design_from_the_tested_module(script):
+    t = _text(script)
+    assert "beta_exponent_cells" in t, (
+        f"{script.name} does not consult beta_exponent_cells.py, so nothing "
+        f"ties the arm it launches to the arm the tests check")
 
 
-def test_every_cell_resolves_to_an_exact_route_and_gamma_one(tmp_path):
-    """Read off the gate's own report, so the arm's route/gamma/K claim is
-    checked against the resolved config rather than against this file's belief
-    about `configs/runs/proxy-256x17.yaml`."""
-    r = _run_gate(_gate_source(), CELLS, tmp_path)
-    lines = [ln for ln in r.stdout.splitlines() if "route=" in ln]
-    assert len(lines) == 7, r.stdout
-    for ln in lines:
-        assert "route=CHUNKED" not in ln, ln
-        assert "gamma=1.0" in ln, ln
-        assert "K=1" in ln, ln
+@pytest.mark.parametrize("script", [WHOLE_NODE, ARRAY], ids=lambda p: p.name)
+def test_no_launcher_carries_a_literal_cell_list(script):
+    """The specific duplication that made the old assertions vacuous.
 
+    Scans for the SHAPE of a hardcoded cell list rather than for policy names:
+    `learned`, `linear` and `one` are ordinary English words that appear in these
+    scripts' prose ("one run per GPU", "one wave per SEED"), so a name scan is
+    all false positives. What cannot be prose is a `name:policy:ridge` triple, or
+    a bash array of them, or the two distinctive mixed-cell names.
 
-def test_the_gate_writes_a_round_tripping_model_yaml_per_cell(tmp_path):
-    """Each cell trains from a generated flat model YAML. A malformed extraction
-    has to fail on the login node, not after a GPU is claimed."""
-    r = _run_gate(_gate_source(), CELLS, tmp_path)
-    assert r.returncode == 0, r.stderr
-    written = sorted(p.name for p in tmp_path.glob("model-*.yaml"))
-    assert written == sorted([
-        "model-key_linear_value_sqrt.yaml", "model-key_sqrt_value_linear.yaml",
-        "model-learned-ridge2x.yaml", "model-learned.yaml",
-        "model-linear-ridge0.5x.yaml", "model-linear.yaml", "model-one.yaml"])
-
-
-def test_the_ridge_controls_differ_from_their_own_treatment(tmp_path):
-    """The control's whole purpose. If `learned-ridge2x` hashed the same as
-    `learned`, the arm would report "ridge does not explain it" having never
-    varied ridge."""
-    r = _run_gate(_gate_source(), CELLS, tmp_path)
-    ridges = {}
-    for ln in r.stdout.splitlines():
-        if "ridge=" not in ln:
+    Comments are skipped: the scripts explain the design at length, and the
+    python heredocs name the module they import from, which is the point.
+    """
+    offending = []
+    for line in _text(script).splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "beta_exponent_cells" in s:
             continue
-        name = ln.split()[0]
-        ridges[name] = ln.split("ridge=")[1].split()[0]
-    assert ridges["learned"] == "0.01"
-    assert ridges["learned-ridge2x"] == "0.02"
-    assert ridges["linear-ridge0.5x"] == "0.005"
+        # A literal `something:something:0.0…` triple -- the launcher's own
+        # encoding of a cell.
+        if re.search(r'["\']?\w[\w.-]*:\w[\w.-]*:0?\.\d', s):
+            offending.append(("literal cell triple", s))
+        # The mixed-cell names are not English words, so a bare occurrence in an
+        # executable line is a hardcoded cell.
+        for pol in ("key_linear_value_sqrt", "key_sqrt_value_linear"):
+            if re.search(rf'(?<![\w$"]){re.escape(pol)}(?![\w])', s):
+                offending.append((pol, s))
+    assert not offending, (
+        f"{script.name} carries a literal cell list, so it is a second copy that "
+        f"can drift from the tested module: {offending}")
+
+
+@pytest.mark.parametrize("script", [WHOLE_NODE, ARRAY], ids=lambda p: p.name)
+def test_no_launcher_hardcodes_the_step_budget_or_the_seeds(script):
+    """`STEPS` and `SEEDS` were edited in the whole-node script once with no test
+    noticing. They now come from the module, so a literal here is a regression."""
+    for line in _text(script).splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "beta_exponent_cells" in s:
+            continue
+        assert not re.search(r"STEPS\s*=\s*\$?\{?STEPS:-\s*\d", s), s
+        assert not re.search(r"SEEDS\s*=\s*\$?\{?SEEDS:-\s*\d", s), s
+
+
+def test_both_launchers_are_valid_bash():
+    for script in (WHOLE_NODE, ARRAY):
+        r = subprocess.run(["bash", "-n", str(script)], capture_output=True,
+                           text=True)
+        assert r.returncode == 0, f"{script.name}: {r.stderr}"
+
+
+def test_the_array_launcher_refuses_to_run_without_a_prepared_run_root():
+    """Defaulting RUN_ROOT would let a task write into a root nobody prepared,
+    against model YAMLs that do not exist or describe another arm."""
+    t = _text(ARRAY)
+    assert 'if [ -z "${RUN_ROOT:-}" ]' in t
+    assert "exit 1" in t.split('if [ -z "${RUN_ROOT:-}" ]')[1][:400]
+
+
+def test_the_array_launcher_resolves_its_cell_by_task_index():
+    t = _text(ARRAY)
+    assert "task_for_index" in t, (
+        "the array task must resolve its own cell from the manifest, so an index "
+        "off the end fails loudly instead of running the wrong cell")
+    assert "preflight_failures" in t, (
+        "each task must re-run the gates for its own cell; the preparer's "
+        "check does not travel with the task")
 
 
 # ---------------------------------------------------------------------------
-# The mutations. A gate that only passes proves nothing.
+# The preparer, end to end.
 # ---------------------------------------------------------------------------
 
-def test_the_gate_refuses_the_chunked_route(tmp_path):
-    """Gate 1, the one the task brief makes mandatory."""
-    src = _gate_source().replace(
-        "base = spec.model",
-        "base = dataclasses.replace(spec.model, ska_inverse_cholesky=False, "
-        "ska_prefix_scan=False, ska_exact_intrachunk=False)")
-    r = _run_gate(src, "learned:learned:0.01", tmp_path)
-    assert r.returncode != 0, "a CHUNKED route was allowed to launch"
+def _prepare(tmp_path, extra=()):
+    env = dict(os.environ, PYTHONPATH=str(REPO))
+    return subprocess.run(
+        [sys.executable, str(PREPARE), "--run_root", str(tmp_path), *extra],
+        capture_output=True, text=True, env=env, timeout=600)
+
+
+def test_the_preparer_passes_and_writes_one_yaml_per_cell(tmp_path):
+    from experimentation.experiments.beta_exponent_cells import CELLS, task_count
+    r = _prepare(tmp_path)
+    assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+    assert "all gates passed" in r.stdout
+    written = {p.name for p in tmp_path.glob("model-*.yaml")}
+    assert written == {f"model-{c.name}.yaml" for c in CELLS}
+    assert f"ARRAY_WIDTH=0-{task_count() - 1}" in r.stdout
+
+
+def test_the_preparer_writes_a_manifest_matching_the_module(tmp_path):
+    from experimentation.experiments.beta_exponent_cells import manifest
+    r = _prepare(tmp_path)
+    assert r.returncode == 0, r.stderr
+    payload = json.loads((tmp_path / "manifest.json").read_text())
+    expected = manifest()
+    assert len(payload["tasks"]) == len(expected)
+    for got, want in zip(payload["tasks"], expected):
+        assert got["index"] == want.index
+        assert got["cell"] == want.cell.name
+        assert got["seed"] == want.seed
+        assert got["run_name"] == want.run_name
+
+
+def test_the_printed_array_width_matches_the_manifest_length(tmp_path):
+    """A width that disagrees with the cell list submits tasks that either never
+    run a cell or run none. `task_for_index` raises on the latter, but the width
+    should simply be right."""
+    r = _prepare(tmp_path)
+    payload = json.loads((tmp_path / "manifest.json").read_text())
+    m = re.search(r"ARRAY_WIDTH=0-(\d+)", r.stdout)
+    assert m, r.stdout
+    assert int(m.group(1)) == len(payload["tasks"]) - 1
+
+
+def test_the_preparer_dry_run_writes_nothing(tmp_path):
+    r = _prepare(tmp_path, ["--dry_run"])
+    assert r.returncode == 0, r.stderr
+    assert list(tmp_path.glob("*")) == []
+
+
+def test_the_preparer_refuses_a_chunked_proxy(tmp_path):
+    """The gate the task brief makes mandatory, exercised through the CLI a human
+    actually types rather than through the function."""
+    import yaml
+    spec = yaml.safe_load((REPO / "configs/runs/proxy-256x17.yaml").read_text())
+    spec["model"]["ska_inverse_cholesky"] = False
+    spec["model"]["ska_prefix_scan"] = False
+    spec["model"]["ska_exact_intrachunk"] = False
+    bad = tmp_path / "chunked.yaml"
+    bad.write_text(yaml.safe_dump(spec))
+    r = _prepare(tmp_path / "out", ["--proxy", str(bad)])
+    assert r.returncode != 0, "a CHUNKED proxy was accepted"
     assert "CHUNKED" in r.stderr and "REFUSED" in r.stderr
-
-
-def test_the_gate_refuses_power_K_other_than_one(tmp_path):
-    src = _gate_source().replace(
-        "base = spec.model",
-        "base = dataclasses.replace(spec.model, ska_power_K=2)")
-    r = _run_gate(src, "learned:learned:0.01", tmp_path)
-    assert r.returncode != 0
-    assert "power_K is 2" in r.stderr
-
-
-def test_the_gate_refuses_gamma_other_than_one(tmp_path):
-    src = _gate_source().replace(
-        "base = spec.model",
-        "base = dataclasses.replace(spec.model, ska_gamma_value=1.5)")
-    r = _run_gate(src, "learned:learned:0.01", tmp_path)
-    assert r.returncode != 0
-    assert "gamma is 1.5" in r.stderr
-
-
-def test_the_gate_refuses_an_unknown_policy(tmp_path):
-    r = _run_gate(_gate_source(), "typo:sqrt_beta:0.01", tmp_path)
-    assert r.returncode != 0
-    assert "not a BETA_POLICIES member" in r.stderr
-
-
-def test_the_gate_refuses_two_cells_that_are_the_same_experiment(tmp_path):
-    """Two cells with one config_hash would claim one run directory, hence one
-    set of checkpoints, and the second would overwrite the first."""
-    r = _run_gate(_gate_source(),
-                  "a:learned:0.01\nb:learned:0.01", tmp_path)
-    assert r.returncode != 0
-    assert "share config_hash" in r.stderr
-
-
-def test_the_gate_refuses_a_checkout_without_the_new_cells(tmp_path):
-    """Gate 4. Simulated by narrowing BETA_POLICIES, which is exactly what an
-    older checkout would present."""
-    src = _gate_source().replace(
-        "from koopman_lm.config import BETA_POLICIES, config_hash, load_config",
-        "from koopman_lm.config import config_hash, load_config\n"
-        "BETA_POLICIES = frozenset({'learned', 'one', 'head_scalar', 'linear'})")
-    r = _run_gate(src, "learned:learned:0.01", tmp_path)
-    assert r.returncode != 0
-    assert "predates the exponent decomposition" in r.stderr
+    assert not (tmp_path / "out").exists() or not list(
+        (tmp_path / "out").glob("model-*.yaml")), (
+        "a refused arm must not leave model YAMLs behind for a task to find")

@@ -68,6 +68,20 @@ def parse_curve(text: str) -> List[Tuple[int, float]]:
 def lc_area(curve: Curve) -> Optional[float]:
     """Normalised area under the accuracy curve: the sample-efficiency statistic.
 
+    **Normalised by the run's OWN OBSERVED step span**, not by the declared
+    budget. That makes it a RATE -- "how much of the curve was above zero, per
+    step observed" -- and a rate is only comparable between runs whose spans
+    match. It is the right choice here because the alternative conflates two
+    different things: a run truncated by a walltime cut would score low for having
+    been cut, indistinguishable from a run that trained slowly.
+
+    The cost is that `lc_area` alone cannot be compared across a truncation, so
+    the span has to travel with it. `run_statistics` returns `first_step`,
+    `last_step` and `n_evals` for exactly that reason, and
+    `spans_are_comparable` below is the check a report must apply before
+    ranking. Reporting the number without the span is the mistake this docstring
+    exists to prevent.
+
     `None` for an empty curve. That is not the same as 0.0 -- a run that produced
     no eval is missing data, and reporting 0.0 would make an infrastructure
     failure indistinguishable from a scientific one.
@@ -87,6 +101,19 @@ def lc_area(curve: Curve) -> Optional[float]:
     for (s0, a0), (s1, a1) in zip(pts, pts[1:]):
         total += 0.5 * (a0 + a1) * (s1 - s0)
     return total / span
+
+
+def spans_are_comparable(runs: Sequence[Dict[str, object]]) -> bool:
+    """True iff every scored run in `runs` observed the same last step.
+
+    `lc_area` is normalised per run, so comparing it across runs that stopped at
+    different steps compares two different quantities. This is the guard a report
+    applies before ranking on it -- and it exists because the arm's launcher is
+    explicitly designed to survive being cut short, which is exactly the
+    situation that produces mismatched spans.
+    """
+    lasts = {r["last_step"] for r in runs if r.get("last_step") is not None}
+    return len(lasts) <= 1
 
 
 def run_statistics(curve: Curve, *,
@@ -141,6 +168,8 @@ def summarise_policy(runs: Sequence[Dict[str, object]]) -> Dict[str, object]:
     finals = [r["final_acc"] for r in scored]
     areas = [r["lc_area"] for r in scored if r["lc_area"] is not None]
     bests = [r["best_acc"] for r in scored]
+    lasts = sorted({r["last_step"] for r in scored
+                    if r.get("last_step") is not None})
     return {
         "n": len(scored),
         "n_no_data": len(runs) - len(scored),
@@ -150,4 +179,9 @@ def summarise_policy(runs: Sequence[Dict[str, object]]) -> Dict[str, object]:
         "final_acc_range": (min(finals), max(finals)) if finals else None,
         "best_acc_range": (min(bests), max(bests)) if bests else None,
         "lc_area_range": (min(areas), max(areas)) if areas else None,
+        # The span `lc_area` was normalised by, carried alongside it. Without
+        # this a truncated run's rate sits in the same column as a complete
+        # run's and nothing marks the difference.
+        "last_steps": lasts,
+        "spans_comparable": spans_are_comparable(scored),
     }

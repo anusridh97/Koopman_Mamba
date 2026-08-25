@@ -199,9 +199,17 @@ def main(argv=None) -> int:
     print(f"# ska_delta = MQAR accuracy with SKA on MINUS with SKA zeroed. "
           f"PRIMARY DISCRIMINATOR.")
     print()
+    print(f"# lc_area is normalised by each run's OWN observed span, so it is a "
+          f"RATE.")
+    print(f"# It is comparable only between runs with the same `last`. `n_ev` and "
+          f"`last` are")
+    print(f"# printed for that reason -- a truncated run's rate otherwise sits in "
+          f"the same")
+    print(f"# column as a complete run's with nothing marking the difference.")
+    print()
     hdr = (f"{'cell':>24} {'seed':>4} {'grok':>5} {'step':>6} {'lc_area':>8} "
-           f"{'final':>7} {'best':>7} {'ska_on':>7} {'ska_0':>7} "
-           f"{'ska_delta':>10} {'route':>17} {'ridge':>7}")
+           f"{'n_ev':>5} {'last':>7} {'final':>7} {'best':>7} {'ska_on':>7} "
+           f"{'ska_0':>7} {'ska_delta':>10} {'route':>17} {'ridge':>7}")
     print(hdr)
     print("-" * len(hdr))
 
@@ -217,6 +225,7 @@ def main(argv=None) -> int:
     for r in sorted(rows, key=lambda r: (r["cell"], r["seed"])):
         print(f"{r['cell']:>24} {r['seed']:>4} {fmt(r['grokked'], 5)} "
               f"{fmt(r['grok_step'], 6)} {fmt(r['lc_area'], 8)} "
+              f"{fmt(r['n_evals'], 5)} {fmt(r['last_step'], 7)} "
               f"{fmt(r['final_acc'], 7)} {fmt(r['best_acc'], 7)} "
               f"{fmt(r.get('ska_acc_on'), 7)} {fmt(r.get('ska_acc_zeroed'), 7)} "
               f"{fmt(r.get('ska_delta_acc'), 10)} "
@@ -232,29 +241,82 @@ def main(argv=None) -> int:
           "straddling")
     print("# grokking, a mean over seeds is a grok RATE dressed as an accuracy.")
     print()
-    print(f"{'cell':>24} {'n':>3} {'grok':>6} {'cens':>5} {'grok_steps':>20} "
-          f"{'lc_area range':>22} {'ska_delta range':>22}")
+    print(f"{'cell':>24} {'n':>3} {'grok':>6} {'cens':>5} {'nodata':>6} "
+          f"{'grok_steps':>20} {'lc_area range':>22} {'ska_delta range':>22} "
+          f"{'spans':>18}")
+    incomparable = []
     for cell in sorted(by_cell):
         runs = by_cell[cell]
         s = summarise_policy(runs)
+        # NaN-safe: eval_mqar returns nan on an empty label mask, and a nan in
+        # min()/max() would silently poison the printed range.
         deltas = [r["ska_delta_acc"] for r in runs
-                  if r.get("ska_delta_acc") is not None]
+                  if r.get("ska_delta_acc") is not None
+                  and r["ska_delta_acc"] == r["ska_delta_acc"]]
         lc = s["lc_area_range"]
+        if not s["spans_comparable"]:
+            incomparable.append(cell)
         print(f"{cell:>24} {s['n']:>3} {s['n_grokked']:>2}/{s['n']:<3} "
-              f"{s['n_censored']:>5} {str(s['grok_steps']):>20} "
+              f"{s['n_censored']:>5} {s['n_no_data']:>6} "
+              f"{str(s['grok_steps']):>20} "
               f"{(f'{lc[0]:.4f} .. {lc[1]:.4f}' if lc else '-'):>22} "
-              f"{(f'{min(deltas):+.4f} .. {max(deltas):+.4f}' if deltas else '-'):>22}")
+              f"{(f'{min(deltas):+.4f} .. {max(deltas):+.4f}' if deltas else '-'):>22} "
+              f"{str(s['last_steps'])[:18]:>18}")
 
     # --- gates ---------------------------------------------------------------
+    # These set `rc`, they do not merely print. A caller wrapping this in
+    # `|| echo WARN` cannot see a message.
     print()
+    rc = 0
+
+    if incomparable:
+        print(f"WARNING: lc_area spans differ WITHIN these cells, so their "
+              f"lc_area values are not mutually comparable: {incomparable}")
+        print(f"         (expected if the allocation was cut short; extend or "
+              f"drop the short runs before ranking)")
+
     bad_route = sorted({r["cell"] for r in rows if r.get("route") == "CHUNKED"})
     if bad_route:
-        print(f"REFUSED: cells on the CHUNKED route -- their beta numbers are "
-              f"not evidence: {bad_route}")
-    policies = {r["cell"]: r.get("policy") for r in rows if r.get("policy")}
+        print(f"REFUSED: cells on the CHUNKED route -- on a chunked route "
+              f"beta_proj.bias gradient cosine is ~0.00, so their beta numbers "
+              f"are not evidence: {bad_route}")
+        rc = 3
+
+    # Keyed by RUN, not by cell. Keyed by cell, two seeds that resolved
+    # DIFFERENT policies -- precisely the failure this block exists to catch --
+    # would silently collapse to whichever row was last.
+    policies = {r["run"]: r.get("policy") for r in rows if r.get("policy")}
+    per_cell = defaultdict(set)
+    for r in rows:
+        if r.get("policy"):
+            per_cell[r["cell"]].add(r["policy"])
+    mixed = {c: sorted(v) for c, v in per_cell.items() if len(v) > 1}
+    if mixed:
+        print(f"REFUSED: these cells resolved MORE THAN ONE beta policy across "
+              f"their seeds, so the cell is not one experiment: {mixed}")
+        rc = 3
     if policies:
         print(f"resolved policies from checkpoints: "
               f"{json.dumps(policies, sort_keys=True)}")
+
+    # A model with no SKA blocks gives ska_delta_acc == 0.0 with status "ok" --
+    # the primary discriminator would read "the gate is decoration" for a model
+    # that has no gate. `ablate_ska` yields the blocks it touched so this is
+    # checkable; check it.
+    no_ska = [r["run"] for r in rows if r.get("n_ska_blocks") == 0]
+    if no_ska:
+        print(f"REFUSED: these runs have ZERO SKA blocks, so their "
+              f"ska_delta_acc is 0.0 by construction and is not a measurement: "
+              f"{no_ska}")
+        rc = 3
+
+    nan_delta = [r["run"] for r in rows
+                 if r.get("ska_delta_acc") is not None
+                 and r["ska_delta_acc"] != r["ska_delta_acc"]]
+    if nan_delta:
+        print(f"NOTE: ska_delta_acc is NaN for {nan_delta} -- eval_mqar returns "
+              f"NaN on an empty label mask. Excluded from the printed ranges.")
+
     no_ckpt = [r["run"] for r in rows if r.get("ska_status") == "no_checkpoint"]
     if no_ckpt:
         print(f"NOTE: no checkpoint (ablation not measured) for {no_ckpt}")
@@ -272,7 +334,7 @@ def main(argv=None) -> int:
              "cells": {c: summarise_policy(by_cell[c]) for c in by_cell}},
             indent=2, default=str))
         print(f"\nwrote {args.json_out}")
-    return 0
+    return rc
 
 
 if __name__ == "__main__":
