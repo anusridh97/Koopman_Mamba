@@ -39,8 +39,17 @@ pytestmark = pytest.mark.correctness
 
 #: CLIs whose flags we can check. Each must expose `parse_args`, and must import
 #: without optional dependencies -- `sweep.search` deliberately does.
+#:
+#: `experiments.mqar_finetune` is here because two committed launchers drive it
+#: (`run_beta_policy_mqar.sbatch`, `run_beta_exponent_mqar.sbatch`) and it was
+#: previously unchecked: a flag typo in either would have surfaced as
+#: "unrecognized arguments" per run, after the queue wait and after a GPU was
+#: claimed, on a job whose runs are the experiment. It imports cleanly in the CPU
+#: venv (torch only; the mamba_ssm import is inside the model builders), which is
+#: what makes it checkable at all.
 CHECKABLE = ("experimentation.run", "experimentation.sweep",
-             "experimentation.sweep.search")
+             "experimentation.sweep.search",
+             "experimentation.experiments.mqar_finetune")
 
 
 def _scripts():
@@ -55,7 +64,15 @@ def _accepted_flags(module_name):
     long option can be split across lines by argparse's formatter, which would
     make a flag look absent.
     """
-    module = importlib.import_module(module_name + ".__main__")
+    # `python -m pkg` runs `pkg.__main__`; `python -m pkg.mod` runs `pkg.mod`
+    # itself. Both spellings appear in the launchers, so try the package form
+    # first and fall back to the module -- guessing one would silently return
+    # None for the other, and None means "unchecked", which is the state this
+    # whole file exists to eliminate.
+    try:
+        module = importlib.import_module(module_name + ".__main__")
+    except ModuleNotFoundError:
+        module = importlib.import_module(module_name)
     captured = {}
 
     real_parse = argparse.ArgumentParser.parse_args
