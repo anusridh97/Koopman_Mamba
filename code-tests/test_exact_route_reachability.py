@@ -26,6 +26,23 @@ those four there is no exact route that could train them at their current rank -
 which makes "flip the ladder to invchol" unavailable as a uniform action, and
 makes the ladder's RANK, not its route flag, the upstream question.
 
+And a FOURTH gate, which binds even on the four that could take the flip and is
+independent of rank and memory: **`ska_inverse_cholesky` is inside every identity
+hash.** It is not a newly added field, so `IDENTITY_TRANSPARENT_DEFAULTS` cannot
+absorb it -- that registry exists for fields added AFTER identity was pinned, and
+entering an already-hashed field into it would delete a hashed key from the
+payload and renumber everything, including `4m-golden`'s pinned
+`run_id 2e63f16e`. Nor could a transparent default help anyway: the mechanism's
+one stated requirement is that a NON-default value must move the hash. So flipping
+the flag on any config changes that config's `config_hash`, `group_id` and
+`run_id`, breaking `identity_baseline.json` -- which
+`test_identity_baseline.py` says to regenerate "ONLY when an intentional change to
+run identity has been decided and the old->new mapping recorded". Measured, not
+argued: see `ROUTE_FLIP_RENUMBERS` below.
+
+That is why nothing in this branch flips a route. Whether finished science may be
+renumbered is not a decision a reachability test gets to make.
+
 Pinned as data because it is exactly the kind of claim that goes stale silently: a
 change to `_RANK`, to the assert's bound, or to any config's `ska_rank` moves it,
 and the recommendation built on top of it would still read as though it held.
@@ -186,6 +203,54 @@ def test_only_1m_is_cheap_enough_that_nothing_has_to_be_traded():
                if EXPECTED[n][0]), "every invchol-legal config needs a measurement"
     assert not [n for n in CHUNKED if not EXPECTED[n][0] and n in MEASURED_INVCHOL], (
         "a config the assert refuses cannot have an invchol measurement")
+
+
+# ------------------- the gate that binds even where the flip WOULD be cheap ----
+
+#: MEASURED: `config_hash` today (which must equal identity_baseline.json) and
+#: what it becomes with `ska_inverse_cholesky=True`. First 8 hex of each.
+ROUTE_FLIP_RENUMBERS = {
+    "1m":         ("10f09f4b", "f5507042"),
+    "180m_dense": ("3f89d0f3", "41c412b9"),
+    "370m":       ("a214f6a7", "45eee72b"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ROUTE_FLIP_RENUMBERS))
+def test_flipping_the_route_renumbers_the_config(name):
+    """The constraint that makes this a decision rather than a cleanup.
+
+    `ska_inverse_cholesky` is a plain hashed field, so flipping it moves
+    `config_hash` -- and therefore `group_id` and `run_id`, which name every run
+    directory and stamp every checkpoint. `identity_baseline.json` pins all
+    eleven registry hashes, and `test_identity_baseline.py`'s docstring says to
+    regenerate it "ONLY when an intentional change to run identity has been
+    decided and the old->new mapping recorded -- never to make this go green".
+
+    `IDENTITY_TRANSPARENT_DEFAULTS` is not an escape here, twice over: it is for
+    fields added AFTER identity was pinned (this one predates it, so entering it
+    would DELETE an already-hashed key and renumber everything, `4m-golden`'s
+    2e63f16e included), and its one stated requirement is that a non-default
+    value must move the hash -- which is exactly what a flip is.
+    """
+    import dataclasses
+    import json
+    from koopman_lm.config import config_hash
+
+    c = _cfg(name)
+    assert not c.ska_inverse_cholesky, f"{name} is no longer on the chunked route"
+    now, expect_flipped = ROUTE_FLIP_RENUMBERS[name]
+    baseline = json.loads((REPO / "code-tests/identity_baseline.json").read_text())
+
+    assert config_hash(c)[:8] == now
+    assert baseline["config_hash"][name].startswith(now), (
+        "this file's 'current' hash must be the pinned one, or it is measuring "
+        "something other than the committed identity")
+    flipped = config_hash(dataclasses.replace(c, ska_inverse_cholesky=True))
+    assert flipped[:8] == expect_flipped
+    assert flipped != config_hash(c), (
+        "if this ever passes, ska_inverse_cholesky has left the identity payload "
+        "and the whole argument above needs redoing")
 
 
 def test_the_rank_cap_is_enforced_behaviourally_not_just_in_prose():
