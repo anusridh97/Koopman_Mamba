@@ -118,6 +118,25 @@ def train_cell(spec_path: Path, run_dir: Path, eval_dir: str,
     return run_dir / "final" / "model.pt"
 
 
+def _read_quick_eval(run_dir: Path) -> dict:
+    """train.py's own --eval_on_final score, at run_dir/eval/<ckpt>/quick_eval.json.
+
+    Read INDEPENDENTLY of the cross-route pass below, and reported alongside it.
+    Two reasons: it is the number the search machinery itself would have used, so
+    agreeing with it validates that the cross-route harness loads the same model;
+    and it survives a failure in the cross-route step, which is the one part of
+    this script that has never run.
+    """
+    hits = sorted((run_dir / "eval").rglob("quick_eval.json"))
+    if not hits:
+        return {"error": f"no quick_eval.json under {run_dir / 'eval'}"}
+    doc = json.loads(hits[-1].read_text())
+    m = doc.get("metrics", doc)
+    return {"path": str(hits[-1]),
+            "loss": m.get("full", {}).get("loss"),
+            "ska_loss_delta": m.get("ska_ablation", {}).get("loss_delta")}
+
+
 # ------------------------------------------------- cross-route evaluation ----
 
 def eval_both_routes(ckpt: Path, eval_dir: str, batch_size: int,
@@ -134,8 +153,18 @@ def eval_both_routes(ckpt: Path, eval_dir: str, batch_size: int,
     meta = torch.load(str(ckpt).replace("model.pt", "meta.pt"),
                       map_location="cpu", weights_only=False)
     cfg = meta["cfg"]
+    # train.py::_save_checkpoint writes `model.state_dict()` RAW -- not wrapped
+    # in a {"model": ...} envelope -- so this is already the tensor dict. Checked
+    # against that writer rather than guessed, because `state.get("model", state)`
+    # would have "worked" either way and quietly loaded nothing if it were
+    # wrapped differently.
     state = torch.load(ckpt, map_location="cpu", weights_only=False)
-    state = state.get("model", state)
+    if "model" in state and isinstance(state["model"], dict):
+        state = state["model"]
+    # A DDP-wrapped save would carry `module.` prefixes; the proxy spec is
+    # ddp: false / gpus: 1, but strip them rather than silently load zero keys.
+    if any(k.startswith("module.") for k in state):
+        state = {k[len("module."):]: v for k, v in state.items()}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     out = {}
@@ -145,7 +174,11 @@ def eval_both_routes(ckpt: Path, eval_dir: str, batch_size: int,
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             model = KoopmanLM(vcfg)
-        missing, unexpected = model.load_state_dict(state, strict=False)
+        # STRICT. The four routes share every parameter -- that is the premise
+        # this whole comparison rests on -- so a missing key means the premise is
+        # wrong, and a silently zero-loaded model would report a random-init loss
+        # that looks like a plausible number. Fail here instead.
+        missing, unexpected = model.load_state_dict(state, strict=True)
         model = model.to(device).eval()
         m = run_quick_eval(model, device, data_dir=eval_dir,
                            max_seq_len=min(vcfg.max_seq_len, 1024),
@@ -201,16 +234,21 @@ def main(argv=None):
                                   args.eval_data_dir, root / f"{tag}.yaml",
                                   str(root))
             run_dir = root / tag
+            rec = {}
             try:
                 ckpt = train_cell(spec_p, run_dir, args.eval_data_dir,
                                   args.logging_steps)
-                ev = eval_both_routes(ckpt, args.eval_data_dir,
-                                      args.eval_batch_size, args.eval_batches)
-                results["cells"][name]["trials"][str(seed)] = ev
+                # train.py's OWN --eval_on_final score, read first. It is the
+                # primary measurement and it is already on disk, so a failure in
+                # the cross-route step below must not cost us the trial.
+                rec["train_side_quick_eval"] = _read_quick_eval(run_dir)
+                rec.update(eval_both_routes(ckpt, args.eval_data_dir,
+                                            args.eval_batch_size,
+                                            args.eval_batches))
             except Exception as exc:                        # noqa: BLE001
                 print(f"    FAILED: {type(exc).__name__}: {exc}", flush=True)
-                results["cells"][name]["trials"][str(seed)] = {
-                    "error": f"{type(exc).__name__}: {exc}"}
+                rec["error"] = f"{type(exc).__name__}: {exc}"
+            results["cells"][name]["trials"][str(seed)] = rec
             if args.json:
                 Path(args.json).write_text(json.dumps(results, indent=2) + "\n")
 
@@ -221,10 +259,14 @@ def main(argv=None):
     for name, rec in results["cells"].items():
         ds, ls = [], []
         for t in rec["trials"].values():
-            if "error" in t:
+            # Prefer the cross-route harness's own number; fall back to
+            # train.py's --eval_on_final score so a cross-route failure still
+            # yields the ablation delta, which is the primary quantity here.
+            src = t.get("as_trained") or t.get("train_side_quick_eval") or {}
+            if src.get("ska_loss_delta") is None or src.get("loss") is None:
                 continue
-            ds.append(t["as_trained"]["ska_loss_delta"])
-            ls.append(t["as_trained"]["loss"])
+            ds.append(src["ska_loss_delta"])
+            ls.append(src["loss"])
         if not ds:
             print(f"{name:16s}  0   (all trials failed)")
             continue
