@@ -105,10 +105,16 @@ fi
 if [ "$PHASE" = "2" ] || [ "$PHASE" = "both" ]; then
     echo
     echo "############ PHASE 2: paired ablation delta per route ############"
+    # CELLS/SEEDS/MAX_STEPS are overridable so the three cells can go out as
+    # three short concurrent jobs instead of one long serial one. A 3.5h request
+    # sat behind (Priority) for an estimated 4 hours; a ~1.25h request backfills.
+    # The driver writes its JSON after every trial, so a preemption or a timeout
+    # still leaves every completed trial readable.
     python scripts/measure_chunked_route_ablation.py \
         --run_root "$OUT_ROOT/ablation" \
         --eval_data_dir "$SCRATCH/fineweb_small_val" \
-        --max_steps 1500 --seeds 42,43,44 \
+        --max_steps "${MAX_STEPS:-1500}" --seeds "${SEEDS:-42,43,44}" \
+        --cells "${CELLS:-exact-invchol,chunked-cs64,chunked-cs16}" \
         --json "$OUT_ROOT/route_ablation.json"
     P2=$?
     echo "STATUS phase2=$P2"
