@@ -140,6 +140,42 @@
 # report a loss rather than failing. That question is settled by the bound
 # instead, which is a proof and not a five-seed comparison.
 #
+# ## What IS confounded, stated so a positive result is not over-read
+#
+# "No contrast is confounded with a change of kernel" is true and it is not the
+# same as "nothing is confounded". At initialisation every policy sits at
+# beta = sigmoid(0) = 0.5, so the KEY WEIGHT differs across cells and therefore
+# so does the key Gram relative to the fixed `ska_ridge: 0.01`:
+#
+#     policy        key weight w   G scale w^2   effective ridge (0.01 / w^2)
+#     one                  1.000         1.00                        0.010
+#     learned              0.707         0.50                        0.020
+#     head_scalar          0.707         0.50                        0.020
+#     linear               0.500         0.25                        0.040
+#
+# So learned-vs-one and learned-vs-linear each move the Gram-to-ridge ratio by
+# 2-4x at step 0, and the value magnitude entering `out_proj` by up to 2x
+# (heavily damped by `ska_layerscale_init: 0.01`). The gate can learn to
+# compensate, and pinning one ridge across cells is the right control choice --
+# holding the ridge fixed is what makes the OPERATOR comparable -- but a reader
+# should know the initial conditions are not identical.
+#
+# Two things limit how much this can explain. First, the anticipated outcome is
+# a null, and an initial-scale difference cannot manufacture a null. Second, the
+# effective ridge is NOT MONOTONE in the ordering the retrieval arm produced:
+# job 446102 has `one` (effective ridge 0.010) and `linear` (0.040) both at
+# 1.0000 while `learned` and `head_scalar` (both 0.020) sit at 0.36 and 0.33.
+# The two winners sit at OPPOSITE extremes of effective ridge and the two losers
+# are together in the middle, so no monotone function of the initial Gram-to-
+# ridge ratio orders those four results. That is an argument against the
+# confound carrying the retrieval effect; it is not an argument that the
+# confound is absent.
+#
+# The clean way to close it would be a fifth and sixth cell pinning `ska_ridge`
+# to 0.005 and 0.04 at `learned`, so the ridge axis is measured rather than
+# reasoned about. Not run here -- it is a different experiment, and it is the
+# obvious follow-up if the retrieval separation replicates.
+#
 # ============================= CONCURRENCY =============================
 #
 # This study fans out, which noise-floor.yaml deliberately did NOT. The

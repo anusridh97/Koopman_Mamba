@@ -113,7 +113,24 @@ def main(argv=None) -> int:
         model = KoopmanLM(spec.model)
         state = torch.load(ckpt, map_location="cpu", weights_only=False)
         state = state.get("model", state) if isinstance(state, dict) else state
-        model.load_state_dict(state, strict=False)
+        # strict=True, and this is not pedantry. Under strict=False a key
+        # mismatch (renamed module, a spec whose beta_policy disagrees with the
+        # checkpoint, a partial save) leaves `beta_proj` at its ZERO
+        # initialisation -- so `_resolve_beta` returns a constant 0.5 and this
+        # script prints "CONSTANT -- gate carries no information". That is
+        # exactly this script's headline finding, produced by a failed load. The
+        # one reading it most needs to be trusted on is the one strict=False
+        # would fabricate.
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            print(f"SKIP {run_dir}: checkpoint does not match the spec's "
+                  f"architecture -- missing={sorted(missing)[:5]} "
+                  f"unexpected={sorted(unexpected)[:5]}. Loading it anyway "
+                  f"would leave the write gate at its zero init and this "
+                  f"script would report a CONSTANT gate, which is its own "
+                  f"headline false negative.", file=sys.stderr)
+            del model
+            continue
         model = model.to(device).eval()
 
         ds = MemmapPackedDataset(args.eval_data_dir, args.seq_len)

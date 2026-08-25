@@ -366,18 +366,35 @@ def train(args):
 # Sweep: launch every cell in the Section 5.2 grid, one subprocess per cell.
 # ---------------------------------------------------------------------------
 
-def cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap):
-    return Path(output_root) / model_type / f"kv{num_kv_pairs}_gap{distractor_gap}"
+def cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap,
+                    beta_policy=None):
+    """Where one cell writes. `beta_policy` joins the key when it is set.
+
+    It HAS to, and the failure it prevents is silent: two policies keyed only on
+    (model_type, kv, gap) write to one directory, and `--skip_done` defaults to
+    True -- so the second policy's cells would be skipped and the FIRST
+    policy's results handed back under the second's name. A sweep would report a
+    four-policy comparison having trained one policy.
+
+    `None` (the default, meaning "inherit the config's own") reproduces the
+    pre-2026-08-24 path exactly, so every archived sweep directory is still
+    found by `cell_is_done` and nothing already on disk is orphaned.
+    """
+    base = Path(output_root) / model_type / f"kv{num_kv_pairs}_gap{distractor_gap}"
+    return base if beta_policy is None else base / f"beta-{beta_policy}"
 
 
-def cell_is_done(output_root, model_type, num_kv_pairs, distractor_gap):
+def cell_is_done(output_root, model_type, num_kv_pairs, distractor_gap,
+                 beta_policy=None):
     """Skip if final checkpoint already exists."""
-    d = cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap)
+    d = cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap,
+                        beta_policy)
     return (d / "final" / "model.pt").exists()
 
 
 def build_cell_command(args, model_type, num_kv_pairs, distractor_gap):
-    out = cell_output_dir(args.output_root, model_type, num_kv_pairs, distractor_gap)
+    out = cell_output_dir(args.output_root, model_type, num_kv_pairs,
+                          distractor_gap, args.ska_beta_policy)
     cmd = [
         sys.executable, "-m", "experimentation.experiments.mqar_finetune",
         "--model_type",      model_type,
@@ -395,6 +412,11 @@ def build_cell_command(args, model_type, num_kv_pairs, distractor_gap):
         "--warmup_steps",    str(args.warmup_steps),
         "--output_dir",      str(out),
         "--seed",            str(args.seed),
+        # FORWARDED, and its absence was a silent-wrong-experiment bug: without
+        # it, `--sweep --ska_beta_policy one` ran the entire grid at the config
+        # default and reported it as the `one` arm.
+        *(["--ska_beta_policy", args.ska_beta_policy]
+          if args.ska_beta_policy else []),
     ]
     if args.wandb_project:
         cmd += ["--wandb_project", args.wandb_project,
@@ -426,7 +448,8 @@ def run_sweep(args):
         seq_len = derived_seq_len(kv, gap)
         tag = f"[{i:>3d}/{total}] {model_type:<12} kv={kv:<2} gap={gap:<5} seq={seq_len}"
 
-        if args.skip_done and cell_is_done(args.output_root, model_type, kv, gap):
+        if args.skip_done and cell_is_done(args.output_root, model_type, kv, gap,
+                                           args.ska_beta_policy):
             print(f"{tag}  SKIP (done)")
             skip += 1
             continue

@@ -4,19 +4,22 @@ normalization entirely.
 
 ## Why this file exists
 
-`kernels/chunk_stats.py::symmetric_key_value` asserts, in prose:
+Three live code paths omit the spectral clamp entirely, on the strength of a
+contractivity claim that until 2026-08-24 was stated in prose only -- and
+stated WRONG, in a way this file's Part 1/Part 2 split is what corrected:
 
-    The symmetric cross-weight sqrt(beta_t beta_{t-1}) is what makes
-    A_w = L^-1 M L^-T contractive (||A_w||_2 <= 1), removing the need for
-    spectral normalization.
-
-Three live code paths *depend* on that sentence being true, and say so:
-
-  * `kernels/inverse_cholesky.py:69-73` -- "the spectral clamp removed
-    (contractive by the sqrt-beta convention)";
-  * `kernels/incremental_transport.py:125-126` -- "Contractive A (||A||<=1) so
-    no spectral normalization -- the sqrt-beta guarantee (do NOT clamp here)";
+  * `kernels/inverse_cholesky.py` -- "the spectral clamp removed (contractive by
+    the sqrt-beta convention)";
+  * `kernels/incremental_transport.py` -- "Contractive A (||A||<=1) so no
+    spectral normalization -- the sqrt-beta guarantee (do NOT clamp here)";
   * `kernels/prefix_scan.py` -- which omits the clamp with no comment at all.
+
+All three attributed the bound to the SQUARE ROOT. It does not come from the
+square root (Part 1 below), and the imprecision was not harmless: it told a
+reader that `ska_beta_policy='linear'` or `'one'` would void the guarantee,
+when both are equally contractive and equally legal on those routes. Those
+comments now say "single key stream" and cite this file; the quotes above are
+kept so the correction is legible rather than invisible.
 
 That last one is the production path for `configs/50m.yaml`,
 `configs/180m.yaml` and `configs/runs/50m-first-real.yaml`
@@ -269,7 +272,7 @@ def _write_gate_sequence(B=2, T=200, H=3, r=16, P=8, delta=0.01, seed=5):
     return z, zq, v, beta.contiguous()
 
 
-def test_legacy_two_stream_keys_violate_the_bound_by_orders_of_magnitude():
+def test_legacy_two_stream_keys_violate_the_bound_and_worsen_as_the_gate_sharpens():
     """The legacy asymmetric convention: M = sum beta_i z_i z_{i-1}^T.
 
     THE POINT OF THIS FILE. Every assertion above is `sigma <= 1`, and a bound

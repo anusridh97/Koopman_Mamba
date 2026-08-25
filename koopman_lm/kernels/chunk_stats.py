@@ -57,9 +57,31 @@ def symmetric_key_value(z_n, beta, v):
       C  = sum vbar x^T        = beta * v z^T          (own-weight; INVARIANT)
       M  = sum x_t x_{t-1}^T   = sqrt(beta_t beta_{t-1}) z_t z_{t-1}^T   (cross-weight)
     i.e. only M (and its cross-chunk boundary term) change vs the old asymmetric
-    zb=beta*z convention; G and C are numerically unchanged. The symmetric
-    cross-weight sqrt(beta_t beta_{t-1}) is what makes A_w = L^-1 M L^-T
-    contractive (||A_w||_2 <= 1), removing the need for spectral normalization.
+    zb=beta*z convention; G and C are numerically unchanged.
+
+    WHAT MAKES A_w = L^-1 M L^-T CONTRACTIVE (||A_w||_2 <= 1), and it is not the
+    square root: it is that BOTH SLOTS OF M ARE DRAWN FROM THE SAME KEY STREAM
+    whose Gram (plus ridge) is G. Writing u_i = L^-1 x_i, the own-weight sum
+    gives Σ u_i u_iᵀ = I - ridge·G^-1 ⪯ I, and M's two factors are each a
+    sub-sum of that, so Cauchy-Schwarz bounds the product by 1. Nothing in that
+    argument mentions beta -- so beta == 1 is equally contractive, and so is
+    beta in BOTH slots (`ska_beta_policy='linear'`).
+
+    This file said "the symmetric cross-weight sqrt(beta_t beta_{t-1}) is what
+    makes A_w contractive" until 2026-08-24. The imprecision matters because it
+    hides which alternatives are safe: a reader would conclude a non-sqrt
+    weighting voids the guarantee and that the clamp-free backends must not be
+    used with one.
+
+    What the square root DOES buy is the line above it: G = sum beta z z^T and
+    C = sum beta v z^T, so "beta is the per-token write weight" stays literally
+    true. Weighting both slots by beta is equally contractive and silently
+    redefines the write weight as beta^2.
+
+    Both halves are pinned, together, by
+    code-tests/test_ska_contractivity_contract.py -- including the falsification
+    arm showing the legacy TWO-stream form exceeding the bound by 22.8x on a
+    sharp gate, which is what the clamp on the other backends guards against.
 
     beta: (...,) per-token write weight in [0,1]; z_n: (...,r) unit key (post-L2);
     v: (...,P) value. Use this ONE helper at every accumulation site so the

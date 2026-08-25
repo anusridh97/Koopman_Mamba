@@ -66,6 +66,27 @@ from pathlib import Path
 #: two standard deviations of its OWN sampling distribution.
 RESOLVE_SIGMAS = 2.0
 
+#: Bonferroni-corrected threshold, used when there is more than one contrast.
+#:
+#: Three cells against one control is three tests. At 2 sigma each (alpha ~ 0.05
+#: two-sided) the family-wise false-positive rate is 1 - 0.95^3 = 14%: about one
+#: run in seven produces a spurious "RESOLVED". That bias points TOWARD
+#: declaring a winner, which is the one direction this comparison must not be
+#: biased in -- a null result is an acceptable and expected outcome here, and an
+#: uncorrected threshold quietly trades it for a false positive.
+#:
+#: alpha/3 two-sided is 2.39 sigma. Applied automatically rather than offered as
+#: a flag, and the uncorrected per-contrast sigma count is still printed beside
+#: it so a reader can see both.
+_BONFERRONI_SIGMAS = {1: 2.00, 2: 2.24, 3: 2.39, 4: 2.50, 5: 2.58}
+
+
+def _threshold_sigmas(n_contrasts: int) -> float:
+    """Sigma multiple a contrast must clear, corrected for how many were made."""
+    if n_contrasts <= 1:
+        return RESOLVE_SIGMAS
+    return _BONFERRONI_SIGMAS.get(n_contrasts, 2.81)  # ~alpha/10 beyond the table
+
 #: The column `report.py` writes for a trial's reference group, and the one that
 #: identifies a cell member. Filtering on it (rather than on trial count) is what
 #: makes the script correct in the presence of target overshoot: an overshoot
@@ -155,15 +176,31 @@ def main(argv=None) -> int:
         print(f"pooled sigma: {sigma:.4e}   within-cell dof: {dof}")
         print(f"  trial vs trial resolvable   2*sigma*sqrt(2)   = "
               f"{RESOLVE_SIGMAS * sigma * math.sqrt(2):.4e}")
-        print(f"  mean vs mean resolvable     2*sigma*sqrt(2/n) = "
-              f"{RESOLVE_SIGMAS * sigma * math.sqrt(2 / 5):.4e}   "
-              f"(n=5 per cell; THE relevant one here)")
+    control = cells.get(args.control)
+    control_mean = sum(control) / len(control) if control else None
+    n_contrasts = max(0, len(cells) - (1 if control else 0))
+    crit = _threshold_sigmas(n_contrasts)
+
+    if sigma is not None:
+        # The typical cell size, not a hardcoded 5: a cell that lost a member to
+        # a failure must not be described as though it were complete. The
+        # per-row arithmetic below already uses each cell's own n.
+        sizes = sorted(len(v) for v in cells.values())
+        n_typ = sizes[len(sizes) // 2]
+        print(f"  mean vs mean resolvable     {crit:.2f}*sigma*sqrt(2/n) = "
+              f"{crit * sigma * math.sqrt(2 / n_typ):.4e}   "
+              f"(n={n_typ} per cell; THE relevant one here)")
+        if n_contrasts > 1:
+            print(f"  threshold is Bonferroni-corrected for {n_contrasts} "
+                  f"contrasts ({crit:.2f} sigma, not {RESOLVE_SIGMAS:.2f}): at "
+                  f"2 sigma each the")
+            print(f"  family-wise false-positive rate would be "
+                  f"{100 * (1 - 0.95 ** n_contrasts):.0f}%, and that bias points "
+                  f"toward declaring a winner.")
         print()
 
     print(f"{'policy':>14}  {'n':>2}  {'mean':>12}  {'sd':>10}  "
           f"{'delta vs ' + args.control:>18}  {'sigmas':>7}  verdict")
-    control = cells.get(args.control)
-    control_mean = sum(control) / len(control) if control else None
     if control is None:
         print(f"  (no {args.control!r} cell present -- deltas omitted)")
 
@@ -186,7 +223,7 @@ def main(argv=None) -> int:
             verdict = "CONTROL"
         elif sigmas is None:
             verdict = "-"
-        elif sigmas >= RESOLVE_SIGMAS:
+        elif sigmas >= crit:
             verdict = "RESOLVED " + ("worse" if delta > 0 else "BETTER")
         else:
             verdict = "unresolved"
@@ -201,7 +238,7 @@ def main(argv=None) -> int:
             p for p in cells
             if p != args.control and len(cells[p]) > 0
             and abs(sum(cells[p]) / len(cells[p]) - control_mean)
-            < RESOLVE_SIGMAS * sigma * math.sqrt(1.0 / len(cells[p]) + 1.0 / len(control))
+            < crit * sigma * math.sqrt(1.0 / len(cells[p]) + 1.0 / len(control))
         ]
         # `len(cells) > 1` guards a vacuous verdict: with only the control
         # present, `unresolved` is empty and so is `len(cells) - 1`, so the

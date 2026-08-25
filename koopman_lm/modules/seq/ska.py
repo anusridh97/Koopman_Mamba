@@ -334,7 +334,7 @@ class SKAModule(nn.Module):
 
         `one` returns an ones tensor rather than the scalar 1.0. Slightly
         wasteful and worth it: every caller then handles one shape, and the
-        alternative is a `if isinstance(beta, float)` branch at four call sites,
+        alternative is a `if isinstance(beta, float)` branch at three call sites,
         which is exactly the shape of the gamma fast path that has already
         caused one drift.
         """

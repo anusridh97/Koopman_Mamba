@@ -114,9 +114,21 @@ class KoopmanLM(nn.Module):
             nn.init.orthogonal_(ska.key_proj.weight)
             nn.init.orthogonal_(ska.query_proj.weight)
             nn.init.xavier_uniform_(ska.value_proj.weight)
-            nn.init.zeros_(ska.beta_proj.weight)
-            if ska.beta_proj.bias is not None:
-                nn.init.zeros_(ska.beta_proj.bias)
+            # `beta_proj` exists only under ska_beta_policy in
+            # {learned, linear}; `one` builds no gate and `head_scalar` builds H
+            # scalars instead. Unguarded this raised AttributeError at
+            # construction under either -- minutes into a queued GPU job, and
+            # reachable from any spec that pins init_policy='legacy' (no
+            # committed config does, but the policy is now searchable and
+            # CLI-exposed). Both branches re-zero what SKAModule.__init__
+            # already zeroed, so the guard restores the intended no-op rather
+            # than skipping work.
+            if ska.beta_proj is not None:
+                nn.init.zeros_(ska.beta_proj.weight)
+                if ska.beta_proj.bias is not None:
+                    nn.init.zeros_(ska.beta_proj.bias)
+            if ska.beta_logit is not None:
+                nn.init.zeros_(ska.beta_logit)
             if self.cfg.ska_layerscale:
                 nn.init.normal_(ska.out_proj.weight, mean=0.0,
                                 std=self.cfg.ska_out_proj_std)
