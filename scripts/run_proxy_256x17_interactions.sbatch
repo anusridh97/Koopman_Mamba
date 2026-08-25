@@ -79,7 +79,11 @@
 # submission computes the same path with no coordination, and a resubmission
 # ATTACHES to the study already in progress: `create_study(load_if_exists=True)`
 # continues it, `n_trials` is the study's TARGET size rather than "this many
-# more", and `enqueue_trial(skip_if_exists=True)` does not re-run the 24 anchors.
+# more", and `enqueue_anchors`' name-keyed idempotency does not re-run the 28
+# anchors. (Name-keyed rather than params-keyed because the four reference-seed
+# repeats resolve to params IDENTICAL to `reference-k1`'s -- the seed is not a
+# search axis -- so a params check would collapse the noise floor to one
+# observation and report a spread of zero.)
 #
 # A job-id-derived root would silently start a fresh study on every requeue --
 # and `#SBATCH --requeue` is in the run system's own template, so that is not

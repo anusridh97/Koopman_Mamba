@@ -382,7 +382,12 @@ _TARGET_AXES = {
     "placement": {"kind": "categorical",
                   "choices": ["baseline", "even", "midlate", "late"]},
     "ska_ridge": {"kind": "float", "low": 0.003, "high": 0.03, "log": True},
-    "ska_layerscale_init": {"kind": "float", "low": 0.002, "high": 0.03,
+    # Widened upward 2026-08-24 on the evidence of job 445689: the best loss in
+    # a four-trial probe was at 0.1, OUTSIDE the old [0.002, 0.03], and the gate
+    # at 0.01 grew 2.36x during training while 0.1/0.5/1.0 stayed put. Pinned
+    # against the committed study file by
+    # `test_method_guarantees.py::test_the_hardcoded_target_axes_still_match_the_committed_study`.
+    "ska_layerscale_init": {"kind": "float", "low": 0.005, "high": 0.3,
                             "log": True},
     "norm_clip_multiplier": {"kind": "categorical",
                              "choices": [0.75, 4.0 / math.sqrt(24), 1.0, 1.25]},

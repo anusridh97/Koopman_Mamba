@@ -82,26 +82,41 @@ def resolve_all(study_path):
     return study_spec, base_sections, base_model, space, base_lr, rows
 
 
-def _identity(study_spec, base_sections, overrides):
+def _identity(study_spec, base_sections, overrides, seed=None):
     """The run_id an anchor will land under, or None if it cannot be computed.
 
     Wrapped because building a full RunSpec validates the whole thing -- which is
     a feature (a design that cannot become a launchable spec should say so here,
     not on a GPU) but must not stop the table from printing.
+
+    `seed` mirrors what `driver.run_trial` does with a design's designated
+    `runtime.seed`, and it MUST be applied here: two members of a reference group
+    resolve to byte-identical params, and their whole purpose is to be distinct
+    runs. Omitting it would print one run_id for five designs and the table would
+    look like a collision instead of a replicate set.
     """
     from experimentation.sweep.spec import build_cell_run_spec
 
+    extra = {"optim.max_steps": int(study_spec.max_steps)}
+    if seed is not None:
+        extra["runtime.seed"] = int(seed)
     try:
         spec = build_cell_run_spec(study_spec.name, base_sections,
-                                   {**overrides,
-                                    "optim.max_steps": int(study_spec.max_steps)},
+                                   {**overrides, **extra},
                                    schedules=base_sections.get("schedules"))
     except Exception as exc:                              # noqa: BLE001
         return {"error": f"{type(exc).__name__}: {exc}"}
     return {"run_id": run_id(spec), "group_id": group_id(spec),
+            "seed": int(spec.runtime.seed),
             "param_count": int(spec.model.param_count_estimate()),
             "ska_layer_indices": list(spec.model.ska_layer_indices),
             "ska_norm_clip_c": spec.model.ska_norm_clip_c}
+
+
+def _designated_seed(design):
+    """A design's explicit `runtime.seed`, or None to inherit the base spec's."""
+    seed = getattr(design, "seed", "baseline")
+    return None if seed == "baseline" else int(seed)
 
 
 def _fmt(value):
@@ -144,13 +159,38 @@ def render_markdown(study_spec, base_sections, base_model, space, base_lr, rows)
                    "so the reference point is inside the space.")
     out.append("")
 
-    header = ["name"] + list(PARAM_ORDER) + ["indices", "clip_c", "params",
-                                             "run_id"]
+    groups = {}
+    for design, _params, _overrides in rows:
+        group = getattr(design, "reference_group", None)
+        if group is not None:
+            groups.setdefault(str(group), []).append(design.name)
+    if groups:
+        out.append("## Replicate sets (the study's noise floor)")
+        out.append("")
+        out.append("Members of a `reference_group` are identical in every "
+                   "scientific factor and differ only in `runtime.seed`, so the "
+                   "SPREAD of their held-out losses is the smallest effect this "
+                   "study can resolve. `anchors._check_reference_groups` enforces "
+                   "the \"identical in everything else\" half at load time; "
+                   "`anchors.check_replicates_resolve` enforces distinct resolved "
+                   "seeds at `--dry_run`.")
+        out.append("")
+        for group, names in sorted(groups.items()):
+            out.append(f"- `{group}`: {len(names)} evaluation(s) -- "
+                       + ", ".join(f"`{n}`" for n in sorted(names)))
+        out.append("")
+
+    header = ["name", "group", "seed"] + list(PARAM_ORDER) + [
+        "indices", "clip_c", "params", "run_id"]
     out.append("| " + " | ".join(header) + " |")
     out.append("|" + "|".join(["---"] * len(header)) + "|")
     for design, params, overrides in rows:
-        identity = _identity(study_spec, base_sections, overrides)
-        cells = [f"`{design.name}`"]
+        identity = _identity(study_spec, base_sections, overrides,
+                             seed=_designated_seed(design))
+        cells = [f"`{design.name}`",
+                 f"`{design.reference_group}`"
+                 if getattr(design, "reference_group", None) else "-",
+                 str(identity.get("seed", "-"))]
         cells += [_fmt(params[k]) for k in PARAM_ORDER]
         cells += [
             str(identity.get("ska_layer_indices", "-")).replace(" ", ""),
@@ -196,8 +236,11 @@ def main(argv=None):
             "base": study_spec.base,
             "base_param_count": int(base_model.param_count_estimate()),
             "anchors": [
-                {"name": d.name, "params": p,
-                 **_identity(study_spec, base_sections, o)}
+                {"name": d.name,
+                 "reference_group": getattr(d, "reference_group", None),
+                 "params": p,
+                 **_identity(study_spec, base_sections, o,
+                             seed=_designated_seed(d))}
                 for d, p, o in rows
             ],
         }

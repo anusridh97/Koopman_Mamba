@@ -85,7 +85,8 @@ from pathlib import Path
 from experimentation.run.launchers import LocalLauncher, SlurmLauncher
 from experimentation.run.provenance import check_git_clean
 from experimentation.run.resolve import resolve_model_config
-from experimentation.sweep.search.anchors import load_designs
+from experimentation.sweep.search.anchors import (
+    check_replicates_resolve, load_designs, reference_groups, resolved_seed)
 from experimentation.sweep.search.space import restrict_space, search_space
 from experimentation.sweep.search.studyspec import (
     derived_prune_startup_trials as _derived_prune_startup,
@@ -329,9 +330,39 @@ def _print_space(study_spec, space, base_model, base_lr, base_optim):
               "is inside the space)")
 
 
+def _print_replicates(designs, base_sections):
+    """The noise-floor plan: which designs repeat, at which seeds.
+
+    Printed rather than left to be inferred because it is the number every other
+    conclusion in the analysis is divided by. A study whose `reference` group
+    silently has one member produces an analysis in which nothing is resolvable,
+    or -- worse -- one in which the floor is zero and everything is.
+
+    Also the place `check_replicates_resolve` runs, so a group whose members
+    collide on a seed fails at `--dry_run` on a laptop rather than after 256
+    GPU-trials, where a spread of zero reads as an excellent result.
+    """
+    groups = reference_groups(designs)
+    base_seed = int((base_sections.get("runtime") or {}).get("seed", 42))
+    if not groups:
+        print("[search] noise floor  NONE -- no design declares a "
+              "reference_group, so this study cannot measure its own "
+              "trial-to-trial spread and no reported effect can be compared "
+              "against one")
+        return
+    check_replicates_resolve(designs, base_seed)
+    for group, members in sorted(groups.items()):
+        seeds = sorted(resolved_seed(d, base_seed) for d in members)
+        print(f"[search] noise floor  group {group!r}: {len(members)} "
+              f"evaluation(s) at runtime.seed {seeds}")
+        print(f"[search]              members {sorted(d.name for d in members)}")
+    print("[search]              spread of these IS the smallest effect this "
+          "study can resolve; analysis states every effect against it")
+
+
 def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher,
                 gpus=(), space=None, base_model=None, base_lr=None,
-                base_optim=None, designs=None):
+                base_optim=None, designs=None, base_sections):
     sid = compute_study_id(study_spec)
     print(f"[search] study        {study_spec.name}  (study_id {sid})")
     print(f"[search] base spec    {study_spec.base}")
@@ -389,13 +420,24 @@ def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher,
                           for p in resolved})
             print(f"[search]              {len(resolved)} anchor(s) resolve, "
                   f"{unique} distinct point(s)")
-            if unique < len(resolved):
+            _print_replicates(designs, base_sections)
+            # Anchors that resolve onto one point are EXPECTED now and no longer
+            # lossy: `enqueue_anchors` keys idempotency on the anchor NAME, so
+            # each one still runs and keeps its name. A reference group is
+            # exactly a set of designs whose params are identical by
+            # construction, so what used to be a warning is the mechanism.
+            duplicates = len(resolved) - unique
+            grouped = sum(max(0, len(members) - 1) for members
+                          in reference_groups(designs).values())
+            if duplicates > grouped:
                 print(f"[search]              WARNING: "
-                      f"{len(resolved) - unique} anchor(s) resolve onto a point "
-                      f"another anchor already occupies. enqueue_trial's "
-                      f"skip_if_exists drops the duplicate silently, so the "
-                      f"study would have fewer references than its design file "
-                      f"claims.")
+                      f"{duplicates - grouped} anchor(s) resolve onto a point "
+                      f"another anchor already occupies WITHOUT declaring a "
+                      f"reference_group. They will each run (idempotency is by "
+                      f"name), so this is a design file spending two trials on "
+                      f"one point rather than a silent drop -- but it is almost "
+                      f"certainly not what was meant. Declare a "
+                      f"reference_group with distinct seeds, or change a factor.")
     else:
         print("[search] anchors      none -- the first trials are random AND "
               "unprunable (nothing prunes until trials COMPLETE)")
@@ -418,8 +460,9 @@ def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher,
                   f"model sizes; enable CUDA MPS or they only time-slice.")
         print(f"[search]              sampler seeds {study_spec.seed}.."
               f"{study_spec.seed + study_spec.concurrent_trials - 1} "
-              f"(seed + worker index -- SAMPLER only; the model/data seed on the "
-              f"base spec is identical for every trial)")
+              f"(seed + worker index -- SAMPLER only; the model/data seed comes "
+              f"from the base spec and varies ONLY for designated reference "
+              f"repeats, never with the worker)")
         # How many sequential waves the budget buys. This is the number that
         # matters, NOT workers-vs-startup: the derived `n_startup_trials` caps at
         # 6, so any fleet of 6+ would compare unfavourably to it no matter how
@@ -496,7 +539,8 @@ def main(argv=None):
         _print_plan(study_spec, args, n_anchors=len(designs), study_dir=study_dir,
                     run_root=run_root, launcher=launcher_name, gpus=gpus,
                     space=space, base_model=base_model, base_lr=base_lr,
-                    base_optim=base_sections.get("optim"), designs=designs)
+                    base_optim=base_sections.get("optim"), designs=designs,
+                    base_sections=base_sections)
 
     no_objective = not _objective_producer_exists(repo_root)
 
@@ -557,7 +601,23 @@ def main(argv=None):
     sampler_seed = sampler_seed_for(study_spec.seed, worker_index)
     study = create_study(**study_kwargs)
 
-    if designs:
+    # THE SUPERVISOR ONLY. This used to run in every process, and it was safe
+    # only by ordering: the supervisor enqueues before `_fanout` spawns anyone, so
+    # each worker's call found the names already present and added nothing.
+    #
+    # Safe-by-ordering is not worth keeping when the redundancy buys nothing.
+    # `enqueue_anchors` is a read-then-write check with no lock -- it has to be;
+    # `JournalStorage` offers no atomic reservation -- so N processes calling it
+    # concurrently CAN double-enqueue, and a double-enqueued reference group is
+    # the worst available outcome: the duplicated members land on identical losses
+    # under `deterministic: true`, so pooling them drives sigma toward zero and
+    # every effect in the analysis becomes "resolved". `analysis.noise_floor` now
+    # detects that state and refuses, but not creating it is better than detecting
+    # it. A worker that only ever PULLS cannot create it at all.
+    #
+    # `is_worker` and not `fanning_out`: a worker is any process with the marker
+    # set, including at `concurrent_trials: 1` where `should_fanout` is False.
+    if designs and not is_worker:
         added = enqueue_anchors(study, designs, base_model, space,
                                 base_lr=base_lr)
         print(f"[search] enqueued {added} anchor(s) "

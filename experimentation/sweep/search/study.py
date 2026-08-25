@@ -67,9 +67,29 @@ from experimentation.sweep.search.studyspec import (
 __all__ = ["SAMPLERS", "to_distribution", "to_distributions", "make_sampler",
            "make_pruner", "prune_startup_trials_for", "sampler_seed_for",
            "make_storage", "create_study", "enqueue_anchors", "is_anchor",
-           "ANCHOR_ATTR"]
+           "ANCHOR_ATTR", "SEED_ATTR", "REFERENCE_GROUP_ATTR"]
 
 ANCHOR_ATTR = "anchor_name"
+
+#: The TRAINING seed this trial was designated to run at, when a design named one.
+#:
+#: ABSENT on every other trial, deliberately: the driver has to distinguish "this
+#: trial designates a seed" from "this trial inherits whatever the base spec
+#: says", and stamping a copy of the base's seed would make those two states
+#: indistinguishable -- so a later change to the base spec's seed would silently
+#: be overridden by a stale value baked into the journal.
+#:
+#: Not to be confused with `sampler_seed`, which is per-worker and seeds the
+#: PROPOSAL stream. See `sampler_seed_for`.
+SEED_ATTR = "designated_seed"
+
+#: Which replicate set this trial belongs to, when it belongs to one. Members of
+#: one group are identical in every scientific factor and differ only in
+#: `SEED_ATTR`, so the spread of their objectives is an estimate of the study's
+#: own reproducibility noise -- the number every reported effect is judged
+#: against. `anchors._check_reference_groups` is what enforces the "identical in
+#: every other factor" half of that.
+REFERENCE_GROUP_ATTR = "reference_group"
 
 # TPE samples randomly until this many trials have FINISHED (optuna counts
 # COMPLETE and PRUNED here, not COMPLETE alone -- verified, not assumed); with an
@@ -294,19 +314,62 @@ def is_anchor(trial) -> bool:
     return bool(getattr(trial, "user_attrs", {}).get(ANCHOR_ATTR))
 
 
+def enqueued_anchor_names(study: optuna.study.Study) -> set:
+    """Anchor names already present in this journal, in ANY state.
+
+    Any state on purpose: a FAILED anchor must not be silently retried on every
+    resume (that is a loop, not a recovery), and a WAITING one has been queued
+    but not pulled. Re-running an anchor is a decision an operator makes by
+    editing the design file, not something a resume does by itself.
+    """
+    return {name for name in (t.user_attrs.get(ANCHOR_ATTR)
+                              for t in study.trials) if name}
+
+
 def enqueue_anchors(study: optuna.study.Study, designs: Iterable[Any],
                     base_model: KoopmanLMConfig,
                     space: Mapping[str, Mapping[str, Any]], *,
                     base_lr: float) -> int:
     """Queue each design ahead of any sampled trial. Returns how many were added.
 
-    `skip_if_exists=True` makes this idempotent, so resuming a study does not
-    re-run anchors that already ran -- the expensive mistake this guards.
+    Idempotent on the anchor NAME, so resuming a study does not re-run anchors
+    that already ran -- the expensive mistake this guards.
+
+    **It used to be idempotent on the PARAMS, via `skip_if_exists=True`, and that
+    could not survive seed repeats.** A reference repeat is by construction a
+    design whose params are IDENTICAL to another's -- the seed is not a search
+    axis, so it does not appear in the params dict at all. Measured against
+    optuna 4.9.0: three `enqueue_trial({'a': 1}, skip_if_exists=True)` calls
+    leave ONE waiting trial. So a 5-member replicate set would have collapsed to
+    one observation and the study would have reported a noise floor of zero --
+    a claim of perfect reproducibility, drawn from a single run, with nothing in
+    the output saying so.
+
+    Keying on the name instead is also strictly better provenance for the
+    ordinary case: two DIFFERENT designs that happen to resolve onto the same
+    point both run and both keep their names, where before the second vanished
+    silently (`__main__._print_plan` warns about that collision precisely because
+    it used to be lossy). And an anchor whose params coincide with an
+    already-sampled trial now still runs as an anchor, which is what the pruner's
+    reference population needs.
     """
+    existing = enqueued_anchor_names(study)
     count = 0
     for design in designs:
+        if design.name in existing:
+            continue
         params = resolve_design(design, base_model, space, base_lr=base_lr)
-        study.enqueue_trial(params, user_attrs={ANCHOR_ATTR: design.name},
-                            skip_if_exists=True)
+        attrs: Dict[str, Any] = {ANCHOR_ATTR: design.name}
+        seed = getattr(design, "seed", "baseline")
+        if seed != "baseline" and seed is not None:
+            attrs[SEED_ATTR] = int(seed)
+        group = getattr(design, "reference_group", None)
+        if group is not None:
+            attrs[REFERENCE_GROUP_ATTR] = str(group)
+        # skip_if_exists=False: the name check above IS the idempotency, and
+        # leaving optuna's params check on would re-introduce exactly the
+        # collapse this function's docstring describes.
+        study.enqueue_trial(params, user_attrs=attrs, skip_if_exists=False)
+        existing.add(design.name)
         count += 1
     return count

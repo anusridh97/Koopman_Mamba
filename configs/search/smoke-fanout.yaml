@@ -1,0 +1,125 @@
+# The 8-worker fanout, at 2 workers, for minutes instead of hours.
+#
+# ============================ WHAT THIS PROVES ============================
+#
+# `concurrent_trials: 8` has never run under sbatch. `scripts/verify_study_e2e.
+# sbatch` (job 445657) proved the ask -> materialize -> launch -> quick_eval ->
+# tell loop closes on real hardware, but at ONE worker: the supervisor drove the
+# trials itself and `_fanout` was never called. So the entire fleet path --
+# `should_fanout`, `_fanout`'s Popen loop, `visible_gpus`, the per-worker
+# `CUDA_VISIBLE_DEVICES` pinning, per-worker log files, the post-fanout
+# reattachment that writes the report -- is covered only by tests that patch
+# `subprocess.Popen`.
+#
+# Those tests are good and they cannot see the things that actually break when a
+# fleet meets a scheduler:
+#
+#   1. **Two processes really share one journal.** `JournalStorage` over
+#      `JournalFileBackend` is file-backed, and two OS processes appending to one
+#      file on a cluster filesystem is a different proposition from two threads
+#      in one interpreter. A duplicate trial number here means two GPUs training
+#      one config and one result overwriting the other's directory.
+#   2. **The child inherits an environment that works.** `_fanout` passes
+#      `{**os.environ, ...}` to `Popen`. Under sbatch that environment carries
+#      module paths, a venv, `PYTHONPATH` including the side-loaded optuna site,
+#      `HF_HOME`, `TRITON_CACHE_DIR`. A child that cannot import optuna exits
+#      non-zero in a way no CPU test reproduces.
+#   3. **`visible_gpus` reads the ALLOCATION, not the node.** It prefers an
+#      inherited `CUDA_VISIBLE_DEVICES` precisely because Slurm sets it; falling
+#      through to `nvidia-smi -L` on a shared node would pin workers to devices
+#      the allocation does not own. Only a real allocation exercises the branch
+#      that matters.
+#   4. **The supervisor does not write the report early.** `_fanout` waits, then
+#      REATTACHES (its own Study object is a stale snapshot from before the
+#      workers ran) and writes one report. A report describing an empty study is
+#      the exact bug that reattachment exists to fix, and it needs real child
+#      processes to occur.
+#   5. **Per-worker logs are separate.** Without `KOOPMAN_SEARCH_WORKER_LOG_DIR`
+#      every child inherits ONE stream and a traceback's first line lands under
+#      another worker's progress -- which is how a 12-hour failure becomes
+#      unreadable.
+#   6. **Each worker samples from its own stream.** `sampler_seed_for(seed,
+#      worker_index)` is arithmetic a CPU test verifies; that the number reaches
+#      the JOURNAL as `attr_sampler_seed`, from two live processes, is not.
+#
+# ## What it does NOT prove
+#
+# Two workers is not eight. It does not exercise: GPU contention (both workers
+# here are pinned to the same single device by round-robin over one visible GPU,
+# so they time-slice), host-memory pressure from 8 concurrent trainers, the OOM
+# ladder under that pressure, or `constant_liar`'s effect on proposal diversity
+# at fleet size 8. It also cannot show the 7-trial target overshoot, which needs
+# 8 workers to reach its bound.
+#
+# It is the cheapest experiment that can FALSIFY "the fanout works under a
+# scheduler", which is the only claim currently resting on mocks.
+# =========================================================================
+#
+# ## Sizing
+#
+# 6 trials of 200 steps on 4m-golden (5.2M params, ~1 min per trial). At 2
+# workers that is 3 sequential waves, so the second and third waves are proposed
+# against real completed history and the journal is genuinely contended.
+#
+# `n_trials: 6` against `example_anchors.yaml`'s 4 anchors means 4 enqueued
+# trials pulled by 2 workers plus 2 sampled ones -- so the fanout is exercised on
+# BOTH paths: pulling a WAITING enqueued trial (where two workers racing for the
+# same anchor would be the failure) and asking for a fresh one.
+#
+# `_print_plan` warns below 5 waves and 3 < 5, so ONE warning is expected in the
+# output and its absence would mean the plan printer stopped reading
+# `concurrent_trials`.
+name: smoke-fanout
+base: configs/runs/4m-golden.yaml
+
+# 6, not 4: with 4 trials and 4 anchors every trial is an anchor and no worker
+# ever calls `study.ask` for a sampled point.
+n_trials: 6
+max_steps: 200
+
+# THE POINT OF THIS FILE. Two worker processes, spawned by the command itself.
+concurrent_trials: 2
+seed: 2026
+
+# `local`, and it has to be: the fleet is `_fanout`'s Popen loop inside ONE
+# allocation, with each worker running trials back to back. `slurm` would submit
+# a job per trial and the fanout would be waiting on a queue rather than on a
+# GPU, which tests the scheduler instead of the fleet.
+launcher: local
+
+# Low enough that pruning can fire inside 200 steps, but MedianPruner still needs
+# COMPLETED trials first: the derived floor is min(6, max(3, 6//3)) = 3, and
+# anchors are exempt by default, so realistically nothing prunes here. That is
+# expected. This file is about the fleet, not the pruner -- `smoke-prune.yaml` is
+# where pruning is the question.
+prune_after_step: 60
+logging_steps: 10
+
+# A FIXED run_root, deliberately, and `verify_study_e2e.sbatch` overrides it into
+# a per-job generated spec for exactly the reason its own header gives: a study is
+# RESUMABLE, so a second submission against a fixed root would find its 6 trials
+# already COMPLETE, run zero, and report PASS. A gate that passes for the wrong
+# reason is worse than one that fails.
+run_root: /scratch/m000151-pm06/jkli/study-smoke-fanout
+
+design_file: configs/search/example_anchors.yaml
+
+# Same route as every other smoke study, and for the reasons `smoke-4m.yaml`'s
+# header records at length: `exact_auto` sends the 4m geometry down the 160x
+# Python reference scan, and the retired `proxy_chunked` was 92%-152% wrong in
+# the forward. `exact_invchol` agrees with the fp64 oracle to 5.1e-13 and costs
+# less than the chunked approximation at this size (job 440135).
+backend_policy: exact_invchol
+
+# HELD OUT. The 4m golden trains on fineweb_small_train; scoring there would
+# measure memorisation, and `train.py`'s `args.eval_data_dir or args.data_dir`
+# means omitting this silently produces a training-loss ranking.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# 20 minutes. A 200-step 4m trial is about a minute, but two workers time-slice
+# one GPU here, so a trial takes longer than it would alone -- and the default
+# 2 hours would idle the allocation on a single dead trial.
+trial_timeout_seconds: 1200
+
+# EMPTY. The objective is pure held-out loss, as in every committed study.
+objective: {}

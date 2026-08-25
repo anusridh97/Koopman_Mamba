@@ -5,9 +5,17 @@
     python scripts/analyze_interactions.py <study_dir> --study-name <name>
     python scripts/analyze_interactions.py <study_dir> --out /tmp/report
 
-Writes `<study_dir>/analysis/`: summary.json, importances.csv, interactions.md,
-pareto.csv, top_by_loss.csv, top_by_ska_delta.csv, objective_vs_params.csv,
-rank_curve.csv, sampler_correlations.csv.
+Writes `<study_dir>/analysis/`: noise_floor.csv, anchor_contrasts.csv,
+main_effects.csv, conditional_effects.csv, summary.json, importances.csv,
+interactions.md, pareto.csv, throughput_pareto.csv, shortlist.csv,
+top_by_loss.csv, top_by_ska_delta.csv, objective_vs_params.csv, rank_curve.csv,
+sampler_correlations.csv.
+
+`noise_floor.csv` is listed first because it is the scale for every other file:
+it is the spread of one configuration across training seeds, and an effect
+smaller than it is not a small effect but an unmeasurable one. This command
+prints it to stdout for the same reason -- a reader who runs this and reads only
+the terminal should still be handed the number that qualifies every table.
 
 A thin shell over `experimentation.sweep.search.analysis`, which is where the
 reasoning lives and where the tests point. What is genuinely this file's job is
@@ -129,6 +137,30 @@ def main(argv=None):
           + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())
                       if k != "total"))
     print(f"[analysis] anchors   {result['n_anchors']}")
+
+    # The headline, before the importances, because it is what qualifies them.
+    floor = result["noise_floor"]
+    if floor["available"]:
+        print(f"[analysis] NOISE FLOOR sigma={floor['sigma']:.6g} over "
+              f"{floor['dof']} dof; smallest resolvable effect "
+              f"{floor['min_resolvable_effect']:.6g}")
+        for group in floor["groups"]:
+            print(f"[analysis]   {group['group']}: n={group['n']} "
+                  f"seeds={group['seeds']} mean={group['mean']:.6g} "
+                  f"sd={group['sd']:.4g} range={group['range']:.4g}")
+        resolved = sum(1 for r in result["conditional_effects"] if r["resolved"])
+        print(f"[analysis]   {resolved} of {len(result['conditional_effects'])} "
+              f"prespecified interaction(s) exceed it")
+        unresolved = [r["anchor"] for r in result["anchor_contrasts"]
+                      if r["resolved"] is False]
+        if unresolved:
+            print(f"[analysis]   anchors INSIDE the floor (not rankable): "
+                  + ", ".join(unresolved))
+    else:
+        print("[analysis] NOISE FLOOR unavailable -- every magnitude below is "
+              "reported WITHOUT A SCALE")
+        print(f"[analysis]   {floor['reason']}")
+
     importances = result["importances"]
     if importances["available"]:
         top = sorted(importances["values"].items(), key=lambda kv: -kv[1])[:5]
@@ -145,12 +177,22 @@ def main(argv=None):
         print(f"[analysis] wrote {name:22} {path}")
 
     print()
-    print("[analysis] READ THIS BEFORE QUOTING A NUMBER: the sampler was")
-    print("           adaptive, so `sampler_correlations.csv` describes where")
-    print("           the sampler WENT, not what the model prefers. Main")
-    print("           effects are in importances.csv; the prespecified pairwise")
-    print("           structure is in interactions.md. They are not")
-    print("           interchangeable.")
+    print("[analysis] READ THIS BEFORE QUOTING A NUMBER.")
+    print("           1. Compare every magnitude to the noise floor above. An")
+    print("              effect smaller than it is not a small effect, it is an")
+    print("              unmeasurable one, and more trials will not change that.")
+    print("           2. `anchor_contrasts.csv` is the only CONTROLLED table:")
+    print("              one factor moved from one reference point. Read it")
+    print("              first.")
+    print("           3. `importances.csv` is a PED-ANOVA divergence, not a")
+    print("              variance decomposition, and its `local` column is")
+    print("              partly a description of the search path. See section 1")
+    print("              of interactions.md.")
+    print("           4. `sampler_correlations.csv` describes where the sampler")
+    print("              WENT, not what the model prefers. It is not evidence.")
+    print("           5. `shortlist.csv` is a set of candidates for confirmation")
+    print("              at larger scale, never a winner, and interactions.md")
+    print("              section 6 lists what this study cannot establish.")
     return 0
 
 

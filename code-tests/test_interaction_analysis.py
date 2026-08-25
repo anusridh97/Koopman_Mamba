@@ -18,10 +18,17 @@ conflate, and labels them:
   **sampler-induced correlation** -- correlation BETWEEN SAMPLED COLUMNS, which
   is a diagnostic of where the sampler went and is explicitly not evidence.
 
-The prespecified pairs are fixed in code, not chosen after looking. Seven of
-them, named in the study config before any trial ran. Choosing which pairs to
-report after seeing the data is how a 9-axis study yields 36 tables and one of
-them looks significant.
+The prespecified pairs are fixed in code, not chosen after looking. Fourteen of
+them -- seven named when this module was written and seven more when the study was
+commissioned, all of them before any trial of the 256-trial study ran. Choosing
+which pairs to report after seeing the data is how a 9-axis study yields 36
+tables and one of them looks significant.
+
+`test_noise_floor_analysis.py` is the companion to this file and owns the parts
+that came later: the measured noise floor every magnitude is stated against, the
+controlled anchor contrasts, the partial-dependence and conditional-effect
+tables, the loss/throughput front, the shortlist, and the softened PED-ANOVA
+framing.
 
 Environment: sklearn and matplotlib are NOT installed here (measured), so
 fANOVA and MeanDecreaseImpurity are unavailable and there are no plots.
@@ -61,7 +68,7 @@ def _distributions():
             ["baseline", "even", "midlate", "late"]),
         "ska_ridge": optuna.distributions.FloatDistribution(0.003, 0.03, log=True),
         "ska_layerscale_init": optuna.distributions.FloatDistribution(
-            0.002, 0.03, log=True),
+            0.005, 0.3, log=True),
         "norm_clip_multiplier": optuna.distributions.CategoricalDistribution(
             [0.75, 0.8164965809277261, 1.0, 1.25]),
         "gamma_value": optuna.distributions.CategoricalDistribution([0.9, 1.0, 1.05]),
@@ -133,10 +140,22 @@ def study():
 
 # ------------------------------------------------------ prespecified pairs ----
 
-def test_the_prespecified_pairs_are_the_seven_the_study_declared():
+def test_the_original_seven_pairs_are_still_prespecified_and_still_first():
     """Fixed in code, not chosen after looking at the data. Choosing pairs post
-    hoc is how a 9-axis study yields 36 tables and one looks significant."""
-    assert PRESPECIFIED_PAIRS == (
+    hoc is how a 9-axis study yields 36 tables and one looks significant.
+
+    The list grew from 7 to 14 when the study was commissioned -- still before any
+    trial of the 256-trial study ran, so still prespecification. These seven are
+    asserted to be present AND to come first, because dropping a prespecified
+    pair after the fact is the same error as adding one after looking: either way
+    the reported set depends on a later judgement.
+
+    `test_noise_floor_analysis.py` owns the assertions about the six that were
+    added and about the multiplicity the combined list carries.
+    """
+    from experimentation.sweep.search.analysis import _PAIRS_ORIGINAL
+
+    original = (
         ("ska_rank", "ska_ridge"),
         ("ska_rank", "norm_clip_multiplier"),
         ("ska_rank", "ska_power_K"),
@@ -145,6 +164,9 @@ def test_the_prespecified_pairs_are_the_seven_the_study_declared():
         ("ska_ridge", "ska_power_K"),
         ("ska_layerscale_init", "learning_rate"),
     )
+    assert _PAIRS_ORIGINAL == original
+    assert PRESPECIFIED_PAIRS[:len(original)] == original
+    assert len(PRESPECIFIED_PAIRS) == 14
 
 
 def test_every_prespecified_axis_is_a_real_search_axis():
@@ -419,7 +441,8 @@ def test_the_summary_json_is_valid_and_carries_the_counts(study, tmp_path):
     assert payload["counts"]["FAIL"] == 5
 
 
-def test_the_interactions_markdown_contains_all_seven_tables(study, tmp_path):
+def test_the_interactions_markdown_contains_every_prespecified_table(study,
+                                                                    tmp_path):
     written = write_analysis(study, tmp_path)
     text = written["interactions"].read_text()
     for left, right in PRESPECIFIED_PAIRS:

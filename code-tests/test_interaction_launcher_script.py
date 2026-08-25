@@ -420,7 +420,10 @@ def test_the_run_root_comes_from_the_spec_and_is_stable():
 
 def test_resubmission_reuse_is_explained(text):
     assert "load_if_exists" in text or "ATTACHES" in text
-    assert "skip_if_exists" in text
+    # Anchor idempotency is keyed on the anchor NAME, not on `skip_if_exists`'
+    # params comparison: the four reference-seed repeats resolve to params
+    # identical to `reference-k1`'s, so a params check collapses the noise floor.
+    assert "name-keyed idempotency" in text or "enqueue_anchors" in text
 
 
 # ------------------------------------------------------------- worker logs ----
