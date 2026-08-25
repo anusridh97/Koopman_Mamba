@@ -118,6 +118,25 @@ def main(argv=None) -> int:
     finals = [r["final"] for r in rows]
     n_seeds = min(len(g) for g in by_policy.values())
     print()
+
+    # RAGGED DATA IS NOT A RESULT. `final` is the last eval in the log, which for
+    # a run still in flight is an early-training number. Comparing one run's
+    # step-8000 accuracy against another's step-1333 accuracy measures how far
+    # each got, and under grokking that difference is enormous -- so every
+    # verdict below would be reporting scheduling as a policy effect.
+    #
+    # This fired for real: with job 446106 half finished, the script printed
+    # "NOT RESOLVED" from seed 42 at step 8000 against seed 43 at step 1333. The
+    # per-row `last step` column showed it and the verdict ignored it, which is
+    # the wrong way round.
+    last_steps = {r["last_step"] for r in rows}
+    if len(last_steps) > 1:
+        print(f"VERDICT: INCOMPLETE -- runs are at different steps "
+              f"{sorted(last_steps)}. Refusing to compare them: `final` is the "
+              f"last eval present, so a run still in flight contributes an "
+              f"early-training number, and under grokking that dominates any "
+              f"policy effect. Re-run when every log reaches the same step.")
+        return 0
     if min(finals) > 0.95:
         print(f"VERDICT: CEILING (all finals > {min(finals):.4f}). Every policy "
               f"solves this cell, so FINAL accuracy separates nothing.")
