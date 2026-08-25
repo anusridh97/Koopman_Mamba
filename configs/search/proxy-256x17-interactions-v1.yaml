@@ -270,6 +270,20 @@ fixed_params:
   weight_decay: 0.1
   warmup_ratio: 0.04
   grad_clip: 1.0
+  # PINNED, not searched, and added defensively rather than because this study
+  # wants it. `beta_policy` became a repo-declared axis on 2026-08-24, and
+  # `restrict_space` is replacement-not-intersection: an axis this file does not
+  # mention keeps the REPO's declaration. So without this line the 256-trial
+  # budget would silently have become 10-dimensional -- a fourth architectural
+  # factor folded into a study whose claim, sample size and PED-ANOVA
+  # interpretation were all designed around nine.
+  #
+  # `learned` is the value every trial in this study's design ran at, so pinning
+  # it changes nothing about the study and keeps `reference-k1` reproducible by
+  # the sampler. The write-gate question gets its own experiment
+  # (configs/search/beta-policy-*.yaml), sized against the measured noise floor
+  # instead of borrowed from a budget spent on something else.
+  beta_policy: learned
 
 # ------------------------------------------------------------------- backend
 # The exact inverse-Cholesky route for every trial. Exact to 5.1e-13 against the
