@@ -1,249 +1,291 @@
-# Measurement provenance: a generated ledger, and maps that cannot go stale
+# Measurement provenance: an index for facts that are already recorded
 
-**Status:** design, not yet implemented.
-**Motivating failure:** measured facts in this repo are mostly untraceable, so
-they get re-derived at GPU cost or, worse, believed without an artefact.
+**Status:** design, revision 2. Not implemented.
+**Revision 2 exists because revision 1's motivating premise was false.** An
+adversarial review checked it against the repo and the live run store; §1 below
+is rewritten against what it found, and two of the four proposed changes are
+withdrawn. The diff between the two revisions is itself the argument for the
+surviving parts.
 
-## 1. The failure, with numbers
+## 1. The failure -- corrected
 
-Of 869 comment blocks in `koopman_lm/` + `experimentation/`, 41 are
-measurement-shaped (they quote a percentage, a factor, a scientific-notation
-figure, or the word "measured"). **11 cite a job id, a run_id, a commit or a PR.
-30 cite nothing.**
+Revision 1 claimed measured facts "live nowhere a later reader would find". That
+is false, and checkable in one command. Every job id from revision 1's own
+motivating table is cited in tracked files, committed before the spec was
+written:
 
-The most consequential instance was found on 2026-08-24. `ska.py`'s chunked-route
-warning claimed "~100% RELATIVE ERROR ... measured against a per-token-causal
-reference", and that figure is why nine of eleven registry configs carry a
-disclaimer on their results. Its provenance turned out to be commit `40f6653`,
-"Add files via upload" (2026-05-21) -- a bulk import of an external tree, with no
-harness, no geometry, and no job id. The number was *asserted* upstream and
-*cited as measured* here.
-
-The same session re-derived, at GPU cost, facts that had been measured hours
-earlier in the same session:
-
-| fact | job | what it cost to learn |
+| measurement | job | cited in |
 |---|---|---|
-| sigma = 9.50e-3 at 600 steps, 5 seeds | 445832 | 41 min |
-| sigma = 7.54e-3 at 1500 steps, 5 seeds | 445994 | 1 h 51 min |
-| SKA ablation delta 0.0251 +- 0.0030 SEM | 445994 | (same run) |
-| layerscale 0.01/0.1/0.5/1.0 -> loss | 445689 | 33 min |
+| sigma = 9.50e-3 @ 600 steps | 445832 | 6 tracked files |
+| sigma = 7.54e-3 @ 1500 steps | 445994 | 3 |
+| layerscale -> loss, 4 points | 445689 | 13 |
+| the loop closes, 4 trials | 445657 | 5 |
 
-None of those numbers lives anywhere a later reader would find it. They exist in
-this conversation and in `/scratch`, which is cleanable.
+`configs/search/beta-policy-1500.yaml`, `code-tests/test_noise_floor_analysis.py`,
+`scripts/analyze_beta_policy.py`, and others. Only one number from that table --
+the SKA ablation delta, 0.025139 -- is genuinely uncited anywhere in the tree.
 
-## 2. What already exists -- most of it
+**So the problem is not that facts go unrecorded. It is that they are recorded
+ad hoc and scattered, with no index.** A fact lands in whichever artefact its
+author happened to be editing -- a YAML header, a module docstring, a test
+docstring, a commit message -- and a reader who does not already know which file
+to open cannot find it. That is why revision 1's author re-derived facts that
+were, at that moment, sitting in tracked files two directories away.
 
-This is not a new system. Four facts, verified rather than assumed:
+Revision 1's supporting evidence was itself the failure it described. Its count
+-- "30 of 41 measurement-shaped comment blocks cite nothing" -- covered `#`
+comments in `koopman_lm/` and `experimentation/` **only**, excluding `configs/`,
+`scripts/`, `code-tests/` and all 581 docstrings in the same two packages: the
+exact places the citations turned out to live. The number was asserted from a
+biased sample and presented as a measurement. That is the same shape as the
+defect this repo has been correcting all week -- `ska.py`'s "~100% RELATIVE ERROR
+... measured", which traced to commit `40f6653`, "Add files via upload", with no
+harness and no job id behind it.
 
-**Every run already records its own conditions.** A materialized `spec.yaml`
-carries `run_id`, `group_id`, `code_id` (a full commit sha), `study_name`,
-`trial_number`, `anchor_name`, a `provenance` block (git commit, torch, cuda,
-python, materialized_at), and the complete resolved `model` / `data` / `optim` /
-`runtime`. Alongside it: `attempts.jsonl` (failure history), `train.log`, and
-`eval/**/quick_eval.json` (loss, ppl, tokens_per_sec, peak_memory_gib,
-`ska_ablation.loss_delta`).
+The corrected diagnosis points at **an index** and away from new capture
+machinery. Revision 1 proposed both; only the index survives.
 
-**`experimentation/results.py` already walks that store.** Its docstring states
-the model outright: "No database, no service: the filesystem is the store, and
-this is a walk over it." It emits one row per (run, checkpoint, task).
+## 2. What already exists
 
-**`group_id` already groups seeds.** `group_id = sha256(model + data + optim)`
-excludes the seed, so runs differing only in `runtime.seed` share one. Verified
-on job 445994: `group_id c7b818ff` -> 5 runs, seeds [42, 43, 44, 45, 46].
+Verified, not assumed:
 
-That last point is the design's hinge. **A noise floor is a derived property of
-the run store, not a special experiment.** Any group with n >= 2 yields one for
-free. The two dedicated noise-floor studies were necessary to *create* replicate
-groups, not to compute anything the store could not.
+**Runs record their own conditions.** A materialized `spec.yaml` carries
+`run_id`, `group_id`, `code_id`, `study_name`, `trial_number`, `anchor_name`, a
+`provenance` block, and the full resolved `model` / `data` / `optim` / `runtime`.
 
-**`test_docs_are_not_stale.py` already encodes the philosophy.** Its docstring
-records a prior finding -- "docstrings are accurate, prose docs have drifted" --
-and its rule: pin only mechanically checkable claims, never wording, because "a
-test that pinned wording would fail on every edit and get deleted, which is worse
-than no test."
+**`attempts.jsonl` records the launch.** One append-only record per attempt:
 
-## 3. The four changes
-
-### 3.1 Widen `results.py`'s axis columns -- derived, not hardcoded
-
-`aggregate()` currently hardcodes 11 axis keys: run, name, run_id, group_id,
-d_model, n_layers, data_kind, lr, seed, sweep_id, sweep_name.
-
-That set is missing every condition that varied in this session's work:
-`max_steps` (so a 600-step and a 1500-step run are **indistinguishable in the
-table today**), the SKA route, `ska_rank`, `ska_layerscale_init`,
-`ska_chunk_size`, `ska_beta_policy`.
-
-The naive fix -- add a column per field anyone might vary -- does not scale:
-`KoopmanLMConfig` has 60 fields, `OptimSpec` 8, `RuntimeSpec` 13, plus data.
-**Roughly 85 columns, most of them constant in any given query.**
-
-So: **emit a column for a field only when it VARIES within the queried root.**
-This is self-limiting by construction rather than by taste.
-
-- a 5-run replicate group -> only `seed` differs -> 1 axis column
-- a 256-trial interaction study -> 9 sampled axes differ -> 9 axis columns
-- a whole-scratch walk -> wide, and correctly so: those runs really do differ in
-  many ways, and a narrow table would be hiding it
-
-Width therefore tracks the actual dimensionality of the question asked, and can
-never exceed it. Identity columns (`run`, `run_id`, `group_id`, `code_id`) are
-always emitted; the full conditions always remain in each run's `spec.yaml`, so
-nothing is lost by omitting a constant column -- it is one file read away.
-
-A `--all-axes` escape hatch prints the constant columns too, for the case where
-someone needs to confirm *what* the constant was.
-
-### 3.2 Record the Slurm job id at materialization
-
-The `provenance` block carries git commit, torch/cuda/python versions and
-`materialized_at`, but **no job id**. Without it a ledger row cannot reach the
-log, the sbatch script, or `sacct`'s record of what was allocated and billed.
-
-Add `slurm_job_id` (from `SLURM_JOB_ID`, null when run interactively) to the
-provenance block.
-
-**Identity-safe by construction, and this must be verified rather than assumed:**
-`provenance` is not part of `_scientific_payload`, so `run_id` and `group_id`
-cannot move. The implementation must assert `4m-golden` stays
-`2e63f16e / d812e412` and that `identity_baseline.json`'s three pinned specs are
-unmoved.
-
-### 3.3 A group aggregator: `python -m experimentation.ledger <root>`
-
-Groups rows by `group_id` and emits, per group: n, mean, sigma, SEM, and the
-derived resolvable effects `2*sigma*sqrt(2)` (trial vs trial) and
-`2*sigma*sqrt(1 + 1/n)` (a single trial against the group mean).
-
-Two behaviours are load-bearing:
-
-**n = 1 groups must be marked "no sigma available", not omitted and not given
-sigma = 0.** A single run silently trusted is the exact error made in this
-session: the SKA ablation delta was judged against a between-trial floor when it
-was in fact a five-run mean whose SEM was the right statistic (t = 8.4, not
-"below the floor"). The aggregator's job is to make the distinction
-unmissable.
-
-**A group with two members at the same seed must raise.** Under
-`runtime.deterministic: true` a same-seed repeat is bit-identical, so it
-contributes a spurious zero and drives sigma toward zero -- a fabricated floor,
-which is the most dangerous wrong answer available. (`analysis.noise_floor`
-already refuses this; the aggregator must not be a second, laxer path to the same
-number.)
-
-Output is a committed snapshot, `docs/measurements/index.generated.md`, because
-`/scratch` is cleanable and the index must outlive it. A test regenerates and
-diffs against whatever run roots still exist, tolerating absent ones.
-
-### 3.4 `docs/MEASUREMENTS.md` -- interpretation only, with a guard
-
-Generation cannot produce the part that matters most: what a measurement *means*,
-and what it *retracts*. That layer is hand-written and deliberately small.
-
-Each entry is a claim, its citation, and -- where applicable -- what it overturned:
-
-```
-sigma does not shrink materially with horizon.
-  9.50e-3 @ 600 steps (job 445832) -> 7.54e-3 @ 1500 (job 445994): 21%, not the
-  order of magnitude predicted. sigma is a near-constant 0.17-0.18% of the loss
-  at both horizons, so more steps buys resolution only as fast as it buys loss.
-  RETRACTS: "longer trials will fix the noise floor" (proposed 2026-08-24).
-
-SKA is load-bearing on the 256x17 proxy.
-  ablation delta 0.025139 +- 0.002976 SEM over 5 seeds, t = 8.4 (group c7b818ff,
-  job 445994).
-  RETRACTS: "not established, the delta is below the floor" -- that judged a
-  five-run mean against a between-trial floor, the wrong statistic.
-
-The 4m ablation delta (1.17e-4, job 445657) is a SCALE artefact, not evidence
-that SKA is inert. The proxy gives 1.17e-2 at the same layerscale -- 100x.
-  RETRACTS: "SKA is switched off by LayerScale and never switches on".
+```json
+{"timestamp": "2026-08-25T02:11:58Z", "host": "n17", "job_id": "445994",
+ "git_commit": "48148123...", "code_id": "48148123...", "forced": false}
 ```
 
-The retraction lines are the highest-value content, because a reader who sees
-only the surviving prose will re-derive the dead claim. Four claims died in one
-session.
+`write_policy.make_attempt_record` already takes `job_id`, and every launch path
+already passes `SLURM_JOB_ID` into it.
 
-**The guard:** a test asserting every number in `MEASUREMENTS.md` appears in an
-entry that cites a `job \d{6}`, a `run_id`, or a `group_id` -- scoped to the
-entry (a block separated by a blank line), not to a line window, so reformatting
-an entry cannot break it. Section headings, dates and the file's own prose are
-exempt by living outside entries. This keeps the file
-interpretation-only -- a paragraph with no citation fails -- and stops it growing
-into the prose doc that `test_docs_are_not_stale.py` was written because of.
+**`experimentation/results.py` walks the store** -- "the filesystem is the store,
+and this is a walk over it" -- emitting one row per (run, checkpoint, task).
 
-## 4. Maps
+**`group_id` groups seeds.** `group_id = sha256(model + data + optim [+
+schedules when non-empty])` excludes the seed, so seed-replicates share one.
+Verified: group `c7b818ff` -> 5 runs, seeds 42-46.
 
-Three tables were built by hand during this session and would otherwise be
-rebuilt. Each becomes a generator plus a regenerate-and-diff test, following
-`docs/proxy-256x17-anchors-resolved.md`, which already works this way:
+**Aggregation already exists, on a richer source.** `analysis.noise_floor`
+computes sigma and resolvable effects from the optuna journal -- which carries
+FAILED and PRUNED trials, `model_seed` and `reference_group`, none of which a
+filesystem walk can see. `scripts/analyze_beta_policy.py` already lays out all
+three comparison denominators (`sigma*sqrt(2)`, `sigma*sqrt(1+1/n)`,
+`sigma*sqrt(2/n)`) with a family-wise correction.
+
+**`test_docs_are_not_stale.py` encodes the philosophy**: pin only mechanically
+checkable claims, never wording, because "a test that pinned wording would fail
+on every edit and get deleted, which is worse than no test."
+
+## 3. The three changes, in build order
+
+### 3.1 Generated maps -- build first
+
+Three tables were built by hand this week and would otherwise be rebuilt. Each
+becomes a generator plus a regenerate-and-diff test, following
+`docs/proxy-256x17-anchors-resolved.md`, which already works this way and whose
+inputs are committed YAML.
 
 | map | answers |
 |---|---|
 | config -> SKA route | which of 11 registry configs run chunked vs an exact route |
 | route -> core -> computes alpha | which backend calls `spec_w`, and via which core |
-| study axis -> RunSpec field | which dotted key each sampled axis writes |
+| study axis -> RunSpec field(s) | which dotted keys each sampled axis writes |
 
-A written map goes stale the first time a config flips; a generated one cannot,
-because the test fails and names the file to regenerate. The route map in
-particular would have surfaced the nine-config chunked finding months earlier, as
-a table nobody had to think to look for.
+The third is **many-to-many and the generator must show that**, not flatten it:
+`norm_clip_multiplier` -> `model.ska_norm_clip_c` depends on `ska_rank`, and
+`n_ska_layers` + `placement` *jointly* write `model.ska_layer_indices`. A
+one-to-one table here would be a new false claim.
 
-## 5. What this deliberately does NOT do
+This piece is self-contained, mechanical, needs nothing else in this spec, and is
+the one that would have surfaced the nine-configs-run-chunked finding months
+earlier -- as a table nobody had to think to look for.
 
-A general stale-comment / clutter sweep was considered and **dropped on
-evidence**. A hand-classified sample of 45 randomly drawn short comment blocks
-(seed 20260824, reproducible) found:
+### 3.2 `docs/MEASUREMENTS.md` -- the index, and the highest-value piece
 
-| what it actually is | share |
-|---|---|
-| tensor-shape annotations (`# (B,T,H,r,r)`) | ~20% |
-| informative-terse (`# left-pad => causal`) | ~36% |
-| navigational (`# ---- Batched Cholesky ----`) | ~16% |
-| math annotations (`# U_0 = L^{-1} q`) | ~11% |
-| genuinely low-value | **~18%** |
+Hand-written, small, and deliberately **not** a store of numbers. It is a map
+from a claim to the artefact that supports it, plus the interpretation and
+retraction that generation cannot produce.
 
-The largest restatement-*looking* category is tensor shapes, which are the type
-system Python does not provide here; the math annotations tie code lines to the
-whitening derivation. The deletable prize is roughly 6% of blocks, against a
-large diff across the most load-bearing comments in the repo -- many of which
-record a bug that recurred, where deletion loses the only record that it can.
-(n = 45, so call the 18% figure 10-30%; the conclusion is unchanged at either
-end.)
+```
+sigma does not shrink materially with horizon.
+  9.50e-3 [job 445832] @600 steps -> 7.54e-3 [job 445994] @1500: a 21% reduction,
+  not the order of magnitude predicted. sigma is a near-constant 0.17-0.18% of
+  the loss at both horizons, so more steps buys resolution only as fast as it
+  buys loss.
+  RETRACTS: "longer trials will fix the noise floor" (2026-08-24).
 
-Two mechanical slices are kept, needing no judgement: the 18 pure banner blocks
-and the four duplicated `# frozen: use replace` comments.
+SKA is load-bearing on the 256x17 proxy.
+  ablation delta 0.025139 +- 0.002976 SEM over 5 seeds, t = 8.4
+  [group c7b818ff, job 445994].
+  RETRACTS: "not established, the delta is below the floor" -- that judged a
+  five-run mean against a between-trial floor, the wrong statistic.
 
-Renaming was also considered and dropped: the terse kernel names (`Gf`, `Mf`,
-`Lf`, `qf`) match the paper's notation, which is the right call in code whose
-correctness argument is a derivation.
+The chunked route is ~100% wrong on the mechanism and invisible in LM loss.
+  ablation delta retains 84% of exact at CS=16, t = 1.25 [job 446363-446371];
+  cells span 0.00295 against a 0.0213 floor.
+  RETRACTS: "chunked SKA contributes nothing measurable" (2026-08-24).
+```
 
-## 6. Testing
+**The retraction lines are the point.** Four claims died in one week; a reader
+seeing only the surviving prose re-derives the dead ones at GPU cost. Nothing
+else in the repo records that a claim was killed, or by what.
 
-- widened `results.py`: a root where one field varies emits exactly one axis
-  column for it; a root where it is constant emits none; `--all-axes` emits both.
-  Mutation: hardcode the old 11-key list and the varying-field test must fail.
-- `slurm_job_id`: present when `SLURM_JOB_ID` is set, null when absent, and
-  `4m-golden` / the three `identity_baseline.json` specs unmoved either way.
-- aggregator: a 5-seed group yields the sigma this session measured; an n=1 group
-  is marked, not silently zeroed; a duplicated seed raises.
-- `MEASUREMENTS.md`: every number cites a job/run_id/group_id.
-- each generated map: regenerate and diff.
+**The guard, and why revision 1's was useless.** Revision 1 proposed "each entry
+cites a `job \d{6}`". Its own flagship example passed that guard while being
+wrong: it cited job 445657 for a figure that came from job 445689, and a date
+like `2026-08-24` contains four consecutive digits that a loose pattern matches.
 
-## 7. Risks
+So: **bind the citation to the number, not to the entry.** Every numeric literal
+must be followed within the same sentence by a `[job NNNNNN]`, `[run_id ...]` or
+`[group_id ...]` marker. The test extracts (number, citation) pairs and fails on
+any number lacking one. Prose, headings and dates live outside entries and are
+exempt.
 
-**The index can outlive its data.** `/scratch` is cleanable, so a committed index
-may cite run roots that no longer exist. Accepted: the index is the durable
-artefact and the run dir is the perishable one. The regenerate test must tolerate
-absent roots rather than fail on them, or it becomes a test of filesystem
-retention.
+A second check, cheap and worth having: every cited job id must appear somewhere
+else in the tree, or in `sacct`. A citation to a job that never existed is the
+failure this file is for.
 
-**`MEASUREMENTS.md` could grow into the prose doc this repo already learned to
-distrust.** The citation guard is the structural defence; the discipline is that
-it records interpretation and retraction only, never a number the index already
-carries.
+### 3.3 Widen `results.py`'s axis columns -- derived, not hardcoded
 
-**Sparse axis columns across a mixed root.** Walking all of `/scratch` at once
-produces a wide table by construction. That is correct behaviour -- the runs
-really do differ -- but the useful query is per-study, and the docs should say so.
+`aggregate()` hardcodes 11 axis keys. `max_steps` is not among them, so **a
+600-step and a 1500-step run are indistinguishable in the table today** -- the
+exact comparison the sigma work turned on.
+
+Adding a column per field does not scale (60 + 8 + 13 + data + top-level ~ 88,
+nearly all constant in any query). So: **emit an axis column only when that field
+varies within the queried root.** Empirically validated by the review: a
+whole-store walk yields 37 varying fields of 96; a single study root yields 3-8.
+
+Five details the implementation must settle, each a real defect found in review:
+
+1. **List-valued fields must be canonically scalarized.**
+   `model.ska_layer_indices` varies across the store and round-trips as a Python
+   `list`; the natural `len(set(values)) > 1` raises `TypeError: unhashable type`.
+   `optim.groups` and `data.mix` have the same shape. Use
+   `json.dumps(v, sort_keys=True)` for both the varies-test and any group key.
+2. **Run the migrations before comparing.** `results.py` reads raw
+   `yaml.safe_load` and never calls `_migrate_microbatch`, so
+   `optim.per_device_batch_size` (legacy) and `runtime.per_device_batch_size`
+   both appear and both register as varying -- two mostly-empty columns for one
+   concept.
+3. **Absent is not varying.** A field added later and identity-transparent
+   (`model.ska_beta_policy`) is absent in older specs and at its default in newer
+   ones. That is constant, and must not produce a column.
+4. **Nested dicts must not explode.** `data.mix` flattens to three columns; one
+   mix change should be one column.
+5. **`code_id` is in the always-emitted identity set**; do not also emit it as a
+   varying column.
+
+**This is a tool, not a committed artefact.** Revision 1 proposed committing a
+generated index with a byte-diff test; that is incoherent, because the column set
+would be a function of `/scratch` contents, which are not in the repo and change
+on every launch. The `anchors-resolved.md` precedent works precisely because its
+inputs are committed. A `--all-axes` flag prints constant columns for the case
+where someone needs to confirm what the constant was.
+
+**Query scope, stated honestly:** `RUN_ROOT=$SCRATCH/<name>-${SLURM_JOB_ID}` is
+one root **per job**, not per study, so cross-horizon questions (600 vs 1500
+steps) require walking a parent of several roots. The mixed-root case is normal,
+and a wide table there is correct behaviour rather than a defect.
+
+**Failed and pruned runs.** 26 of 117 run directories on the store today have a
+`spec.yaml` and no `eval/` -- 22%. `aggregate()` yields no rows for them, so a
+study that pruned 40% of its trials shows a survivorship-biased picture with no
+sign of it. Emit a state column sourced from `attempts.jsonl`, and count
+attempted-versus-completed. `attempts.jsonl` is also the right source for the
+per-attempt microbatch: the OOM ladder re-materializes `spec.yaml` per rung on
+one directory, so the surviving file shows only the final rung.
+
+## 4. Withdrawn, with reasons
+
+**Recording `slurm_job_id` in the `provenance` block.** Withdrawn: the field
+already exists in `attempts.jsonl`, and revision 1's proposed location would have
+been *worse*. `materialize()` runs before `launcher.submit()`, so on the Slurm
+path it executes on the login node where `SLURM_JOB_ID` is unset -- null exactly
+for the batch runs it exists to trace -- while `SlurmLauncher.submit` captures
+sbatch's stdout containing the real job id and discards it. And the OOM ladder
+overwrites `spec.yaml` per rung, where `attempts.jsonl` appends.
+
+Revision 1's *safety* claim was true and is worth keeping on record:
+`provenance` is not part of `_scientific_payload` and is stamped after identity
+is computed, so nothing in it can move `run_id` or `group_id`.
+
+The one real gap here is small and separable: `SlurmLauncher.submit` should
+append the job id it already receives to the attempt record.
+
+**A new group aggregator.** Withdrawn, and this was the user's call. Three
+independent objections: (a) revision 1's "a group with two members at one seed
+must raise" fires on correct data that exists right now -- group `c7b818ff`
+appears in two roots with the same five `run_id`s, a deliberate bit-for-bit
+reproduction documented in commit `348c8f3`; (b) it misdescribed its own
+precedent, since `analysis.noise_floor` returns `{"available": False, "reason":
+...}` rather than raising, which is better behaviour because raising aborts a
+whole index over one group; (c) it would emit the two statistics that produced a
+judgement `MEASUREMENTS.md` retracts, and omit the mean-vs-mean case
+(`sigma*sqrt(2/n)`) that replaced it -- while `scripts/analyze_beta_policy.py`
+already emits all three, correctly, from the optuna journal.
+
+There are already two "resolvable effect" conventions in the tree
+(`_RESOLVE_SIGMAS = 2.0` in `analysis.py`, `2.39` family-wise corrected in
+`analyze_beta_policy.py`). A third would manufacture the disagreement the index
+exists to prevent. **Aggregation stays where it is; `MEASUREMENTS.md` cites it.**
+
+**A general stale-comment sweep.** Withdrawn, but revision 1's evidence for
+withdrawing it was weaker than it looked and the honest version is stated here.
+
+Revision 1 hand-classified 45 blocks drawn from the 188-197 blocks of <=45
+characters, and found ~18% low-value. **That stratum holds 216 of 3025 comment
+lines -- 7.1% of the text.** The categories it reported (tensor-shape
+annotations, banners, math annotations, terse one-liners) are definitionally
+short-block categories; the sample frame guaranteed they would dominate, and it
+could not see the long blocks where duplicated rationale would live. The
+arithmetic was also wrong: 18% of the short stratum is ~3.9% of blocks, not the
+"6%" claimed.
+
+So the conclusion -- don't sweep -- **stands on a different argument**: the
+deletion criterion is undecidable, this repo's comments frequently record a bug
+that recurred, and the failure mode of deleting one is invisible until the bug
+returns. If anyone wants the empirical case, it requires a stratified sample
+covering the 672 long blocks, which nobody has done.
+
+Two mechanical deletions survive: banner-only blocks (define the pattern -- 1
+strictly, 39 loosely) and the five `# frozen: use replace` occurrences (one
+original, four duplicates).
+
+Renaming was also considered and dropped: `Gf`, `Mf`, `Lf`, `qf` match the
+paper's notation, which is right in code whose correctness argument is a
+derivation.
+
+## 5. Testing
+
+- **maps**: regenerate and diff, per map; the axis map must express many-to-many.
+- **`MEASUREMENTS.md`**: every numeric literal has a citation in the same
+  sentence; every cited job id resolves somewhere. Mutation: the revision-1
+  example (1.17e-2 cited to job 445657) must FAIL the guard.
+- **derived columns**: a root where one field varies emits one column for it; a
+  root where it is constant emits none; a list-valued field does not raise; the
+  legacy and current microbatch names collapse to one column; an absent-in-old
+  identity-transparent field produces no column; `--all-axes` emits both sets.
+  Mutation: restore the hardcoded 11-key list and the varying-field test fails.
+- No golden or `identity_baseline.json` may be touched by any of this. None of
+  these changes goes near `_scientific_payload`.
+
+## 6. Risks
+
+**`MEASUREMENTS.md` grows into the prose doc this repo already distrusts.** The
+number-bound citation guard is the structural defence; the discipline is that it
+records interpretation and retraction only, never a number the cited artefact
+does not contain.
+
+**The index can cite runs that `/scratch` no longer holds.** Accepted -- the
+index is the durable artefact and the run directory is perishable. The job-id
+resolution check must tolerate a cleaned root rather than fail on it, or it
+becomes a test of filesystem retention.
+
+**A wide table on a mixed root.** Correct behaviour, not a defect; the docs
+should say so rather than pretending per-study is the only query.
