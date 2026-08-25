@@ -1,6 +1,10 @@
 # Measurement provenance: an index for facts that are already recorded
 
-**Status:** design, revision 3. Not implemented.
+**Status:** SUPERSEDED by `2026-08-25-generated-maps-and-grouping-design.md`.
+Not implemented, and not to be implemented. Kept because the three rejections
+are the useful part: each one found a proposal that duplicated machinery the repo
+already had, and the design shrank from four changes to two as a result. Read it
+as a record of how the surviving scope was arrived at, not as a plan.
 
 **Revision history, because it is the argument.** Revision 1 was rejected: its
 motivating premise was false and two of its four proposals duplicated machinery
