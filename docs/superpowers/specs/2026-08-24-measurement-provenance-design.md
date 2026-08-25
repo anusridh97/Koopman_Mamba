@@ -189,10 +189,15 @@ until something writes it.
 constant was.
 
 **`--group-by group_id`**, ~40 lines on top of the above: emit `n`, `mean`, `sd`,
-`SEM` per (group_id, checkpoint, task, metric), with `sd`/`SEM` as `None` at
-n = 1, deduplicating on `run_id` so the same group appearing in two roots is one
-group. Named metric, or an argument -- a sigma over `peak_memory_gib` is
+`SEM` per (group_id, checkpoint, task, metric, **n_batches**), with `sd`/`SEM` as
+`None` at n = 1, deduplicating on `run_id` so the same group appearing in two roots
+is one group. Named metric, or an argument -- a sigma over `peak_memory_gib` is
 meaningless.
+
+`n_batches` is in the key because of §7: the same runs yield ablation deltas
+~1.47x apart at 8 versus 64 eval batches, with different verdicts on whether a
+contrast is resolvable. Pooling them would average two statistics into a number
+that is neither.
 
 **No resolvable-effect verdict.** There are already two conventions in the tree
 (`_RESOLVE_SIGMAS = 2.0` in `analysis.py`; `2.39` family-wise corrected in
@@ -365,8 +370,34 @@ per-study is the only query.
 
 ## 7. Appendix: the recomputation that produced §3.2's example
 
-Chunked-route ablation, filtered to `max_steps == 1500`, grouped by route and
-chunk size, every contributing job named:
+**Statistic named first, because omitting it was a defect in this appendix's own
+first draft.** These are the ablation deltas from each run's
+`eval/final/quick_eval.json` -- `train.py --eval_on_final`, which evaluates
+**8 batches** (`n_batches: 8` in every file). They are *not* the same statistic as
+`scripts/measure_chunked_route_ablation.py`'s primary table, which re-evaluates
+each checkpoint at `--eval_batches 64`.
+
+The two disagree, and the disagreement matters:
+
+| statistic | exact | cs16 | cs64 | cs16 vs exact |
+|---|---|---|---|---|
+| 8-batch (`quick_eval.json`) | 0.024418 | 0.020148 | 0.013693 | t = 2.47 |
+| 64-batch (the harness's own) | 0.016402 | 0.013781 | 0.009460 | t = 1.25 |
+
+The 8-batch deltas are systematically ~1.47x larger, so the first eight batches of
+the val shard have a higher SKA dependence than the full sixty-four -- and the
+two statistics give *different verdicts* on whether cs16's shortfall is
+resolvable (marginally, versus not at all). The 64-batch figure is the better
+measurement and the one to quote; the qualitative finding is the same either way.
+
+That is exactly why an index entry must name its statistic and not only its job.
+A generated index reading `quick_eval.json` would silently publish the 8-batch
+column while the investigation's own report quoted the 64-batch one, and nothing
+would flag the contradiction. **§3.2's `--group-by` must therefore emit
+`n_batches` (or the metric path) as part of the group key, not just `group_id`.**
+
+Chunked-route ablation, 8-batch, filtered to `max_steps == 1500`, grouped by route
+and chunk size, every contributing job named:
 
 ```
 cell             n   mean loss   abl mean      SEM      t   jobs
