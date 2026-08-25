@@ -155,11 +155,16 @@ def test_the_chunked_path_warns_at_construction():
     """It is not a slower-but-fine alternative -- it computes something else.
 
     With no exact flag set, chunk_stats uses exclusive-chunk-prefix boundaries,
-    dropping every within-chunk lag-1..lag-(S-1) cross-covariance term.
-    chunk_stats_exact.py's own header measures that at "~100% relative error vs a
-    true per-token-causal reference on short-range recall" -- which is the
-    capability SKA exists for. A number from this configuration is an upper bound
-    on SPEED, not a result.
+    dropping every within-chunk lag-1..lag-(S-1) cross-covariance term -- which is
+    the capability SKA exists for. A number from this configuration is an upper
+    bound on SPEED, not a result.
+
+    This docstring said "chunk_stats_exact.py's own header MEASURES that at ~100%
+    relative error" until 2026-08-24. It does not: it asserts it, inherited
+    verbatim from commit 40f6653 ("Add files via upload", 2026-05-21) with no
+    harness, geometry or job id. The measurements are job 440122 (space.py) and
+    code-tests/test_chunked_route_staleness.py, and the assertions below now
+    require the warning to cite both.
 
     At CONSTRUCTION rather than per forward: once per model, before any time is
     spent."""

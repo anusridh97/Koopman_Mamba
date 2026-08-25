@@ -131,37 +131,71 @@ def test_no_chunked_config_can_use_the_fused_kernel():
         assert _cfg(n).ska_prefix_scan, f"{n} can use the fused kernel; it should"
 
 
-# ----------------------------------------- memory, which the assert does not ----
+# --------------------------- cost and memory, which the assert does not cover ----
 
-def _invchol_stat_gib(c, batch=1):
-    """fp32 bytes for the per-token statistics `inverse_cholesky` materialises:
-    G, M and P = L^-1 at (B,T,H,r,r) plus Cv at (B,T,H,P,r), per SKA layer."""
-    H, r, T = c.ska_n_heads, c.ska_rank, c.max_seq_len
-    P = c.d_model // H
-    return batch * T * H * (3 * r * r + P * r) * 4 / 1024 ** 3
+#: MEASURED on an H100, one SKA layer, fwd+bwd, batch 1, each config at its OWN
+#: max_seq_len -- job 446319, via scripts/measure_chunked_route_cost.py.
+#: {config: (invchol time / chunked time, invchol peak GiB)}.
+#:
+#: An earlier version of this file ESTIMATED the memory as
+#: `T*H*(3r^2 + P*r)*4` bytes, counting G, M, P=L^-1 and Cv. That undercounts by
+#: roughly 2.5x -- `exact_stats` plus `SKACoreInvChol` keep the prefix-sum
+#: contributions AND the sums AND the jittered copy AND the whitened W live for
+#: the backward, nearer 7r^2 + 3Pr -- and two conclusions here rested on the
+#: undercount. Measured peaks replace it: a number from the machine cannot be
+#: wrong about which tensors autograd retains.
+MEASURED_INVCHOL = {
+    "1m":         (1.61, 0.46),
+    "50m":        (5.60, 1.57),
+    "180m":       (6.51, 2.58),
+    "180m_dense": (10.20, 9.37),
+    "180m_gated": (10.21, 9.37),
+    "180m_v2":    (10.21, 9.37),
+    "370m":       (12.57, 20.56),
+}
 
 
 def test_the_rank_cap_is_not_the_binding_constraint_at_370m():
-    """`370m` passes the assert and still cannot realistically run: rank 64 at
-    seq 8192 is tens of GiB of per-token statistics per SKA layer at BATCH 1,
-    before activations. `rank <= 64` is a correctness/indexing bound, not a
-    feasibility one, and reading it as permission is the trap this test names."""
+    """`370m` passes the assert and still cannot realistically train: 20.6 GiB of
+    invchol working set for ONE SKA layer at BATCH 1, and it has 7 SKA layers.
+    `rank <= 64` is a correctness/indexing bound, not a feasibility one, and
+    reading it as permission is the trap this test names."""
     c = _cfg("370m")
     assert c.ska_rank <= INVCHOL_RANK_CAP           # the assert lets it through
-    per_layer = _invchol_stat_gib(c)
-    assert per_layer > 4.0, (
-        f"370m invchol stats measured at {per_layer:.1f} GiB/layer at batch 1; "
-        f"this test asserts the constraint is real")
-    # and it is dominated by rank, not by depth: the four flippable configs are
-    # an order of magnitude cheaper per layer
-    for cheap in ("1m", "180m_dense"):
-        assert _invchol_stat_gib(_cfg(cheap)) < per_layer / 2
+    _ratio, peak = MEASURED_INVCHOL["370m"]
+    n_ska = len(c.ska_layer_indices) if c.ska_layer_indices else c.n_layers
+    assert peak > 16.0, f"370m invchol peak {peak} GiB/layer at batch 1"
+    assert peak * n_ska > 80.0, (
+        f"370m: {n_ska} SKA layers x {peak} GiB = {peak*n_ska:.0f} GiB at batch "
+        f"1, past an 80GB H100 before activations or optimizer state")
 
 
-def test_the_four_flippable_configs_are_actually_cheap():
-    """The other half of the same point: for `1m` and the 180m variants the
-    exact route is not merely legal, it is small. If a flip happens, these are
-    the configs where nothing has to be traded."""
-    for name in ("1m", "180m_dense", "180m_gated", "180m_v2"):
-        gib = _invchol_stat_gib(_cfg(name))
-        assert gib < 8.0, f"{name}: {gib:.1f} GiB/layer at batch 1"
+def test_only_1m_is_cheap_enough_that_nothing_has_to_be_traded():
+    """The distinction the estimate blurred. `1m` is 1.61x chunked and 0.46 GiB
+    for one SKA layer, of which it has 2 -- essentially free, and it is the Echo
+    section 4.1 config both curve goldens record. The three 180m variants are
+    legal but 10.2x and 9.4 GiB per SKA layer: affordable, not free. Calling all
+    four "small" (as this file did while it estimated the memory) would have made
+    a 10x slowdown sound like a flag flip."""
+    assert MEASURED_INVCHOL["1m"] < (2.0, 1.0), MEASURED_INVCHOL["1m"]
+    for name in ("180m_dense", "180m_gated", "180m_v2"):
+        ratio, peak = MEASURED_INVCHOL[name]
+        assert ratio > 5.0, f"{name} invchol ratio {ratio} -- not free"
+        assert peak > 5.0, f"{name} invchol peak {peak} GiB -- not small"
+    assert all(n in MEASURED_INVCHOL for n in CHUNKED
+               if EXPECTED[n][0]), "every invchol-legal config needs a measurement"
+    assert not [n for n in CHUNKED if not EXPECTED[n][0] and n in MEASURED_INVCHOL], (
+        "a config the assert refuses cannot have an invchol measurement")
+
+
+def test_the_rank_cap_is_enforced_behaviourally_not_just_in_prose():
+    """`ska.py` now contains the string "rank <= 64" in five places and only one
+    of them is the assert, so a textual guard would stay green if the assert
+    alone changed. Exercise it."""
+    from koopman_lm.modules.seq.ska import SKAModule
+    kw = dict(d_model=1024, n_heads=16, inverse_cholesky=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        SKAModule(rank=INVCHOL_RANK_CAP, **kw)          # at the cap: allowed
+        with pytest.raises(AssertionError, match="not supported"):
+            SKAModule(rank=INVCHOL_RANK_CAP + 1, **kw)  # one past it: refused

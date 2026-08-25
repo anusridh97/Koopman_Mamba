@@ -171,10 +171,18 @@ def test_the_first_token_of_every_chunk_is_served_exactly(CS):
         f"offset-{CS-1} tokens should be badly wrong, got {rel_last:.3f}")
 
 
-def test_error_grows_monotonically_with_offset_into_the_chunk():
+def test_error_grows_with_offset_into_the_chunk():
     """The mechanism is staleness: a token at offset j is missing j tokens of its
     own history. So the error is a function of j, and this is what makes
-    `ska_chunk_size` -- not sequence length -- the variable that matters."""
+    `ska_chunk_size` -- not sequence length -- the variable that matters.
+
+    NOT monotone, and this test was called `..._monotonically` until 2026-08-24
+    while asserting `max(curve[:8]) <= max(curve)` -- which is a subset compared
+    to its own superset and can never fail. The real curve at CS=32 is
+    [0.00, 0.31, 0.50, 0.59, 0.85, 0.77, 0.96, 0.95, 0.87, 1.03, ..., 1.20] and
+    dips at j = 5, 8, 19, 28: the trend is up, the individual steps are not, and
+    a name promising monotonicity would have to be either wrong or unenforced.
+    So the assertion below is about the TREND, and it is falsifiable."""
     CS, T = 32, 512
     _z, _v, x_n, v_w = _stream(4, T)
     g = torch.Generator().manual_seed(5)
@@ -188,11 +196,18 @@ def test_error_grows_monotonically_with_offset_into_the_chunk():
         m = offs == j
         curve.append(((ch[:, m] - ex[:, m]).norm() / ex[:, m].norm()).item())
     assert curve[0] < 1e-11
-    # rises fast and then saturates near 1: check the shape, not each point
-    assert curve[1] > curve[0]
-    assert curve[4] > curve[1]
     assert curve[-1] > 0.8
-    assert max(curve[:8]) <= max(curve), "not monotone in the large"
+    # The trend, stated so it can fail: the back half of the chunk is far worse
+    # than the first few offsets after the exact one.
+    early = sum(curve[1:4]) / 3
+    late = sum(curve[CS // 2:]) / len(curve[CS // 2:])
+    # 2x, not 3x: measured early=0.464 late=1.141, a ratio of 2.46. 3x was a
+    # guess and it failed; this is the measurement with a 23% margin.
+    assert late > 2 * early, (
+        f"expected the late offsets to dominate; early={early:.3f} "
+        f"late={late:.3f}, curve={[round(c, 3) for c in curve]}")
+    # and it is a rise, not a step at j=1: the middle sits between the two ends
+    assert curve[1] < curve[CS // 4] < curve[-1]
 
 
 # ----------------------------- the lag structure: a STEP, at the chunk offset ----
@@ -225,7 +240,9 @@ def test_lag1_recall_is_destroyed_exactly_inside_the_chunk_and_inflated_outside(
     ratio = {d: (sc[i] / se[i]).item() for i, d in enumerate(ds)}
 
     # the exact route recalls, at every distance
-    assert min(se).item() > 0.02, f"reference recall too weak: {min(se).item():.4f}"
+    # 0.015, not 0.02: the measured value is 0.0288, and a 30% margin on a
+    # sanity check beats a 44% one that a seed change could flip.
+    assert min(se).item() > 0.015, f"reference recall too weak: {min(se).item():.4f}"
 
     inside = [ratio[d] for d in ds if d <= j + 1]
     outside = [ratio[d] for d in ds if d > j + 1]
@@ -233,7 +250,9 @@ def test_lag1_recall_is_destroyed_exactly_inside_the_chunk_and_inflated_outside(
 
     # INSIDE the window: recall is gone. Retained magnitude is small and the
     # sign is not even reliable -- residual crosstalk, not a weakened signal.
-    assert max(abs(x) for x in inside) < 0.35, (
+    # 0.45, not 0.35: measured max is 0.3005. Still far below the 1.05 floor
+    # asserted for the recovered region, so the step is unambiguous either way.
+    assert max(abs(x) for x in inside) < 0.45, (
         f"inside the dead window recall should be destroyed; max |ratio| "
         f"= {max(abs(x) for x in inside):.3f}")
     assert min(inside) < 0, "with the signal gone, some crosstalk should be negative"
@@ -347,8 +366,11 @@ def test_the_gradient_is_as_wrong_as_the_forward_and_barely_aligned():
     be a speed/accuracy trade rather than a different experiment.
 
     It does not. Same weights, same input, same loss: the whole-module gradient
-    is ~90-115% wrong with cosine similarity 0.2-0.5, independently reproducing
-    space.py's "93%-101% wrong in the GRADIENTS" (job 440122).
+    is 99%-105% wrong with cosine 0.13-0.24 over four seeds AT THIS ONE
+    GEOMETRY (d_model 256 / 4 heads / rank 24 / CS 64), independently
+    reproducing space.py's "93%-101% wrong in the GRADIENTS" (job 440122).
+    Scratch runs at the 1m and 180m_dense geometries gave 0.89 and 1.13; those
+    are not asserted here, so they are not claimed as pinned.
 
     The `beta_proj.bias` row is the one to notice: its gradient cosine is ~0, so
     the write gate's bias receives a signal UNCORRELATED with the true one. Any
@@ -409,7 +431,10 @@ def test_the_quoted_hundred_percent_is_reproduced_at_the_ladders_chunk_sizes():
         ch = _y_chunked(x_n, zq_n, v_w, CS)
         rel = ((ch - ex).norm() / ex.norm()).item()
         nrm = (ch.norm() / ex.norm()).item()
-        assert 0.80 < rel < 1.55, f"CS={CS}: rel err {rel:.3f} outside the band"
+        # 0.70, not 0.80: at CS=16 the measured value is 0.8085, a 1% margin.
+        # Note also that "~100%" is the LARGE-chunk figure -- at 1m's chunk
+        # size of 16 the global relative error is 81%, not 100%.
+        assert 0.70 < rel < 1.55, f"CS={CS}: rel err {rel:.3f} outside the band"
         # and it is not a small perturbation of the right answer: at the larger
         # chunk sizes most of the operator's OUTPUT MAGNITUDE is missing too.
         if CS >= 64:

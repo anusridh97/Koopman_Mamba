@@ -51,10 +51,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import copy
 import dataclasses
 import json
-import os
 import subprocess
 import sys
 import time
@@ -81,7 +79,7 @@ SEEDS = (42, 43, 44)
 # --------------------------------------------------------------- spec build ----
 
 def variant_spec(route_exact: bool, chunk_size, seed: int, max_steps: int,
-                 eval_dir: str, out_path: Path, run_root: str) -> Path:
+                 out_path: Path) -> Path:
     """Write a proxy-256x17 variant differing ONLY in route / chunk / seed / steps."""
     raw = yaml.safe_load(PROXY.read_text())
     raw["model"]["ska_inverse_cholesky"] = bool(route_exact)
@@ -89,7 +87,9 @@ def variant_spec(route_exact: bool, chunk_size, seed: int, max_steps: int,
         raw["model"]["ska_chunk_size"] = int(chunk_size)
     raw["runtime"]["seed"] = int(seed)
     raw["optim"]["max_steps"] = int(max_steps)
-    # warmup_ratio 0.02 of the new horizon, matching how the study driver scales it
+    # 0.04 of the new horizon -- proxy-256x17.yaml is warmup_steps 24 at
+    # max_steps 600, and its own comment names 0.04. (This comment said 0.02
+    # while the code said 0.04; the code was right.)
     raw["optim"]["warmup_steps"] = max(1, int(round(0.04 * max_steps)))
     raw["name"] = out_path.stem
     out_path.write_text(yaml.safe_dump(raw, sort_keys=False))
@@ -100,12 +100,33 @@ def variant_spec(route_exact: bool, chunk_size, seed: int, max_steps: int,
 
 def train_cell(spec_path: Path, run_dir: Path, eval_dir: str,
                logging_steps: int) -> Path:
-    """Train one cell as a subprocess. Returns the final checkpoint path."""
-    from experimentation.run.resolve import resolve_run_spec
-    from experimentation.run.train_argv import build_train_argv
+    """Train one cell as a subprocess. Returns the final checkpoint path.
+
+    `build_train_argv` EMITS `--spec run_dir/spec.yaml` and
+    `--model_size run_dir/model_config.json` but writes NEITHER -- its own comment
+    says "`__main__` writes it before handing off to a Launcher, so it always
+    exists by now". Calling it without doing what a Launcher does gives every cell
+    `SystemExit: --spec given but no spec.yaml at ...`, and the failure is then
+    swallowed by the per-cell `except`, so the run completes and reports a JSON of
+    N errors having paid the queue wait for all of them. Worse, the
+    `_read_quick_eval` fallback cannot rescue it either: `write_quick_eval` finds
+    a run directory BY the presence of spec.yaml, so with no spec.yaml no
+    quick_eval.json is ever written.
+
+    So do what `run/__main__.py:62` and `run/launchers.py:196` do, in that order.
+    """
+    from experimentation.run.resolve import materialize, resolve_run_spec
+    from experimentation.run.train_argv import build_train_argv, write_model_config
 
     spec = resolve_run_spec(spec_path)
     run_dir.mkdir(parents=True, exist_ok=True)
+    materialize(spec, run_dir)
+    write_model_config(spec, run_dir)
+    for needed in ("spec.yaml", "model_config.json"):
+        if not (run_dir / needed).exists():
+            raise RuntimeError(
+                f"{needed} was not written to {run_dir}; train.py would exit on "
+                f"it and the error would be swallowed as a per-cell failure")
     argv = build_train_argv(spec, run_dir, eval_on_final=True,
                             eval_data_dir=eval_dir, logging_steps=logging_steps)
     cmd = [sys.executable, "-m", "experimentation.training.train"] + argv
@@ -227,12 +248,17 @@ def main(argv=None):
     for name, exact, cs in cells:
         results["cells"][name] = {"ska_inverse_cholesky": exact,
                                   "ska_chunk_size": cs, "trials": {}}
-        for seed in seeds:
+    # SEED-MAJOR, not cell-major. If the walltime runs out mid-run, seed-major
+    # leaves every cell with the same number of completed trials -- a smaller but
+    # still BALANCED comparison. Cell-major would lose the last cell entirely,
+    # which here is `chunked-cs16`: the 1m/Table-2 chunk size, i.e. the one the
+    # whole exercise is about.
+    for seed in seeds:
+        for name, exact, cs in cells:
             tag = f"{name}-seed{seed}"
             print(f"\n=== {tag} ===", flush=True)
             spec_p = variant_spec(exact, cs, seed, args.max_steps,
-                                  args.eval_data_dir, root / f"{tag}.yaml",
-                                  str(root))
+                                  root / f"{tag}.yaml")
             run_dir = root / tag
             rec = {}
             try:
@@ -257,7 +283,7 @@ def main(argv=None):
     print(f"{'cell':16s} {'n':>2s} {'loss mean':>11s} {'ska_delta mean':>15s} "
           f"{'SEM':>10s} {'t':>7s}")
     for name, rec in results["cells"].items():
-        ds, ls = [], []
+        ds, ls, srcs = [], [], []
         for t in rec["trials"].values():
             # Prefer the cross-route harness's own number; fall back to
             # train.py's --eval_on_final score so a cross-route failure still
@@ -265,6 +291,10 @@ def main(argv=None):
             src = t.get("as_trained") or t.get("train_side_quick_eval") or {}
             if src.get("ska_loss_delta") is None or src.get("loss") is None:
                 continue
+            # The two sources use DIFFERENT eval budgets (this script's
+            # --eval_batches, vs train.py's --eval_on_final_batches default), so
+            # averaging them silently would mix noise levels. Record which.
+            srcs.append("cross-route" if "as_trained" in t else "train-side")
             ds.append(src["ska_loss_delta"])
             ls.append(src["loss"])
         if not ds:
@@ -278,8 +308,9 @@ def main(argv=None):
             tstat = mean / sem if sem else float("inf")
         else:
             sem, tstat = float("nan"), float("nan")
+        stag = "/".join(sorted(set(srcs)))
         print(f"{name:16s} {n:2d} {sum(ls)/n:11.5f} {mean:15.6f} "
-              f"{sem:10.6f} {tstat:7.2f}")
+              f"{sem:10.6f} {tstat:7.2f}   [{stag}]")
     print("=" * 78)
     print("ska_delta = held-out loss with SKA zeroed MINUS with SKA on.")
     print("Positive and large => SKA is load-bearing. ~0 => it earns nothing.")

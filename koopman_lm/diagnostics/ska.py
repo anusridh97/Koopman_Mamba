@@ -69,11 +69,18 @@ def ska_health(ska, hidden_states, max_batch=2):
     beta-gated statistics family `forward()`'s non-exact branch consumes)
     as the bounded-cost health view, regardless of which of the four
     forward strategies (chunked / exact_intrachunk / inverse_cholesky /
-    prefix_scan) is actually selected. prefix_scan (the recommended
-    quality path) and inverse_cholesky compute per-token, not per-chunk,
-    operators via different kernels entirely -- this function does not
+    prefix_scan) is actually selected. prefix_scan and inverse_cholesky
+    compute per-token, not per-chunk, operators via different kernels
+    entirely -- this function does not
     reach into those; it reports the chunk-level approximation as a
     cheap, bounded-cost proxy for the operator family they all share.
+    (This called prefix_scan "the recommended quality path" until
+    2026-08-24. It is recommended only at the fused CUDA kernel's rank-24 /
+    value-width-64 geometry; elsewhere it falls back to the Python
+    reference scan at 137x-160x and inverse_cholesky is the default exact
+    route. See space.py's route table and SKAModule's class docstring --
+    docs/SKA_DIAGNOSTICS.md documents THIS function, so the two must not
+    disagree.)
 
     Detached, fp32, no value readout. `max_batch` caps the batch used for
     the per-chunk eigendecompositions so cost is bounded regardless of the

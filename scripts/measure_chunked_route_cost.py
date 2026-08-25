@@ -83,6 +83,13 @@ sys.path.insert(0, str(REPO))
 from koopman_lm.config import CONFIG_REGISTRY, build_config  # noqa: E402
 from koopman_lm.modules.seq.ska import SKAModule  # noqa: E402
 
+#: Every route `SKAModule.forward` can take. `prefix_scan` is measurable here but
+#: NOT in the default set: off the fused CUDA kernel's rank-24/value-width-64
+#: geometry it falls back to the Python reference scan, and the "137x-160x" that
+#: costs is the other figure in this codebase with no committed artefact behind
+#: it. Ask for it explicitly (`--routes chunked,prefix_scan`) when that is the
+#: number you want; it is too slow to leave in a default sweep over 11 configs.
+ALL_ROUTES = ("chunked", "inverse_cholesky", "exact_intrachunk", "prefix_scan")
 ROUTES = ("chunked", "inverse_cholesky", "exact_intrachunk")
 
 
@@ -158,13 +165,15 @@ def main(argv=None):
     ap.add_argument("--configs", default=None,
                     help="comma-separated subset of CONFIG_REGISTRY")
     ap.add_argument("--routes", default=",".join(ROUTES),
-                    help="comma-separated subset of %s. exact_intrachunk is "
+                    help="comma-separated subset of %s (prefix_scan is "
+                         "measurable but not default -- see ALL_ROUTES). "
+                         "exact_intrachunk is "
                          "400x-600x chunked at seq 8192 and dominates the "
                          "runtime while telling you nothing you did not already "
                          "know -- drop it to finish inside a short walltime."
-                         % (ROUTES,))
+                         % (ALL_ROUTES,))
     args = ap.parse_args(argv)
-    routes = [r for r in ROUTES if r in set(args.routes.split(","))]
+    routes = [r for r in ALL_ROUTES if r in set(args.routes.split(","))]
     if "chunked" not in routes:
         ap.error("--routes must include 'chunked'; it is the baseline every "
                  "ratio is taken against")
