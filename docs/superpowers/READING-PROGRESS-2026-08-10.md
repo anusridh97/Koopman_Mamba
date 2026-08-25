@@ -1,3 +1,9 @@
+> **PARTLY STALE.** Its headline finding — "docstrings are accurate, prose
+> docs have drifted" — is the reason `code-tests/test_docs_are_not_stale.py`
+> exists and is still the right lesson. Individual counts and line numbers in
+> here have since moved; item 6's `config_hash` claim was corrected on
+> 2026-08-24 (the true count is nine, not five).
+
 # Codebase reading progress — handoff, 2026-08-10
 
 > **Corrections as of 2026-08-19 — read this box before §6.**
