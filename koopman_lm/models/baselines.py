@@ -99,9 +99,17 @@ def _build_model(cfg, seq_layer_fn, mlp_fn):
                 nn.init.orthogonal_(ska.key_proj.weight)
                 nn.init.orthogonal_(ska.query_proj.weight)
                 nn.init.xavier_uniform_(ska.value_proj.weight)
-                nn.init.zeros_(ska.beta_proj.weight)
-                if ska.beta_proj.bias is not None:
-                    nn.init.zeros_(ska.beta_proj.bias)
+                # See koopman_lm.py's matching guard: `beta_proj` is None under
+                # ska_beta_policy 'one' and 'head_scalar', so this raised
+                # AttributeError at construction. This site is the one the MQAR
+                # arm goes through (`build_mamba_ska_swiglu`), so it is reachable
+                # from an experiment rather than only from a spec.
+                if ska.beta_proj is not None:
+                    nn.init.zeros_(ska.beta_proj.weight)
+                    if ska.beta_proj.bias is not None:
+                        nn.init.zeros_(ska.beta_proj.bias)
+                if ska.beta_logit is not None:
+                    nn.init.zeros_(ska.beta_logit)
                 if cfg.ska_layerscale:
                     nn.init.normal_(ska.out_proj.weight, mean=0.0,
                                     std=cfg.ska_out_proj_std)

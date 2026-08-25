@@ -123,7 +123,14 @@ def transport_write(L, A, R, x_last, x_t, vbar_t):
 
 def read(L, A, R, q, K, eta=1.0):
     """y = eta * R (A^K L^-1 q). q:(N,r) -> y:(N,P). Contractive A (||A||<=1) so
-    no spectral normalization -- the sqrt-beta guarantee (do NOT clamp here)."""
+    no spectral normalization -- do NOT clamp here.
+
+    The guarantee is the SINGLE-KEY-STREAM one, not a sqrt-beta one: A is built
+    from one key stream whose Gram (plus ridge) is G, which is what bounds it by
+    1. This said "the sqrt-beta guarantee" until 2026-08-24; that wording would
+    tell a reader that `ska_beta_policy='linear'` or `'one'` voids it, and both
+    are equally contractive. See
+    code-tests/test_ska_contractivity_contract.py."""
     qw = tri_solve_lower(L, q).unsqueeze(-1)          # (N,r,1)
     h = qw
     for _ in range(K):

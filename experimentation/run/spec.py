@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
-from koopman_lm.config import KoopmanLMConfig, build_config
+from koopman_lm.config import KoopmanLMConfig, build_config, identity_payload
 from experimentation.training.optim import ParamGroupSpec, parse_group_specs
 from experimentation.training.schedules import validate_schedules
 
@@ -296,7 +296,12 @@ def _scientific_payload(spec: RunSpec, include_seed: bool) -> Dict[str, Any]:
     if not optim.get("groups"):
         optim.pop("groups", None)
     payload = {
-        "model": dataclasses.asdict(spec.model),
+        # `identity_payload`, not `asdict`: a model field sitting at an
+        # identity-transparent default hashes as though it were absent, which is
+        # the same rule this function already applies to `schedules` and
+        # `optim.groups` below and above -- and for the same reason. See
+        # koopman_lm/config.py::IDENTITY_TRANSPARENT_DEFAULTS.
+        "model": identity_payload(spec.model),
         "data": dataclasses.asdict(spec.data),
         "optim": optim,
     }

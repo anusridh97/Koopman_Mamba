@@ -70,6 +70,7 @@ class SKABlock(nn.Module):
             # getattr for the same reason as the fields above it: a checkpoint's
             # embedded config predates this field and must still build.
             precision=getattr(cfg, 'ska_precision', 'fp32'),
+            beta_policy=getattr(cfg, 'ska_beta_policy', 'learned'),
         )
         # Parallel short-range causal depthwise conv (covers within-chunk band).
         self.short_conv = None

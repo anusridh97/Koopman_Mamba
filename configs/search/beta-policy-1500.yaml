@@ -1,0 +1,368 @@
+# Is the learned per-token SKA write gate useful? Four policies, five seeds,
+# 1500 steps.
+#
+# ============================ THE QUESTION ============================
+#
+# `beta = sigmoid(beta_proj(h))` has been in every SKA config since the module
+# was written, and nothing has ever measured whether it earns its keep. Three
+# contrasts answer three separate questions, and conflating them is the usual
+# way this goes wrong:
+#
+#   learned vs one          is a write gate useful at all?
+#   learned vs head_scalar  is the TOKEN dependence useful, or is the gate only
+#                           supplying a per-head write scale that `out_proj`
+#                           could absorb?
+#   learned vs linear       is the square root carrying anything, or would
+#                           multiplying by beta do?
+#
+# A NULL result is a real deliverable here. "Fixed beta = 1 is indistinguishable
+# from a learned gate above the noise floor, therefore prefer the simpler model"
+# is the recommendation this study should return if that is what the numbers
+# say, and the design is sized so that such a statement means something rather
+# than merely reflecting a study too small to see.
+#
+# ## Necessary conditions are not evidence of benefit
+#
+# A separate diagnostic reports beta's distribution across tokens and heads. It
+# is deliberately NOT part of this study's objective, because "beta develops
+# meaningful variation" is a necessary condition for the gate to be doing
+# anything and not evidence that it helps. A gate can vary a great deal and help
+# nothing. The distribution and the loss effect are reported separately and
+# neither stands in for the other.
+#
+# ============ THE HORIZON, AND WHAT IT TURNED OUT NOT TO FIX ============
+#
+# Job 445832 measured sigma = 9.50e-3 across five seeds at 600 steps on this
+# base: a trial-vs-trial resolvable effect of 0.0269. At that floor a 4-cell
+# grid at one seed each returns a confident ranking of noise.
+#
+# Job 445994 re-measured the same five references at 1500 steps, testing the
+# hypothesis that most of that spread was WHERE ON THE CURVE a seed sits rather
+# than a quality difference between seeds -- in which case sigma should shrink
+# as the curve flattens and the proxy would become a sharper instrument.
+#
+# **BARELY.** All five seeds at 1500 steps (job 445994, COMPLETE):
+#
+#     seed 42   4.40165240        seed 45   4.40561861
+#     seed 43   4.40158451        seed 46   4.39962065
+#     seed 44   4.41825330
+#
+#   -> sigma = 7.5373e-3 at n=5, against 9.5010e-3 at n=5 at 600 steps.
+#      A 21% reduction. Same order of magnitude.
+#
+# Resolvable effects at 1500 steps: trial-vs-trial 2*sigma*sqrt(2) = 2.13e-2;
+# mean-vs-mean at n=5 per cell, 2*sigma*sqrt(2/5) = 9.53e-3.
+#
+# Two earlier revisions of this header were wrong about this, in both
+# directions, and both are recorded because the errors are the instructive part:
+#
+#   * The first read a 90x improvement off the FIRST TWO seeds, which landed
+#     6.8e-5 apart against 6.08e-3 for that same pair at 600 steps. Two draws
+#     from a distribution with sigma ~ 1e-2 landing 7e-5 apart is an
+#     unremarkable coincidence, and reading a variance off two points is how it
+#     becomes a result. Job 445832 used five seeds precisely because four
+#     degrees of freedom was already considered thin.
+#   * The correction then overshot to "unchanged" on the strength of n=3
+#     (9.60e-3). The full five give 7.54e-3, which is neither 90x better nor
+#     unchanged.
+#
+# Consequences, which are the reason this section is long:
+#
+#   1. The horizon is NOT the problem. Sigma is a property of the seed-to-seed
+#      spread at this scale, not of an unconverged curve, so no affordable
+#      number of steps fixes it. The OBJECTIVE is the problem -- which is a
+#      direct argument for the retrieval arm
+#      (scripts/run_beta_policy_mqar.sbatch) carrying the decision rather than
+#      LM loss.
+#   2. This study's job changes from RANKING to BOUNDING. At n=5 per cell the
+#      mean-vs-mean resolvable effect is 9.53e-3, so the honest output is "no
+#      policy differs from the control by more than about 1e-2", not an
+#      ordering. That is still worth having: it is the first quantitative
+#      statement anyone has made about this gate.
+#   3. Since sigma barely moves with the horizon, more seeds at a SHORTER
+#      horizon buys more resolution per GPU-hour: 48 trials at 600 steps cost
+#      about what 20 at 1500 do, and at n=12 per cell would resolve
+#      2*9.5e-3*sqrt(2/12) = 7.8e-3. 1500 is kept anyway, for one reason: it is
+#      0.98 epochs, the regime a real run is in, and a bound measured at 40% of
+#      an epoch would not describe it. The cheaper design is recorded so the
+#      choice is visible rather than implied.
+#
+# 1500 x 64 effective_batch x 1024 seq = 98,304,000 tokens against a
+# 100,000,536-token shard: 0.98 epochs, and one epoch is 1525 steps. This is the
+# largest horizon that is still a single clean pass. Going further repeats data
+# and would confound a write-gate effect with a memorisation effect -- which
+# matters more here than usual, because a write GATE is exactly the mechanism a
+# model would use to memorise selectively.
+#
+# ========================= WHY 4x5 AND NOT 4x1 =========================
+#
+# Every design is a member of a `reference_group`. That is unusual for an anchor
+# file in this repo and it is the design, not an oversight.
+#
+# `analysis.anchor_contrasts` contrasts each NON-group anchor against the first
+# group's replicate mean, and excludes group members from its rows. So the
+# obvious alternative -- one grouped control plus fifteen lone anchors -- would
+# produce fifteen single-trial-vs-5-mean rows at a threshold of
+# 2*sigma*sqrt(1+1/5) = 2.19*sigma, and would throw away the fact that those
+# fifteen are themselves five replicates of three conditions.
+#
+# Grouping all four instead gives:
+#
+#   * sigma POOLED over 16 degrees of freedom rather than 4. The 600-step
+#     measurement's own header records that 4 dof leaves sigma with wide error
+#     bars; this fixes that as a side effect.
+#   * mean-vs-mean contrasts, whose sd is sigma*sqrt(2/5) = 0.632*sigma, so the
+#     resolvable effect is 1.265*sigma instead of 2.83*sigma. A 2.2x gain in
+#     sensitivity for a 4x increase in trials.
+#
+# The cost is that `anchor_contrasts` returns no rows, since every anchor is a
+# group member. That is accepted rather than worked around: the 4-way comparison
+# with the correct pooled-sigma denominator is computed by
+# `scripts/analyze_beta_policy.py` from `trials.csv`, which the study writes
+# regardless. Using the built-in table would mean using the wrong denominator to
+# get a table -- and `anchor_contrasts`'s own comment explains at length why the
+# denominator is the thing that decides whether a real effect is reported as
+# resolvable.
+#
+# `noise_floor` DOES pool across groups (by pooling sums of squares rather than
+# averaging sds, so a group of 2 cannot outvote a group of 8), so the floor this
+# study reports is the pooled one and no code change is needed for that half.
+#
+# ## The control is a re-measurement, on purpose
+#
+# `beta_learned` is identical in every scientific factor to
+# noise-floor-1500.yaml's `reference` group -- same base, same horizon, same
+# five seeds, same default policy. So its five losses should reproduce job
+# 445994's, and if they do not, something in the beta_policy field's wiring
+# changed the default path and the whole study is invalid. That check is free
+# and it is the first thing to look at in the output.
+#
+# ===================== WHY EVERY CELL SHARES A BACKEND =====================
+#
+# All four policies feed the SAME key stream into both slots of the cross-weight
+# M, so all four are contractive (sigma_max(L^-1 M L^-T) <= 1, pinned per policy
+# by code-tests/test_ska_beta_policy.py). That is why all four can run on
+# `exact_invchol` -- the base's own route, which omits the spectral clamp -- and
+# therefore why no contrast in this study is confounded with a change of kernel.
+#
+# It is also why the retired asymmetric convention is not a fifth cell: it is
+# not contractive, so on this backend it would apply an expansive operator and
+# report a loss rather than failing. That question is settled by the bound
+# instead, which is a proof and not a five-seed comparison.
+#
+# ## What IS confounded, stated so a positive result is not over-read
+#
+# "No contrast is confounded with a change of kernel" is true and it is not the
+# same as "nothing is confounded". At initialisation every policy sits at
+# beta = sigmoid(0) = 0.5, so the KEY WEIGHT differs across cells and therefore
+# so does the key Gram relative to the fixed `ska_ridge: 0.01`:
+#
+#     policy        key weight w   G scale w^2   effective ridge (0.01 / w^2)
+#     one                  1.000         1.00                        0.010
+#     learned              0.707         0.50                        0.020
+#     head_scalar          0.707         0.50                        0.020
+#     linear               0.500         0.25                        0.040
+#
+# So learned-vs-one and learned-vs-linear each move the Gram-to-ridge ratio by
+# 2-4x at step 0, and the value magnitude entering `out_proj` by up to 2x
+# (heavily damped by `ska_layerscale_init: 0.01`). The gate can learn to
+# compensate, and pinning one ridge across cells is the right control choice --
+# holding the ridge fixed is what makes the OPERATOR comparable -- but a reader
+# should know the initial conditions are not identical.
+#
+# Two things limit how much this can explain. First, the anticipated outcome is
+# a null, and an initial-scale difference cannot manufacture a null. Second, the
+# effective ridge is NOT MONOTONE in the ordering the retrieval arm produced:
+# job 446102 has `one` (effective ridge 0.010) and `linear` (0.040) both at
+# 1.0000 while `learned` and `head_scalar` (both 0.020) sit at 0.36 and 0.33.
+# The two winners sit at OPPOSITE extremes of effective ridge and the two losers
+# are together in the middle, so no monotone function of the initial Gram-to-
+# ridge ratio orders those four results. That is an argument against the
+# confound carrying the retrieval effect; it is not an argument that the
+# confound is absent.
+#
+# The clean way to close it would be a fifth and sixth cell pinning `ska_ridge`
+# to 0.005 and 0.04 at `learned`, so the ridge axis is measured rather than
+# reasoned about. Not run here -- it is a different experiment, and it is the
+# obvious follow-up if the retrieval separation replicates.
+#
+# ## A second thing `linear` changes, which this design cannot attribute
+#
+# `_weight_key_value` applies the SAME exponent to the key and to the value:
+# `learned` gives (sqrt(beta) z, sqrt(beta) v) and `linear` gives
+# (beta z, beta v). So the `linear` cell moves two things at once -- what enters
+# the Gram and cross-weight (G, M), and what enters the readout (C_v) -- and a
+# difference at that cell is not attributable between them.
+#
+# That matters because the two have different consequences. The key exponent
+# changes the OPERATOR the model applies; the value exponent changes only the
+# magnitude of what it reads out, which `out_proj` and `ska_layerscale` can
+# absorb. If the retrieval effect were entirely the value exponent it would be a
+# scale artefact rather than a statement about the write gate.
+#
+# Separating them needs a fifth policy -- key weighted by beta, value by
+# sqrt(beta) -- and that is deliberately NOT added here. Adding a cell after
+# seeing the retrieval result would make this study a different, post-hoc
+# experiment; the four cells were chosen before any of it ran. It is the first
+# follow-up to run, and it is cheap: one more arm on the MQAR sweep, where the
+# effect is large enough that three seeds settle it.
+#
+# ============================= CONCURRENCY =============================
+#
+# This study fans out, which noise-floor.yaml deliberately did NOT. The
+# reason that file gives is sound and does not apply here: it was measuring a
+# variance, and contention is a source of variation that is not seed. This study
+# compares LOSSES, and the base spec sets `runtime.deterministic: true`, so a
+# trial's loss is a deterministic function of its spec -- GPU contention changes
+# throughput, not arithmetic. The control cell's agreement with job 445994's
+# serial run is the check on that claim, and it is built into the design.
+#
+# FIVE workers, and the overshoot needs stating because the obvious worry about
+# it turns out not to apply here -- for a reason that is worth writing down,
+# since it is load-bearing and it is not obvious.
+#
+# `driver.drive` loops `while _finished(study) < n_trials`, checking FINISHED
+# trials before asking, so N workers can ask up to N-1 times past the target
+# once they desynchronize (and they do: the four policies are not exactly
+# equal-cost). `_print_plan` reports "up to 4 extra" at 5 workers and it is
+# right; 20/5 = 4 exact waves does NOT prevent it. Those extra trials are
+# SAMPLED, since all 20 anchors are taken.
+#
+# The worry: a sampled point takes the base spec's seed (42) -- seed varies only
+# for designated reference repeats -- and draws `beta_policy` from the same four
+# choices. If that were the whole spec, an overshoot trial would be
+# spec-identical to an anchor at seed 42, and `run_id` is a content hash of the
+# spec, so it would claim a directory an anchor already owns.
+#
+# It cannot, because `ska_ridge`, `ska_layerscale_init` and `learning_rate` are
+# left as CONTINUOUS ranges above (they have to be -- see the `fixed_params`
+# note). A sampled point therefore draws three floats that almost surely differ
+# from the base's 0.01 / 0.01 / 4e-4, so its spec, `run_id` and directory all
+# differ from every anchor's. The constraint that forced those axes to stay
+# ranges is the same one that makes the overshoot harmless.
+#
+# So overshoot trials are wasted GPU time and nothing worse. They are also
+# identifiable: they carry no `anchor_name` and no `reference_group`, so
+# `noise_floor` ignores them and `scripts/analyze_beta_policy.py` filters on the
+# group attribute rather than on trial count. Five workers rather than eight
+# simply wastes fewer of them (up to 4 instead of up to 7), at a cost of one
+# extra wave -- about 90 minutes instead of 66.
+#
+# CONFIRMED IN JOB 446074, and the margin was thinner than the argument above
+# makes it sound. Four overshoot trials appeared, and they sampled one of EACH
+# policy -- linear, head_scalar, learned, one -- so with the float axes pinned
+# all four would have collided with an anchor rather than merely one of them.
+# What separated them was exactly the three continuous draws:
+#
+#     group_id   policy       ska_ridge              optim.lr
+#     8d68c78d   linear       0.01      (anchor)     0.0004    (anchor)
+#     1a36ce8b   linear       0.004971  (sampled)    0.000301  (sampled)
+#     28e3c8b6   head_scalar  0.01      (anchor)     0.0004    (anchor)
+#     5a33f71c   head_scalar  0.006884  (sampled)    0.000498  (sampled)
+#     c7b818ff   learned      0.01      (anchor)     0.0004    (anchor)
+#     db4bfdf8   learned      0.003645  (sampled)    0.000362  (sampled)
+#     4188d889   one          0.01      (anchor)     0.0004    (anchor)
+#     dd0eb3b6   one          0.018997  (sampled)    0.000481  (sampled)
+#
+# Eight distinct group_ids, no directory claimed twice.
+#
+# `_print_plan` warns below 5 waves, so ONE warning is expected in the output.
+name: beta-policy-1500
+base: configs/runs/proxy-256x17.yaml
+
+# 20 designs, 20 trials: every trial is an anchor and the sampler is never asked
+# for a point. `random` for the same reason the noise-floor studies use it -- if
+# a misconfiguration ever DID reach the sampler, uniform draws are obvious where
+# adaptive ones would hide.
+n_trials: 20
+max_steps: 1500
+
+sampler: random
+
+# Nothing may be pruned, and here that is not a preference. A pruned cell member
+# is a missing observation in a five-point cell mean, and it would be missing
+# precisely because it looked unusual -- truncating the distribution whose
+# location this study is measuring. `prune_after_step` one below max_steps means
+# the earliest possible prune point is step 1500, by which time the trial has
+# finished; the dry run should confirm `0 prune point(s)`.
+prune_after_step: 1499
+logging_steps: 25
+
+launcher: local
+concurrent_trials: 5
+seed: 2026
+direction: minimize
+
+design_file: configs/search/beta-policy-anchors.yaml
+
+# `beta_policy` is the only axis this study moves, so every other axis is pinned
+# to the base config's own value. Pinned rather than left inherited: an axis this
+# file does not mention keeps the REPO's declaration, which for a 4-choice
+# categorical would mean the sampler COULD move it -- and with `n_trials` equal
+# to the anchor count it never gets the chance, so the space would be describing
+# something that cannot happen. Stating it makes the study's claim readable in
+# the study file, which is what the interaction study's header argues for too.
+search_axes:
+  beta_policy:
+    kind: categorical
+    choices: [learned, one, head_scalar, linear]
+
+# The three CONTINUOUS axes -- `ska_ridge`, `ska_layerscale_init`,
+# `learning_rate` -- are deliberately NOT pinned here, and the omission is
+# load-bearing rather than an oversight.
+#
+# `fixed_params` turns an axis into a singleton CATEGORICAL, and
+# `anchors.check_space_is_resolvable` then refuses the study: `resolve_design`
+# CLAMPS a float into its declared [low, high] and SNAPS a categorical onto its
+# nearest choice, and those are different operations, so pinning a float changes
+# which one applies to every design. The error names the axis and says exactly
+# this, which is how it was found.
+#
+# Leaving them as declared ranges is inert here, for a reason specific to this
+# study: `n_trials` equals the anchor count, so the sampler is never asked for a
+# point, and every design uses the default factors (ridge_factor,
+# layerscale_factor, lr_factor all 1.0) -- so `resolve_design` returns the base
+# config's own 0.01 / 0.01 / 4e-4 for all twenty. The dry run's "baseline
+# reachable on every axis" line is the check that this is true rather than hoped.
+fixed_params:
+  ska_rank: 24
+  n_ska_layers: 4
+  placement: baseline
+  # 4.0 / sqrt(24), the base spec's `ska_norm_clip_c: 4.0` in this axis's
+  # vocabulary.
+  norm_clip_multiplier: 0.8164965809277261
+  gamma_value: 1.0
+  ska_power_K: 1
+  weight_decay: 0.1
+  # 0.02, which is `Design`'s own default and therefore what the noise-floor
+  # studies actually resolved -- verified in job 445832's trials.csv
+  # (`param_warmup_ratio` = 0.02 on all five reference members), NOT assumed
+  # from the base spec's `warmup_steps: 24`. Those two disagree: 24 is 0.04 of
+  # 600, so reading the base spec would have suggested 0.04, and
+  # noise-floor-1500.yaml's header says as much.
+  #
+  # Pinning 0.04 here would have made the control cell differ from job 445994's
+  # reference group in a second factor, which would have destroyed the one free
+  # validity check this design has -- that the control reproduces a
+  # previously-measured quantity. At 1500 steps this resolves to 30 warmup
+  # steps.
+  warmup_ratio: 0.02
+  grad_clip: 1.0
+
+backend_policy: exact_invchol
+
+run_root: /scratch/m000151-pm06/jkli/study-beta-policy-1500
+
+# HELD OUT. The base trains on fineweb_small_train; scoring there would measure
+# memorisation, and a write gate is precisely the mechanism that would exploit
+# it -- so for THIS study the held-out split is not hygiene, it is the
+# measurement.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# 1500 steps took about 22 minutes serially in job 445994. 8 workers on one node
+# time-share host memory and PCIe, so allow generously; the default 2 hours would
+# idle the allocation on one dead trial.
+trial_timeout_seconds: 5400
+
+# EMPTY. The objective is pure held-out loss, as in every committed study.
+objective: {}

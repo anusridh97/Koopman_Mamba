@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.config import KoopmanLMConfig, IDENTITY_TRANSPARENT_DEFAULTS
 from experimentation.atomic_io import atomic_write_text
 from experimentation.run.provenance import provenance
 from experimentation.run.spec import (
@@ -86,6 +86,47 @@ def _migrate_microbatch(raw: Dict[str, Any], source: str) -> Dict[str, Any]:
         f"the file to silence this.",
         DeprecationWarning, stacklevel=3)
     runtime[_MICROBATCH] = legacy
+    return raw
+
+
+def _migrate_identity_transparent_model_fields(
+        raw: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Inject model fields added after a spec.yaml was written.
+
+    `_check_model_key_set` compares a materialized spec's model keys against the
+    live `KoopmanLMConfig` and raises on any mismatch -- deliberately, because a
+    missing key would otherwise be filled with a new field's default and make an
+    old run look like it declared a value it never had. The consequence is that
+    adding a field makes every already-materialized spec.yaml unreadable, and a
+    run directory's spec.yaml is the only record of what that run did.
+
+    Scoped to `IDENTITY_TRANSPARENT_DEFAULTS` and nothing else, which is what
+    makes the injection safe rather than a hole in that check: those are exactly
+    the fields whose registered value is the behaviour an archived run already
+    had, so filling one in restores what the run did instead of guessing. A
+    field NOT in that registry still raises -- there the default is a new
+    behaviour, and the old spec genuinely cannot say what it wanted.
+
+    Warned rather than silent, following `_migrate_microbatch`: a silent
+    injection leaves the file looking correct while meaning something new, and
+    the warning is what prompts the file to be updated.
+    """
+    model = raw.get("model")
+    if not isinstance(model, dict):
+        return raw
+    for name, legacy in IDENTITY_TRANSPARENT_DEFAULTS.items():
+        if name in model:
+            continue
+        import warnings
+
+        warnings.warn(
+            f"{source}: model.{name} was added to KoopmanLMConfig after this "
+            f"spec was written. Injected {legacy!r}, which is the behaviour the "
+            f"run actually had -- and which is omitted from the identity hash, "
+            f"so the run's group_id/run_id are unchanged. Update the file to "
+            f"silence this.",
+            DeprecationWarning, stacklevel=3)
+        model[name] = legacy
     return raw
 
 
@@ -187,8 +228,11 @@ def _check_model_key_set(model_dict: Dict[str, Any]) -> None:
 def load_materialized_spec(spec_yaml_path) -> RunSpec:
     """Read a materialized spec.yaml back into a RunSpec (used by eval/resume;
     never re-reads a base config)."""
-    raw = _migrate_microbatch(
-        yaml.safe_load(Path(spec_yaml_path).read_text()), str(spec_yaml_path))
+    raw = _migrate_identity_transparent_model_fields(
+        _migrate_microbatch(
+            yaml.safe_load(Path(spec_yaml_path).read_text()),
+            str(spec_yaml_path)),
+        str(spec_yaml_path))
     _check_model_key_set(raw["model"])
     model = KoopmanLMConfig(**raw["model"])
     data = data_spec_from_dict(raw["data"])

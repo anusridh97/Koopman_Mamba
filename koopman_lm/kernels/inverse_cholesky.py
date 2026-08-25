@@ -69,9 +69,20 @@ class SKACoreInvChol(torch.autograd.Function):
     """y = Cv P^T W^K P q with W = P M P^T, P = L^{-1} supplied, alpha == 1.
 
     Same math and gauge as factor_scan.SKACoreGivenL with the spectral clamp
-    removed (contractive by the sqrt-beta convention) and every L-solve
-    replaced by a matmul with the precomputed P. P is NEVER differentiated;
-    G is an input only so its grad slot exists (the forward never reads it).
+    removed and every L-solve replaced by a matmul with the precomputed P. P is
+    NEVER differentiated; G is an input only so its grad slot exists (the
+    forward never reads it).
+
+    The clamp is removable because BOTH SLOTS OF M COME FROM THE SAME KEY
+    STREAM whose Gram (plus ridge) is G, which bounds ||P M P^T||_2 by 1 --
+    NOT because of the square root specifically. This said "contractive by the
+    sqrt-beta convention" until 2026-08-24, which is the same claim narrowed to
+    one member of the family that satisfies it: beta == 1
+    (`ska_beta_policy='one'`) and beta in both slots (`'linear'`) are equally
+    contractive and equally legal on this route. What the two-slot requirement
+    rules out is the retired ASYMMETRIC form, which exceeds the bound by 22.8x
+    on a sharp gate and would apply an expansive operator here without failing.
+    Pinned by code-tests/test_ska_contractivity_contract.py.
     """
 
     @staticmethod

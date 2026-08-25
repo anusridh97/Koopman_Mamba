@@ -3,8 +3,19 @@ recurrent.py -- O(1) state recurrent inference wrapper for KoopmanLM.
 
 REWRITTEN for the 440M / JAX-parity rewrite. The SKA decode path now matches
 the new training math exactly:
-  * beta-gated causal statistics (G = sum beta z z^T, M = sum beta z z_{t-1}^T,
-    C_v = sum beta v z^T) -- NO non-causal sequence-max.
+  * beta-gated causal statistics under the v1.1 SYMMETRIC sqrt-beta convention
+    (x = sqrt(beta) z fed to BOTH key slots, vbar = sqrt(beta) v), so
+        G   = sum beta z z^T                          (own-weight, invariant)
+        M   = sum sqrt(beta_t beta_{t-1}) z_t z_{t-1}^T   (cross-weight)
+        C_v = sum beta v z^T                          (own-weight, invariant)
+    -- NO non-causal sequence-max. The cross-weight is the ONLY one that
+    differs from the pre-v1.1 asymmetric form (which had M = sum beta_t z_t
+    z_{t-1}^T), and it is the difference that matters: the symmetric form is
+    what makes A_w = L^-1 M L^-T contractive, which is what licenses the
+    clamp-free decode paths below. This header claimed the asymmetric M until
+    2026-08-24 while the body (see `symmetric_key_value` at the call site) had
+    been symmetric since the v1.1 migration; the bound is pinned by
+    code-tests/test_ska_contractivity_contract.py.
   * whitened operator core y = C_v L^{-T}(alpha W)^K L^{-1} q, W=L^{-1}M L^{-T}
     (same as ska_core_torch / training forward).
   * eta/gamma applied via the SKAModule's own resolved values (fixed 1.0 for
@@ -108,10 +119,17 @@ class RecurrentKoopmanLM(nn.Module):
         z = ska.key_proj(h).reshape(B, t, H, r).float()
         zq = ska.query_proj(h).reshape(B, t, H, r).float()
         v = ska.value_proj(h).reshape(B, t, H, P).float()
-        beta = torch.sigmoid(ska.beta_proj(h)).float()           # (B,t,H)
+        # `ska._resolve_beta` / `ska._weight_key_value`, not a local
+        # `sigmoid(beta_proj(h))` + `symmetric_key_value`: those two lines
+        # ignored `ska_beta_policy` entirely, so a model trained with any policy
+        # other than the default would have decoded as though it were `learned`
+        # -- a train/decode divergence that shows up as a quality regression
+        # rather than an error, which is the exact trap the one-helper rule in
+        # `symmetric_key_value`'s docstring exists to close.
+        beta = ska._resolve_beta(h).float()                      # (B,t,H)
         z_n = causal_normalize(z, ska.norm_clip_c)
         zq_n = causal_normalize(zq, ska.norm_clip_c)
-        x, vbar = symmetric_key_value(z_n, beta, v)
+        x, vbar = ska._weight_key_value(z_n, beta, v)
         return x, zq_n, vbar
 
     @torch.no_grad()

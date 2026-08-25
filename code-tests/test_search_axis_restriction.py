@@ -396,7 +396,12 @@ _TARGET_AXES = {
     "learning_rate": {"kind": "float", "low": 0.00032, "high": 0.00048,
                       "log": True},
 }
-_TARGET_FIXED = {"weight_decay": 0.1, "warmup_ratio": 0.04, "grad_clip": 1.0}
+_TARGET_FIXED = {"weight_decay": 0.1, "warmup_ratio": 0.04, "grad_clip": 1.0,
+                 # Pinned by the committed study on 2026-08-24 when
+                 # `beta_policy` became a repo-declared axis, so that a new
+                 # repo axis could not retroactively widen a study designed
+                 # around nine factors. See the study file's own note.
+                 "beta_policy": "learned"}
 
 
 def _resolved(params, base, **kw):

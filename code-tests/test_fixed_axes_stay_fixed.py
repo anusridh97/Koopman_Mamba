@@ -40,7 +40,12 @@ STUDY = REPO / "configs/search/proxy-256x17-interactions-v1.yaml"
 
 #: The study's own pinned values. Read from the committed file rather than
 #: written here, so this cannot agree with a study that changed underneath it.
-EXPECTED_FIXED = {"weight_decay": 0.1, "warmup_ratio": 0.04, "grad_clip": 1.0}
+EXPECTED_FIXED = {"weight_decay": 0.1, "warmup_ratio": 0.04, "grad_clip": 1.0,
+                  # `beta_policy` joined the pinned set on 2026-08-24, when it
+                  # became a repo-declared axis. Pinned so that a new axis in
+                  # `space.search_space()` could not silently widen a study
+                  # designed around nine factors -- see the study file's note.
+                  "beta_policy": "learned"}
 
 
 @pytest.fixture(scope="module")

@@ -49,7 +49,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-from koopman_lm.config import build_config, config_hash
+from koopman_lm.config import BETA_POLICIES, build_config, config_hash
 from experimentation.run.provenance import git_commit, git_dirty_paths
 from experimentation.training.amp import amp_for
 from experimentation.training.repro import enable_determinism
@@ -208,21 +208,18 @@ def run_eval(model, seq_len, num_kv_pairs, vocab_size, eval_batch, device, step,
 
 def train(args):
     # seq_len is derived from distractor gap: 2*M KV block + gap + 2*M query block
-    seq_len = 4 * args.num_kv_pairs + args.distractor_gap
+    seq_len = derived_seq_len(args.num_kv_pairs, args.distractor_gap)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     print(f"Cell: model={args.model_type}  kv={args.num_kv_pairs}  "
           f"gap={args.distractor_gap}  seq_len={seq_len}")
 
-    cfg = build_config(args.model_size)
-    # Model vocab stays at the config default (e.g. 32000) so parameter count
-    # matches the paper's "50M" label. Task vocab is kept small (default 128)
-    # so MQAR sequences only use tokens 0..task_vocab-1 and retrieval difficulty
-    # comes purely from distractor gap length, not output-space size.
-    cfg = dataclasses.replace(cfg, max_seq_len=seq_len)
+    cfg = model_config_for(args)
     ch = config_hash(cfg)
     print(f"Config hash: {ch[:8]}")
+    print(f"Beta policy: {cfg.ska_beta_policy}"
+          f"{'' if args.ska_beta_policy is None else '  (overridden)'}")
 
     model = build_model(args.model_type, cfg).to(device)
     total = sum(p.numel() for p in model.parameters())
@@ -369,18 +366,35 @@ def train(args):
 # Sweep: launch every cell in the Section 5.2 grid, one subprocess per cell.
 # ---------------------------------------------------------------------------
 
-def cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap):
-    return Path(output_root) / model_type / f"kv{num_kv_pairs}_gap{distractor_gap}"
+def cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap,
+                    beta_policy=None):
+    """Where one cell writes. `beta_policy` joins the key when it is set.
+
+    It HAS to, and the failure it prevents is silent: two policies keyed only on
+    (model_type, kv, gap) write to one directory, and `--skip_done` defaults to
+    True -- so the second policy's cells would be skipped and the FIRST
+    policy's results handed back under the second's name. A sweep would report a
+    four-policy comparison having trained one policy.
+
+    `None` (the default, meaning "inherit the config's own") reproduces the
+    pre-2026-08-24 path exactly, so every archived sweep directory is still
+    found by `cell_is_done` and nothing already on disk is orphaned.
+    """
+    base = Path(output_root) / model_type / f"kv{num_kv_pairs}_gap{distractor_gap}"
+    return base if beta_policy is None else base / f"beta-{beta_policy}"
 
 
-def cell_is_done(output_root, model_type, num_kv_pairs, distractor_gap):
+def cell_is_done(output_root, model_type, num_kv_pairs, distractor_gap,
+                 beta_policy=None):
     """Skip if final checkpoint already exists."""
-    d = cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap)
+    d = cell_output_dir(output_root, model_type, num_kv_pairs, distractor_gap,
+                        beta_policy)
     return (d / "final" / "model.pt").exists()
 
 
 def build_cell_command(args, model_type, num_kv_pairs, distractor_gap):
-    out = cell_output_dir(args.output_root, model_type, num_kv_pairs, distractor_gap)
+    out = cell_output_dir(args.output_root, model_type, num_kv_pairs,
+                          distractor_gap, args.ska_beta_policy)
     cmd = [
         sys.executable, "-m", "experimentation.experiments.mqar_finetune",
         "--model_type",      model_type,
@@ -398,6 +412,11 @@ def build_cell_command(args, model_type, num_kv_pairs, distractor_gap):
         "--warmup_steps",    str(args.warmup_steps),
         "--output_dir",      str(out),
         "--seed",            str(args.seed),
+        # FORWARDED, and its absence was a silent-wrong-experiment bug: without
+        # it, `--sweep --ska_beta_policy one` ran the entire grid at the config
+        # default and reported it as the `one` arm.
+        *(["--ska_beta_policy", args.ska_beta_policy]
+          if args.ska_beta_policy else []),
     ]
     if args.wandb_project:
         cmd += ["--wandb_project", args.wandb_project,
@@ -426,10 +445,11 @@ def run_sweep(args):
     print(f"Output root: {args.output_root}\n")
 
     for i, (model_type, kv, gap) in enumerate(cells, 1):
-        seq_len = 4 * kv + gap
+        seq_len = derived_seq_len(kv, gap)
         tag = f"[{i:>3d}/{total}] {model_type:<12} kv={kv:<2} gap={gap:<5} seq={seq_len}"
 
-        if args.skip_done and cell_is_done(args.output_root, model_type, kv, gap):
+        if args.skip_done and cell_is_done(args.output_root, model_type, kv, gap,
+                                           args.ska_beta_policy):
             print(f"{tag}  SKIP (done)")
             skip += 1
             continue
@@ -457,7 +477,43 @@ def run_sweep(args):
 # CLI
 # ---------------------------------------------------------------------------
 
-def parse_args():
+def derived_seq_len(num_kv_pairs, distractor_gap):
+    """4*M + gap: the KV block (2M), the filler gap, and the query block (2M).
+
+    Extracted so `model_config_for` and `main` cannot disagree about it. They
+    used to compute it in one place only because there was one place; a
+    retrieval comparison whose cells had different context lengths would be
+    measuring context length.
+    """
+    return 4 * num_kv_pairs + distractor_gap
+
+
+def model_config_for(args):
+    """The `KoopmanLMConfig` one cell trains, from parsed args.
+
+    Split out of `main` so the arg -> config path is testable without a GPU.
+    That matters most for `--ska_beta_policy`: the whole point of the flag is a
+    four-cell comparison in which the cells differ in exactly ONE field, and
+    `test_mqar_beta_policy_arm.py` asserts precisely that by diffing two configs
+    field-for-field. Verifying it by reading `main` is how a second `replace`
+    creeps in unnoticed.
+    """
+    cfg = build_config(args.model_size)
+    # Model vocab stays at the config default (e.g. 32000) so parameter count
+    # matches the paper's "50M" label. Task vocab is kept small (default 128)
+    # so MQAR sequences only use tokens 0..task_vocab-1 and retrieval difficulty
+    # comes purely from distractor gap length, not output-space size.
+    overrides = {"max_seq_len": derived_seq_len(args.num_kv_pairs,
+                                                args.distractor_gap)}
+    # None means INHERIT, so omitting the flag leaves every archived cell's
+    # meaning untouched. `learned` is an identity-transparent default, so a cell
+    # run without the flag keeps the config_hash it had before the flag existed.
+    if getattr(args, "ska_beta_policy", None) is not None:
+        overrides["ska_beta_policy"] = args.ska_beta_policy
+    return dataclasses.replace(cfg, **overrides)
+
+
+def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="Section 5.2: MQAR fine-tuning (single cell, or --sweep for the full grid)")
 
@@ -529,7 +585,17 @@ def parse_args():
     p.add_argument("--skip_done", action="store_true", default=True,
                    help="[sweep] skip cells whose final/ checkpoint already exists")
 
-    return p.parse_args()
+    # The retrieval arm of the write-gate comparison. `choices` rather than a
+    # post-hoc check so an unknown policy fails at parse time on a login node,
+    # with the valid set in the message, instead of after a GPU is claimed.
+    #
+    # Default None = inherit the config's own, so every archived MQAR cell keeps
+    # its meaning AND its config_hash (`learned` is identity-transparent).
+    p.add_argument("--ska_beta_policy", type=str, default=None,
+                   choices=sorted(BETA_POLICIES),
+                   help="override the SKA write-gate parameterisation for this "
+                        "cell; omit to inherit the model config's own")
+    return p.parse_args(argv)
 
 
 def main():

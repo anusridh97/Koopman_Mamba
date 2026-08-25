@@ -70,6 +70,18 @@ class Design:
     #: asserts something its params deny, which is the one failure mode a
     #: named design set exists to prevent.
     power_K: Union[int, str] = _BASELINE
+    #: The SKA write gate's parameterisation: one of `learned` / `one` /
+    #: `head_scalar` / `linear`. `"baseline"` (the default) inherits the base
+    #: config's own `ska_beta_policy`, so no committed design file changes
+    #: meaning.
+    #:
+    #: Refused rather than snapped when explicit, exactly like `placement` and
+    #: for the reason `power_K` records at length: a design named `beta-one`
+    #: that silently resolved to `learned` because a study narrowed the axis
+    #: would be a trial whose name asserts something its params deny -- and in a
+    #: four-policy comparison that is not cosmetic, it is a cell quietly
+    #: becoming a duplicate of the control.
+    beta_policy: str = _BASELINE
     weight_decay: float = 0.1
     warmup_ratio: float = 0.02
     grad_clip: float = 1.0
@@ -413,7 +425,36 @@ def resolve_design(design: Design, base_model: KoopmanLMConfig,
         "warmup_ratio": nearest(design.warmup_ratio, space["warmup_ratio"]["choices"]),
         "grad_clip": nearest(design.grad_clip, space["grad_clip"]["choices"]),
         "ska_power_K": _resolve_power_k(design, base_model, space),
+        "beta_policy": _resolve_beta_policy(design, base_model, space),
     }
+
+
+def _resolve_beta_policy(design: Design, base_model: KoopmanLMConfig,
+                         space: Mapping[str, Any]) -> str:
+    """`design.beta_policy` -> a declared choice, or a loud failure.
+
+    Inherited (`"baseline"`) takes the base config's own policy, which
+    `search_space` always declares, so inheriting never moves. Explicit must be
+    declared EXACTLY -- see the field's own docstring for why snapping here
+    would be worse than raising.
+    """
+    choices = list(space["beta_policy"]["choices"])
+    if design.beta_policy == _BASELINE:
+        policy = str(base_model.ska_beta_policy)
+        if policy not in choices:
+            raise ValueError(
+                f"design {design.name!r} inherits beta_policy={policy!r} from "
+                f"the base config, but this study declares {choices}. An "
+                f"inherited value cannot be snapped onto a narrowed axis "
+                f"without changing what the anchor is an anchor FOR.")
+        return policy
+    if design.beta_policy not in choices:
+        raise ValueError(
+            f"design {design.name!r} asks for beta_policy="
+            f"{design.beta_policy!r}; this study declares {choices}. Refused "
+            f"rather than snapped: a design whose name states a policy must run "
+            f"that policy or fail.")
+    return str(design.beta_policy)
 
 
 def _resolve_power_k(design: Design, base_model: KoopmanLMConfig,

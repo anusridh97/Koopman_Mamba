@@ -36,7 +36,17 @@ _ACTIVATES = re.compile(r"(source|\.)\s+\S*/bin/activate|conda activate|module l
 #: `$PYTHON`, `/abs/path/python`, `KOOPMAN_PY=python` and the word "python" in
 #: prose do not match -- an absolute path or a variable is a script saying which
 #: interpreter it means, which is the thing this test is not worried about.
-_BARE_PYTHON = re.compile(r"^\s*(python3?)\s+(-|-m|-c)")
+#:
+#: WIDENED 2026-08-24. This required the next token to be `-`, `-m` or `-c`, so
+#: `python path/to/script.py` -- just as dependent on a python being on PATH --
+#: was invisible and the case SKIPPED as "invokes no bare python". Found when
+#: `report_beta_contrast.sbatch` was added and skipped rather than checked: a
+#: guard that silently declines to check a whole invocation style is worse than
+#: one that fails, because the skip reads as "nothing to check here".
+#:
+#: `\S` rather than an enumerated set, so the next style of invocation is
+#: covered without a third revision.
+_BARE_PYTHON = re.compile(r"^\s*(python3?)\s+\S")
 
 
 def test_the_script_inventory_is_not_empty():

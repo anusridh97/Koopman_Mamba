@@ -30,9 +30,22 @@
 # 600-step measurement.
 #
 # warmup_steps is not pinned here: params_to_overrides computes
-# round(max_steps * warmup_ratio), and the reference resolves warmup_ratio 0.04,
-# so warmup scales with the horizon (24 -> 60 steps) instead of silently becoming
-# a smaller fraction.
+# round(max_steps * warmup_ratio), so warmup scales with the horizon instead of
+# silently becoming a smaller fraction of it.
+#
+# CORRECTION (2026-08-24): this said "the reference resolves warmup_ratio 0.04,
+# so warmup scales with the horizon (24 -> 60 steps)". It resolves 0.02, so the
+# numbers are 12 -> 30. `Design.warmup_ratio` defaults to 0.02 and
+# `DEFAULT_WARMUP_RATIOS` is (0.02, 0.04, 0.06) -- horizon-independent -- so an
+# unrestricted axis snaps to 0.02, not to whatever the base spec's
+# `warmup_steps: 24` implies. Verified against job 445832's own trials.csv,
+# where `param_warmup_ratio` is 0.02 on all five reference members.
+#
+# Corrected rather than left alone because configs/search/beta-policy-1500.yaml
+# designates this study as its one free validity check -- its control cell is
+# supposed to reproduce these five losses -- and it had to pin warmup_ratio to
+# match. Two committed headers disagreeing about a resolved parameter is exactly
+# what makes that check untrustworthy.
 #
 # Everything else is deliberately identical to noise-floor.yaml -- same five
 # seeds, serial, unprunable, same shard -- so the two sigmas are comparable and

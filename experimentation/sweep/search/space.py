@@ -97,7 +97,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Mapping, Optional, Sequence
 
-from koopman_lm.config import KoopmanLMConfig
+from koopman_lm.config import BETA_POLICIES, KoopmanLMConfig
 from experimentation.sweep.search.geometry import (
     PLACEMENTS, layer_count_choices, make_layer_indices)
 
@@ -239,6 +239,19 @@ def search_space(base_model: KoopmanLMConfig, *,
         "ska_power_K": {"kind": "categorical",
                         "choices": _with_value_int(DEFAULT_POWER_KS,
                                                   base_model.ska_power_K)},
+        # The write gate's parameterisation. A categorical over strings, like
+        # `placement`, and searchable rather than pinned for the same reason
+        # `ska_power_K` is: it was fixed at `learned` in every config while
+        # nothing had ever measured whether the gate earns its keep, so any
+        # "we beat the baseline" was confounded on an axis nobody had looked at.
+        #
+        # All four choices are contractive (see
+        # code-tests/test_ska_contractivity_contract.py), so every one of them
+        # is legal on the clamp-free backends this study pins -- which is what
+        # makes this axis safe to search rather than something that has to be
+        # crossed with `backend_policy`.
+        "beta_policy": {"kind": "categorical",
+                        "choices": sorted(BETA_POLICIES)},
         "learning_rate": {"kind": "float", "log": True,
                           "low": lr * LR_FACTOR_BOUNDS[0], "high": lr * LR_FACTOR_BOUNDS[1]},
         "weight_decay": {"kind": "categorical", "choices": list(DEFAULT_WEIGHT_DECAYS)},
@@ -279,8 +292,8 @@ def search_space(base_model: KoopmanLMConfig, *,
 #: journals that predate it) but is still required of a live space.
 REQUIRED_PARAMS = (
     "ska_rank", "n_ska_layers", "placement", "ska_ridge", "ska_layerscale_init",
-    "norm_clip_multiplier", "gamma_value", "ska_power_K", "learning_rate",
-    "weight_decay", "warmup_ratio", "grad_clip",
+    "norm_clip_multiplier", "gamma_value", "ska_power_K", "beta_policy",
+    "learning_rate", "weight_decay", "warmup_ratio", "grad_clip",
 )
 
 #: Axes whose values index or count something. Coerced to `int`, for the reason
@@ -288,7 +301,7 @@ REQUIRED_PARAMS = (
 #: choice of 1.0 is a different category from a hand-written 1 in an anchor.
 _INT_AXES = frozenset({"ska_rank", "n_ska_layers", "ska_power_K"})
 #: Axes whose values name something. Left as strings.
-_STR_AXES = frozenset({"placement"})
+_STR_AXES = frozenset({"placement", "beta_policy"})
 
 
 def _coerce(axis: str, value: Any) -> Any:
@@ -368,6 +381,15 @@ def _check_weight_decay(value: float, base_model: KoopmanLMConfig) -> None:
         raise ValueError(f"weight_decay={value} must be >= 0")
 
 
+def _check_beta_policy(value: Any, base_model: KoopmanLMConfig) -> None:
+    if value not in BETA_POLICIES:
+        raise ValueError(
+            f"beta_policy={value!r}; expected one of {sorted(BETA_POLICIES)}. "
+            f"The retired asymmetric convention is not among them: it is not "
+            f"contractive, so on the clamp-free backends this study pins it "
+            f"would apply an expansive operator without failing loudly.")
+
+
 #: One domain check per axis. Every axis in `search_space()` has an entry, and
 #: `test_search_axis_restriction.py` asserts the two sets are equal -- so adding
 #: an axis without a validator fails a test rather than creating a hole.
@@ -380,6 +402,7 @@ _AXIS_DOMAINS = {
     "norm_clip_multiplier": _positive("norm_clip_multiplier"),
     "gamma_value": _positive("gamma_value"),
     "ska_power_K": _positive("ska_power_K"),
+    "beta_policy": _check_beta_policy,
     "learning_rate": _positive("learning_rate"),
     "weight_decay": _check_weight_decay,
     "warmup_ratio": _check_warmup_ratio,
@@ -537,6 +560,7 @@ def base_reference_point(base_model: KoopmanLMConfig, *,
         "norm_clip_multiplier": float(multiplier) / math.sqrt(base_model.ska_rank),
         "gamma_value": float(base_model.ska_gamma_value),
         "ska_power_K": int(base_model.ska_power_K),
+        "beta_policy": str(base_model.ska_beta_policy),
     }
     lr = base_lr if base_lr is not None else optim.get("lr")
     if lr is not None:
@@ -656,6 +680,12 @@ def params_to_overrides(params: Mapping[str, Any], base_model: KoopmanLMConfig, 
         # base_model.ska_power_K, or promoting an archived study would confirm
         # a K the trial never ran at.
         "model.ska_power_K": int(params.get("ska_power_K", 1)),
+        # `.get` with an explicit "learned", for the same reason as
+        # `ska_power_K` above and NOT `base_model.ska_beta_policy`: an archived
+        # journal's trials predate this axis and ran at the pinned default, so
+        # replaying one against a base config that now pins a different policy
+        # would confirm a policy the trial never ran at.
+        "model.ska_beta_policy": str(params.get("beta_policy", "learned")),
         "optim.lr": float(params["learning_rate"]),
         "optim.weight_decay": float(params["weight_decay"]),
         "optim.grad_clip": float(params["grad_clip"]),

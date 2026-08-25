@@ -45,6 +45,7 @@ def _baseline_params():
         "norm_clip_multiplier": cfg.ska_norm_clip_c / math.sqrt(cfg.ska_rank),
         "gamma_value": cfg.ska_gamma_value,             # 1.0
         "ska_power_K": cfg.ska_power_K,                  # 1
+        "beta_policy": cfg.ska_beta_policy,              # "learned"
         "learning_rate": 4.0e-4,
         "weight_decay": 0.1,
         "warmup_ratio": 0.02,
@@ -326,6 +327,13 @@ def test_every_declared_parameter_is_consumed_by_params_to_overrides():
     for name in declared:
         if name == "placement":
             probe = dict(baseline, placement="late")
+        elif name == "beta_policy":
+            # Named explicitly rather than falling into the `str` skip below.
+            # It is a live axis -- it selects a different write gate, with
+            # different parameters -- so skipping it would leave the one string
+            # axis this test cannot see, which is exactly the hole the test
+            # exists to close.
+            probe = dict(baseline, beta_policy="one")
         elif isinstance(baseline[name], str):
             continue
         elif isinstance(baseline[name], bool):
