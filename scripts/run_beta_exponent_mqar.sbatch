@@ -69,9 +69,17 @@
 #              proves every cell constructs, trains, evaluates and checkpoints on
 #              a real device, and measures throughput so the real budget is a
 #              calculation rather than a guess.
-#   STEPS      default 8000 (the pre-registered budget; the earlier arm's ~4000
-#              censored most non-`linear` runs)
-#   SEEDS      default "42 43 44", PAIRED across cells
+#   STEPS      default 24000 -- AMENDMENT 1 of the pre-registration. Job 446106
+#              (~4000 steps) is where the brief's "linear 3/3, learned 1/3,
+#              head_scalar 0/3" comes from; job 446145 ran the same cells at
+#              24000 and got linear 3/3, learned 2/3, head_scalar 1/3 (grok at
+#              step 12000). The horizon was carrying most of the separation. 24000
+#              matches 446145 exactly, so this arm REPLICATES it rather than
+#              having to be compared across horizons.
+#   SEEDS      default six, PAIRED across cells. Affordable, not a trade against
+#              STEPS: 446145's own log measures 87.8K tok/s at seq_len 160 /
+#              batch 64 = ~8.6 steps/s = ~47 min per 24000-step run, so one seed
+#              is one ~50-minute wave of seven cells on eight GPUs.
 #   KV / GAP   default 8 / 128 -- the cell job 446102 used, reused UNCHANGED so
 #              it cannot have been chosen to favour a new policy
 
@@ -95,8 +103,8 @@ if [ "$SMOKE" = "1" ]; then
     export EVAL_EVERY="${EVAL_EVERY:-20}"
     export RUN_ROOT="${RUN_ROOT:-$SCRATCH/beta-exponent-smoke-${SLURM_JOB_ID:-manual}}"
 else
-    export STEPS="${STEPS:-8000}"
-    export SEEDS="${SEEDS:-42 43 44}"
+    export STEPS="${STEPS:-24000}"
+    export SEEDS="${SEEDS:-42 43 44 45 46 47}"
     export EVAL_EVERY="${EVAL_EVERY:-250}"
     export RUN_ROOT="${RUN_ROOT:-$SCRATCH/beta-exponent-${SLURM_JOB_ID:-manual}}"
 fi
