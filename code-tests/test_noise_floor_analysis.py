@@ -303,12 +303,21 @@ def test_the_planted_main_effect_has_the_largest_marginal_spread(study, floor):
 
 
 def test_a_marginal_spread_below_the_floor_is_labelled_unresolvable(study, floor):
+    """A real axis whose observed level means barely move.
+
+    NOT a fixed axis: those never varied and are `spread=None` /
+    `varied=False` / `DID NOT VARY`, which is a different finding from
+    "measured, smaller than the floor" -- see
+    `test_an_axis_that_never_varied_says_so_rather_than_reporting_zero_spread`.
+    """
     from experimentation.sweep.search.analysis import main_effects
 
     axes = {a["axis"]: a for a in main_effects(study, floor)["axes"]}
-    # A fixed axis is a singleton, so its spread is 0 by construction.
-    assert axes["weight_decay"]["spread"] == pytest.approx(0.0)
-    assert axes["weight_decay"]["resolved"] is False
+    unresolved = [a for a in axes.values()
+                  if a["varied"] and a["resolved"] is False]
+    assert unresolved or all(a["resolved"] for a in axes.values() if a["varied"])
+    for axis in unresolved:
+        assert axis["spread"] < floor["min_resolvable_effect"], axis["axis"]
 
 
 def test_the_variance_share_is_labelled_as_descriptive_not_causal(study, floor):
@@ -757,3 +766,305 @@ def _with_ordinals_fixture():
             value=value, user_attrs=attrs))
     _ORDINAL_STUDY = out
     return out
+
+# ============================================================================
+# Findings from code review, each with the failure it produces.
+# ============================================================================
+
+# --------------------------- a CROSSOVER is an interaction ----
+
+def _crossover_study(*, crossover: bool, with_replicates: bool = False):
+    """A 2x2 where the effect of `left` REVERSES across `right`.
+
+    `ska_power_K` x `gamma_value`, cell means:
+
+        crossover=True          crossover=False
+                 g=0.9  g=1.05           g=0.9  g=1.05
+          K=1     0.0    1.0      K=1     0.0    0.0
+          K=2     1.0    0.0      K=2     1.0    1.0
+
+    Both have the SAME unsigned per-level effect range (1.0 at each level of
+    `right`), so a magnitude built from `max(means) - min(means)` reports 0.0 for
+    both -- and the crossover is the maximal interaction there is while the other
+    is a pure main effect with no interaction at all.
+    """
+    st = optuna.create_study(direction="minimize")
+    distributions = _distributions()
+    base = _reference_params()
+    if with_replicates:
+        # A tiny floor (sigma 0.01) so a magnitude of 2.0 is unambiguously
+        # resolvable and a magnitude of 0.0 unambiguously is not. Without it
+        # `resolved` is None and the verdict assertion cannot distinguish the
+        # fixed code from the broken code.
+        for offset, seed in enumerate((42, 43, 44)):
+            st.add_trial(optuna.trial.create_trial(
+                params=dict(base), distributions=distributions,
+                value=0.5 + 0.01 * offset,
+                user_attrs=_attrs(0, base, reference_group="reference",
+                                  model_seed=seed,
+                                  anchor_name=f"ref-{seed}")))
+    for k in (1, 2):
+        for gamma in (0.9, 1.05):
+            if crossover:
+                value = 0.0 if (k == 1) == (gamma == 0.9) else 1.0
+            else:
+                value = 0.0 if k == 1 else 1.0
+            for _ in range(4):
+                params = {**base, "ska_power_K": k, "gamma_value": gamma}
+                st.add_trial(optuna.trial.create_trial(
+                    params=params, distributions=distributions, value=value,
+                    user_attrs=_attrs(0, params)))
+    return st
+
+
+def _pair(study, left, right):
+    from experimentation.sweep.search.analysis import conditional_effects
+
+    return next(r for r in conditional_effects(study)
+                if (r["left"], r["right"]) == (left, right))
+
+
+def test_a_pure_crossover_is_reported_as_an_interaction():
+    """THE finding. `max - min` over the cell means at each level of `right` is
+    UNSIGNED, so a maximal crossover -- K=1 better at low gamma, K=2 better at
+    high gamma -- produces the same range at both levels and an unsigned
+    magnitude of exactly 0.0. The report would then state "no pair of these axes
+    interacts", confidently, about the one shape the study most exists to find:
+    `_SLOTS['best_k1']` says K is the axis most likely to change the SIGN of
+    another axis's effect."""
+    row = _pair(_crossover_study(crossover=True), "ska_power_K", "gamma_value")
+    assert row["signed_magnitude"] == pytest.approx(2.0)
+
+
+def test_a_pure_main_effect_has_no_signed_interaction():
+    """Guards the guard. If the signed magnitude were large for everything it
+    would be as useless as an unsigned one that is zero for a crossover."""
+    row = _pair(_crossover_study(crossover=False), "ska_power_K", "gamma_value")
+    assert row["signed_magnitude"] == pytest.approx(0.0)
+
+
+def test_the_unsigned_magnitude_is_still_reported_beside_it():
+    """Both, because they answer different questions: "does the effect change
+    SIZE" and "does it change DIRECTION". Dropping the unsigned one would lose
+    the case where an effect doubles without flipping."""
+    row = _pair(_crossover_study(crossover=True), "ska_power_K", "gamma_value")
+    assert row["interaction_magnitude"] == pytest.approx(0.0)
+    assert row["signed_magnitude"] > row["interaction_magnitude"]
+
+
+def test_a_sign_change_is_flagged_in_the_row():
+    """A large gap between the two magnitudes IS the sign change, and a reader
+    should not have to infer it from two columns."""
+    assert _pair(_crossover_study(crossover=True),
+                 "ska_power_K", "gamma_value")["sign_change"] is True
+    assert _pair(_crossover_study(crossover=False),
+                 "ska_power_K", "gamma_value")["sign_change"] is False
+
+
+def test_the_resolved_verdict_uses_the_LARGER_of_the_two():
+    """Otherwise the crossover is still labelled unresolvable and the fix buys
+    nothing: the verdict is what the shortlist and the interaction probe read.
+
+    Against a REAL floor, so `resolved` has to be True rather than the `None`
+    that a floorless study returns -- a `None`-tolerant assertion would pass on
+    the unfixed code.
+    """
+    from experimentation.sweep.search.analysis import conditional_effects
+
+    study = _crossover_study(crossover=True, with_replicates=True)
+    row = next(r for r in conditional_effects(study)
+               if (r["left"], r["right"]) == ("ska_power_K", "gamma_value"))
+    assert row["resolved"] is True
+    assert row["interaction_magnitude"] == pytest.approx(0.0), (
+        "the unsigned magnitude is zero here, so the True verdict can only have "
+        "come from the signed one")
+
+
+def test_the_report_names_the_sign_change():
+    """Asserted on the COLUMN and the flagged value, not on the word "sign" --
+    which already appears in the shortlist's prose, so a looser assertion would
+    have passed before the column existed."""
+    import tempfile
+
+    from experimentation.sweep.search.analysis import write_analysis
+
+    with tempfile.TemporaryDirectory() as out:
+        text = write_analysis(_crossover_study(crossover=True),
+                              out)["interactions"].read_text()
+    assert "| sign change |" in text, text[:3000]
+    assert "**YES**" in text
+    header = text[text.index("## 0d."):text.index("## 1.")]
+    assert "| size | signed |" in header
+
+
+# ------------------- the contrast-vs-mean denominator ----
+
+def test_a_contrast_against_a_five_trial_mean_uses_the_right_denominator(study,
+                                                                        floor):
+    """A single trial against a mean of n has sd `sigma*sqrt(1 + 1/n)`, which is
+    1.095*sigma at n=5 -- NOT the 1.414*sigma of two single trials. Using the
+    larger one makes the threshold 29% too high and understates every `sigmas`
+    figure by the same factor, so a real 1.6-sigma anchor effect prints as 1.2 and
+    is labelled unresolvable. Conservative, and it discards real findings in the
+    one table this module calls the only causal statements it has."""
+    from experimentation.sweep.search.analysis import anchor_contrasts
+
+    row = next(r for r in anchor_contrasts(study, floor)
+               if r["anchor"] == "rank-32")
+    expected_sd = floor["sigma"] * math.sqrt(1.0 + 1.0 / 5.0)
+    assert row["sd_of_contrast"] == pytest.approx(expected_sd)
+    assert row["sigmas"] == pytest.approx(abs(row["delta"]) / expected_sd)
+    assert row["threshold"] == pytest.approx(2.0 * expected_sd)
+
+
+def test_the_contrast_threshold_is_tighter_than_the_trial_vs_trial_one(study,
+                                                                      floor):
+    """The direction of the correction, asserted so a future edit cannot silently
+    reintroduce the looser number."""
+    from experimentation.sweep.search.analysis import anchor_contrasts
+
+    row = next(iter(anchor_contrasts(study, floor)))
+    assert row["threshold"] < floor["min_resolvable_effect"]
+
+
+# ------------------- a corrupted replicate group ----
+
+def test_two_replicates_at_the_SAME_seed_corrupt_the_floor_and_are_refused():
+    """The failure a concurrency race would produce: `enqueue_anchors` is a
+    read-then-write name check with no lock, so two supervisors can double-enqueue
+    the whole anchor set. Under `deterministic: true` the duplicated pairs land on
+    identical losses, which adds zero-contribution pairs AND degrees of freedom --
+    so sigma shrinks toward zero and every effect becomes resolvable. That is the
+    exact failure `noise_floor` exists to avoid, and pooling silently is worse than
+    having no floor."""
+    from experimentation.sweep.search.analysis import noise_floor
+
+    st = optuna.create_study(direction="minimize")
+    for seed, value in ((42, 4.0), (43, 4.1), (42, 4.0), (43, 4.1)):
+        st.add_trial(optuna.trial.create_trial(
+            params={}, distributions={}, value=value,
+            user_attrs={"reference_group": "reference", "model_seed": seed,
+                        "anchor_name": f"ref-{seed}"}))
+    result = noise_floor(st)
+    assert result["available"] is False
+    assert "seed" in result["reason"]
+    assert result["sigma"] is None
+
+
+def test_a_healthy_group_with_distinct_seeds_is_not_refused():
+    """Guards the guard: the check must not reject the normal case."""
+    from experimentation.sweep.search.analysis import noise_floor
+
+    st = optuna.create_study(direction="minimize")
+    for seed, value in ((42, 4.0), (43, 4.1), (44, 3.9)):
+        st.add_trial(optuna.trial.create_trial(
+            params={}, distributions={}, value=value,
+            user_attrs={"reference_group": "reference", "model_seed": seed,
+                        "anchor_name": f"ref-{seed}"}))
+    assert noise_floor(st)["available"] is True
+
+
+def test_a_group_with_no_recorded_seeds_is_still_usable():
+    """Backward compatibility: a journal written before `model_seed` existed has
+    no seeds to compare, and refusing there would delete the floor from every
+    archived study rather than protecting it."""
+    from experimentation.sweep.search.analysis import noise_floor
+
+    st = optuna.create_study(direction="minimize")
+    for value in (4.0, 4.1, 3.9):
+        st.add_trial(optuna.trial.create_trial(
+            params={}, distributions={}, value=value,
+            user_attrs={"reference_group": "reference"}))
+    assert noise_floor(st)["available"] is True
+
+
+# ------------------- an axis that never varied is not a zero effect ----
+
+def test_an_axis_that_never_varied_says_so_rather_than_reporting_zero_spread():
+    """`spread = 0.0` and `unresolvable` reads as "measured, smaller than the
+    floor". A fixed axis was never measured at all, and every other absent path
+    in this module returns None."""
+    from experimentation.sweep.search.analysis import main_effects
+
+    st = optuna.create_study(direction="minimize")
+    distributions = _distributions()
+    for index in range(6):
+        params = {**_reference_params(), "ska_rank": 8 if index % 2 else 32}
+        st.add_trial(optuna.trial.create_trial(
+            params=params, distributions=distributions, value=1.0 + index,
+            user_attrs=_attrs(index, params)))
+
+    axes = {a["axis"]: a for a in main_effects(st)["axes"]}
+    assert axes["weight_decay"]["spread"] is None
+    assert axes["weight_decay"]["resolved"] is None
+    assert axes["ska_rank"]["spread"] is not None
+
+
+def test_the_report_distinguishes_did_not_vary_from_unresolvable(tmp_path):
+    from experimentation.sweep.search.analysis import write_analysis
+
+    text = write_analysis(_crossover_study(crossover=True),
+                          tmp_path)["interactions"].read_text()
+    assert "DID NOT VARY" in text
+
+
+# ------------------- the docstring must not still claim evidence ----
+
+def test_the_module_docstring_does_not_claim_importance_IS_evidence():
+    """The exact phrase a previous review flagged. It was removed from the
+    artefact's label and left in the module docstring 770 lines above the comment
+    recording its removal -- so the file a reader opens first said "This IS
+    evidence" while the file it writes said "Neither is proof"."""
+    from experimentation.sweep.search import analysis
+
+    assert "IS evidence about the model" not in (analysis.__doc__ or "")
+    assert "IS evidence" not in (analysis.__doc__ or "")
+
+
+def test_the_docstring_describes_ped_anova_as_a_divergence():
+    """Not as "variance attributable to one axis" -- that is the specific
+    mischaracterisation, not just an overclaim of strength."""
+    from experimentation.sweep.search import analysis
+
+    assert "divergence" in (analysis.__doc__ or "").lower()
+
+
+# ------------------- the null-axis inversion, pinned ----
+
+def test_the_null_axis_outranks_the_planted_effect_in_the_LOCAL_column(study):
+    """The evidentiary claim `_IMPORTANCE_NOTE` makes, backed by a test rather
+    than by prose. `norm_clip_multiplier` appears NOWHERE in the fixture's
+    objective; if it outranks the planted `ska_rank` main effect under
+    `evaluate_on_local=True`, that is the demonstration -- and if a future optuna
+    fixes it, this test says so instead of the docstring rotting."""
+    from experimentation.sweep.search.analysis import analyse
+
+    importances = analyse(study)["importances"]
+    assert importances["available"]
+    local = importances["values"]
+    assert "norm_clip_multiplier" in local and "ska_rank" in local
+    # Recorded as an observation about THIS fixture and THIS optuna, not as a
+    # requirement: the assertion is that the two columns can DISAGREE about the
+    # ordering, which is the thing that makes reporting both worthwhile.
+    global_values = importances["values_global"]
+    local_order = sorted(local, key=lambda k: -local[k])
+    global_order = sorted(global_values, key=lambda k: -global_values[k])
+    assert local_order != global_order, (
+        "the local and global PED-ANOVA columns agree on the ordering for this "
+        "fixture, so the second column buys nothing here -- re-check whether the "
+        "framing in _IMPORTANCE_NOTE still has evidence behind it")
+
+
+# ------------------- machine consumers get the label too ----
+
+def test_the_summary_json_carries_the_not_evidence_flag(study, tmp_path):
+    """`sampler_correlations.csv` is bare `a,b,r,n`, so a machine consumer got the
+    correlations without the label that says they are not evidence."""
+    import json
+
+    from experimentation.sweep.search.analysis import write_analysis
+
+    payload = json.loads(
+        write_analysis(study, tmp_path)["summary"].read_text())
+    assert payload["sampler_correlations"]["is_evidence"] is False
+    assert payload["sampler_correlations"]["interpretation"]

@@ -230,3 +230,44 @@ def test_the_gate_says_nothing_about_a_fanout_when_there_is_none(gate):
     -- a gate that fails on its own default is a gate that gets disabled."""
     assert "no fanout to check" in gate
     assert "if spec.concurrent_trials <= 1:" in gate
+
+def test_only_the_supervisor_enqueues_anchors(gate):
+    """`enqueue_anchors` is a read-then-write name check with no lock -- it has to
+    be, since `JournalStorage` offers no atomic reservation -- so N processes
+    calling it concurrently CAN double-enqueue. It used to run in every process
+    and was safe only by ordering: the supervisor enqueues before `_fanout`
+    spawns anyone, so each worker's call found the names already present.
+
+    Safe-by-ordering is not worth keeping when the redundancy buys nothing, and
+    the failure it risks is the worst available one: a double-enqueued
+    `reference` group has two members at each seed, they land on identical losses
+    under `deterministic: true`, and pooling them drives sigma toward ZERO -- so
+    every effect in the analysis becomes "resolved". `analysis.noise_floor` now
+    refuses that state, but not creating it is better than detecting it.
+
+    Asserted on the source rather than by racing two processes, because the race
+    is what is being REMOVED: there is no longer a window to observe.
+    """
+    from experimentation.sweep.search import __main__ as main_module
+
+    source = pathlib.Path(main_module.__file__).read_text()
+    assert "if designs and not is_worker:" in source, (
+        "every process enqueues the anchor set again, which reopens the "
+        "double-enqueue window a worker cannot otherwise create")
+
+
+def test_a_worker_still_reaches_drive_without_enqueueing(gate):
+    """Guards the guard: the point is to skip the ENQUEUE in a worker, not to
+    skip the worker's work. A `return` in the wrong place would leave a fleet
+    that spawns eight processes and runs nothing."""
+    from experimentation.sweep.search import __main__ as main_module
+
+    source = pathlib.Path(main_module.__file__).read_text()
+    enqueue_at = source.index("if designs and not is_worker:")
+    drive_at = source.index("outcomes = drive(")
+    assert enqueue_at < drive_at
+    # And the guard must be on the enqueue block only -- `drive` is not inside it.
+    between = source[enqueue_at:drive_at]
+    assert "if fanning_out:" in between, (
+        "the fanout branch no longer sits between the enqueue and the drive, so "
+        "this test is no longer reading the structure it thinks it is")

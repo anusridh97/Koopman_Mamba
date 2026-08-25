@@ -362,7 +362,7 @@ def _print_replicates(designs, base_sections):
 
 def _print_plan(study_spec, args, *, n_anchors, study_dir, run_root, launcher,
                 gpus=(), space=None, base_model=None, base_lr=None,
-                base_optim=None, designs=None, base_sections=None):
+                base_optim=None, designs=None, base_sections):
     sid = compute_study_id(study_spec)
     print(f"[search] study        {study_spec.name}  (study_id {sid})")
     print(f"[search] base spec    {study_spec.base}")
@@ -601,7 +601,23 @@ def main(argv=None):
     sampler_seed = sampler_seed_for(study_spec.seed, worker_index)
     study = create_study(**study_kwargs)
 
-    if designs:
+    # THE SUPERVISOR ONLY. This used to run in every process, and it was safe
+    # only by ordering: the supervisor enqueues before `_fanout` spawns anyone, so
+    # each worker's call found the names already present and added nothing.
+    #
+    # Safe-by-ordering is not worth keeping when the redundancy buys nothing.
+    # `enqueue_anchors` is a read-then-write check with no lock -- it has to be;
+    # `JournalStorage` offers no atomic reservation -- so N processes calling it
+    # concurrently CAN double-enqueue, and a double-enqueued reference group is
+    # the worst available outcome: the duplicated members land on identical losses
+    # under `deterministic: true`, so pooling them drives sigma toward zero and
+    # every effect in the analysis becomes "resolved". `analysis.noise_floor` now
+    # detects that state and refuses, but not creating it is better than detecting
+    # it. A worker that only ever PULLS cannot create it at all.
+    #
+    # `is_worker` and not `fanning_out`: a worker is any process with the marker
+    # set, including at `concurrent_trials: 1` where `should_fanout` is False.
+    if designs and not is_worker:
         added = enqueue_anchors(study, designs, base_model, space,
                                 base_lr=base_lr)
         print(f"[search] enqueued {added} anchor(s) "

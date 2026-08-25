@@ -15,20 +15,41 @@ description of where the sampler went. Reported as a finding it would look
 exactly like an interaction -- same sign, same magnitude, same plausibility --
 and it would be an artefact of the search strategy.
 
-So the output separates three things a single correlation matrix conflates, and
-labels each one in the artefact rather than only here:
+So the output separates FIVE kinds of number that a single correlation matrix
+would conflate, labels each one in the artefact rather than only here, and orders
+them by how much of a claim about the MODEL each can support:
 
-  ``main-effect importance``
-      Variance in the objective attributable to one axis, from an evaluator that
-      accounts for the others. This IS evidence about the model, within the
-      region the sampler explored.
+  ``the noise floor``
+      The spread of one configuration across training seeds. Not a finding: the
+      SCALE for every finding. Every magnitude below carries its size in units of
+      this and a `resolved` / `unresolvable` verdict, and an effect smaller than
+      it is unmeasurable by this study at any trial count. See `noise_floor`.
 
-  ``pairwise response structure``
-      The mean objective in each cell of a prespecified 2-way table, with the
-      cell count beside it. This is the quantity the study was designed to
-      estimate, and the cell counts are what make it readable -- under adaptive
+  ``controlled anchor contrasts``
+      One factor moved from one reference point, verified after resolution so no
+      second axis moved on the way through, differenced against the reference
+      replicate mean. **The only causal statements in this module.** See
+      `anchor_contrasts`.
+
+  ``partial dependence and pairwise response structure``
+      Mean objective per level, and per cell of a prespecified 2-way table, with
+      the counts beside them. This is the quantity the study was designed to
+      estimate, and the counts are what make it readable -- under adaptive
       sampling they are wildly uneven by construction, and a mean over 2 trials
-      next to a mean over 40 invites reading noise as effect.
+      next to a mean over 40 invites reading noise as effect. DESCRIPTIVE, not
+      causal: the sampler chose which trials exist, so the other axes are not
+      balanced across the levels of any one of them.
+
+  ``PED-ANOVA importance``
+      A DIVERGENCE between a parameter's distribution among the study's
+      top-quantile trials and its distribution in a reference set -- not a
+      variance decomposition, and not evidence about the model. With optuna's
+      default `evaluate_on_local=True` the reference set is the study's own
+      remaining trials, i.e. an empirical distribution the SAMPLER produced, so
+      the headline number is partly a description of the search path. On this
+      repo's own analysis fixture a NULL axis outranks a planted main effect
+      under that setting. Reported alongside its `evaluate_on_local=False`
+      counterpart, and neither is called proof. See `_IMPORTANCE_NOTE`.
 
   ``sampler-induced correlation``
       Correlation between sampled columns. A diagnostic of the search path.
@@ -172,6 +193,8 @@ PRESPECIFIED_PAIRS: Tuple[Tuple[str, str], ...] = (
 
 #: Nine axes admit 9*8/2 = 36 pairs. Stated in the artefact because 14 tables is
 #: a real multiple-comparisons burden and a reader should not have to count.
+#: Derived from `PRESPECIFIED_PAIRS` rather than written out, because a hardcoded
+#: count went stale the first time the list grew.
 _N_POSSIBLE_PAIRS = 36
 _MULTIPLICITY = (
     f"{len(PRESPECIFIED_PAIRS)} of {_N_POSSIBLE_PAIRS} possible pairs are reported. All {len(PRESPECIFIED_PAIRS)} were "
@@ -321,6 +344,62 @@ def noise_floor(study: optuna.study.Study) -> Dict[str, Any]:
         if group:
             groups.setdefault(str(group), []).append(trial)
 
+    # A group with two members at ONE seed is not a replicate set, and pooling it
+    # does not merely add noise -- it BIASES SIGMA DOWN. The proxy base sets
+    # `deterministic: true`, so a duplicated member lands on an identical loss:
+    # the pair contributes 0 to the sum of squares and 1 to the degrees of
+    # freedom, so sigma shrinks toward zero and every effect becomes "resolved".
+    # That is the exact failure this whole function exists to prevent, and it
+    # would look like an excellent result.
+    #
+    # It is reachable. `study.enqueue_anchors` is a read-then-write name check
+    # with no lock, so two concurrent supervisors -- a resubmission of a resumable
+    # study, or a supervisor restarted while workers run -- can double-enqueue the
+    # entire anchor set. `anchors.check_replicates_resolve` cannot see that: it
+    # validates the design FILE, and the file is fine. Only the journal knows.
+    #
+    # Refused rather than deduplicated, because the two members are not
+    # interchangeable copies of one datapoint from this function's point of view:
+    # something upstream produced a state nobody designed, and quietly repairing
+    # it here would hide that from the person who has to fix the cause.
+    corrupted: Dict[str, List[int]] = {}
+    for group, trials in sorted(groups.items()):
+        seen: Dict[int, int] = {}
+        for trial in trials:
+            seed = trial.user_attrs.get("model_seed")
+            if seed is None:
+                # A journal written before `model_seed` existed has no seeds to
+                # compare. Refusing there would delete the floor from every
+                # archived study rather than protecting it.
+                continue
+            seen[int(seed)] = seen.get(int(seed), 0) + 1
+        repeated = sorted(s for s, count in seen.items() if count > 1)
+        if repeated:
+            corrupted[group] = repeated
+    if corrupted:
+        detail = "; ".join(f"{group!r} has two or more COMPLETED trials at "
+                           f"seed(s) {seeds}"
+                           for group, seeds in sorted(corrupted.items()))
+        return {
+            "available": False,
+            "reason": (
+                f"a reference group is CORRUPTED: {detail}. Two members at one "
+                f"seed are one datapoint counted twice, and because the base spec "
+                f"sets `deterministic: true` they land on the same loss -- so "
+                f"pooling them adds a zero to the sum of squares AND a degree of "
+                f"freedom, which drives sigma toward zero and makes every effect "
+                f"look resolved. This is the failure mode a noise floor exists to "
+                f"prevent, so it is refused rather than pooled. The likeliest "
+                f"cause is a double enqueue: `enqueue_anchors` keys idempotency "
+                f"on the anchor name with no lock, so two concurrent supervisors "
+                f"can queue the whole set twice. Check `trials.csv` for duplicate "
+                f"`attr_anchor_name` values and re-run the analysis against a "
+                f"journal with one trial per anchor."),
+            "groups": [], "sigma": None, "dof": 0,
+            "sd_of_difference": None, "min_resolvable_effect": None,
+            "criterion": _CRITERION,
+        }
+
     rows: List[Dict[str, Any]] = []
     pooled_ss, pooled_dof = 0.0, 0
     for group, trials in sorted(groups.items()):
@@ -336,7 +415,10 @@ def noise_floor(study: optuna.study.Study) -> Dict[str, Any]:
             "objectives": sorted(values),
             "mean": mean,
             "sd": sd,
-            "range": max(values) - min(values),
+            # `None`, not 0.0, for a single member -- for the same reason `sd` is:
+            # a one-member group has no range, and 0.0 in `noise_floor.csv` reads
+            # as "measured, perfectly reproducible".
+            "range": (max(values) - min(values)) if len(values) >= 2 else None,
         })
         if sd is not None:
             pooled_ss += sum((v - mean) ** 2 for v in values)
@@ -429,8 +511,13 @@ def anchor_contrasts(study: optuna.study.Study,
     """
     _require_minimize(study)
     floor = floor if floor is not None else noise_floor(study)
-    threshold = _threshold(floor)
 
+    # The FIRST group, and `noise_floor` guarantees there is at most one usable
+    # one worth contrasting against: a study with several replicate sets has
+    # several reference points and "the" contrast is then ambiguous. Recorded as a
+    # limitation rather than guessed at -- if a second group is ever added, this
+    # has to become a per-group contrast rather than silently keep using the
+    # alphabetically-first.
     reference = next((g for g in floor.get("groups") or []), None)
     reference_values = list(reference["objectives"]) if reference else []
     reference_mean = (sum(reference_values) / len(reference_values)
@@ -438,6 +525,25 @@ def anchor_contrasts(study: optuna.study.Study,
     reference_sd = _sd(reference_values)
     reference_sem = (reference_sd / math.sqrt(len(reference_values))
                      if reference_sd is not None else None)
+
+    # THE RIGHT DENOMINATOR, and it is not the one `min_resolvable_effect` uses.
+    #
+    # Every OTHER comparison in this module is a difference of two SINGLE trials,
+    # whose sd is sigma*sqrt(2). A contrast is a single trial against the MEAN of
+    # n replicates, whose sd is sigma*sqrt(1 + 1/n) -- 1.095*sigma at n=5, not
+    # 1.414*sigma. Reusing the trial-vs-trial threshold here makes the bar 29% too
+    # high and understates every `sigmas` figure by the same factor, so a real
+    # 1.6-sigma anchor effect prints as 1.2 and is labelled unresolvable.
+    #
+    # That error is conservative -- it cannot manufacture a finding -- and it
+    # discards real ones in the one table this module calls the only causal
+    # statements it has, which is the worst place to be quietly conservative.
+    contrast_sd = None
+    if floor.get("sigma") is not None and reference_values:
+        contrast_sd = float(floor["sigma"]) * math.sqrt(
+            1.0 + 1.0 / len(reference_values))
+    contrast_threshold = (None if contrast_sd is None
+                          else _RESOLVE_SIGMAS * contrast_sd)
 
     rows: List[Dict[str, Any]] = []
     for trial in _completed(study):
@@ -455,10 +561,11 @@ def anchor_contrasts(study: optuna.study.Study,
             "reference_sem": reference_sem,
             "delta": delta,
             "abs_delta": abs(delta) if delta is not None else None,
-            "sigmas": (abs(delta) / floor["sd_of_difference"]
-                       if delta is not None and floor.get("sd_of_difference")
-                       else None),
-            "resolved": _resolves(delta, threshold),
+            "sd_of_contrast": contrast_sd,
+            "threshold": contrast_threshold,
+            "sigmas": (abs(delta) / contrast_sd
+                       if delta is not None and contrast_sd else None),
+            "resolved": _resolves(delta, contrast_threshold),
         })
     rows.sort(key=lambda r: -(r["abs_delta"] or 0.0))
     return rows
@@ -696,7 +803,13 @@ def main_effects(study: optuna.study.Study,
             })
         populated = [c for c in cells if c["mean"] is not None]
         means = [c["mean"] for c in populated]
-        spread = (max(means) - min(means)) if len(means) >= 2 else 0.0
+        # `None`, not 0.0, when the axis took fewer than two levels. A fixed axis
+        # was never MEASURED, and `spread = 0.0` + `unresolvable` reads as
+        # "measured, and smaller than the noise floor" -- a different and much
+        # stronger statement. Every other absent path in this module returns None
+        # for exactly this reason; this one did not, and `_resolved_word` printed
+        # `unresolvable` for the three singleton axes on every run.
+        spread = (max(means) - min(means)) if len(means) >= 2 else None
         share = 0.0
         if total_variance > 0 and populated:
             weight_total = sum(c["n"] for c in populated)
@@ -710,8 +823,11 @@ def main_effects(study: optuna.study.Study,
             "levels": cells,
             "spread": spread,
             "variance_share": share,
-            "resolved": bool(_resolves(spread, threshold)) if threshold is not None
-                        else None,
+            # `_resolves` already returns None when either argument is None, so a
+            # never-varied axis comes back None rather than False -- which is what
+            # `_resolved_word` renders as DID NOT VARY.
+            "resolved": _resolves(spread, threshold),
+            "varied": spread is not None,
         })
     axes.sort(key=lambda a: -a["variance_share"])
     return {"axes": axes, "total_variance": total_variance,
@@ -751,32 +867,77 @@ def conditional_effects(study: optuna.study.Study,
         table = pairwise_table(study, left, right, bins=bins)
         conditionals = []
         for column, level in enumerate(table["right_levels"]):
-            means = [row["cells"][column]["mean"] for row in table["rows"]
-                     if row["cells"][column]["mean"] is not None]
-            counts = [row["cells"][column]["n"] for row in table["rows"]]
+            cells = [row["cells"][column] for row in table["rows"]]
+            populated = [(index, cell["mean"])
+                         for index, cell in enumerate(cells)
+                         if cell["mean"] is not None]
+            means = [mean for _index, mean in populated]
+            # The SIGNED contrast: the objective at the LAST populated level of
+            # `left` minus the objective at the FIRST. `_levels` returns levels in
+            # a stable sorted order, so "first" and "last" mean the same thing at
+            # every level of `right` -- which is what makes the signs comparable
+            # across rows and therefore what makes a crossover detectable.
+            contrast = (means[-1] - means[0]) if len(means) >= 2 else None
             conditionals.append({
                 "level": str(level["label"]),
-                "n": sum(counts),
+                "n": sum(cell["n"] for cell in cells),
                 "n_cells": len(means),
-                # The effect of `left`, given this level of `right`.
+                # How much `left` MOVES the objective at this level of `right`,
+                # unsigned. Answers "does the effect change size".
                 "effect": (max(means) - min(means)) if len(means) >= 2 else None,
+                # ...and which DIRECTION it moves it. Answers "does the effect
+                # change direction", which the unsigned range cannot.
+                "contrast": contrast,
             })
+
         effects = [c["effect"] for c in conditionals if c["effect"] is not None]
+        contrasts = [c["contrast"] for c in conditionals
+                     if c["contrast"] is not None]
         magnitude = (max(effects) - min(effects)) if len(effects) >= 2 else None
+        # THE FIX. `interaction_magnitude` is built from UNSIGNED ranges, so a
+        # pure crossover -- `left` better at one level of `right` and worse at
+        # another, by the same amount -- produces the SAME range at every level
+        # and a magnitude of exactly 0.0. That is the maximal interaction there
+        # is, reported as none at all, and it is the shape this study most exists
+        # to find: `_SLOTS["best_k1"]` says K is the axis most likely to change
+        # the SIGN of another axis's effect. Unfixed, the report would state "no
+        # pair of these axes interacts by more than one configuration varies
+        # against its own seed" -- a confident false negative.
+        #
+        # `signed_magnitude` is `max - min` over the SIGNED contrasts. It reduces
+        # to the unsigned magnitude when every contrast has the same sign, and is
+        # maximal (twice the effect size) under a clean crossover.
+        signed = (max(contrasts) - min(contrasts)) if len(contrasts) >= 2 else None
+        # A sign change is exactly "the contrasts do not all point the same way",
+        # and it is worth a flag rather than left to be inferred from two columns:
+        # it is the difference between "this axis matters more over here" and
+        # "this axis wants the opposite thing over here", and only the second
+        # invalidates a single recommended value.
+        sign_change = (len(contrasts) >= 2
+                       and min(contrasts) < 0.0 < max(contrasts))
+        # The verdict reads the LARGER of the two. Using the unsigned one alone
+        # would leave the crossover labelled unresolvable and the fix would buy
+        # nothing -- `shortlist`'s interaction probe reads this field.
+        best = max((m for m in (magnitude, signed) if m is not None),
+                   default=None)
         thin = [c["level"] for c in conditionals if c["n_cells"] < 2]
         rows.append({
             "left": left, "right": right,
             "conditionals": conditionals,
             "interaction_magnitude": magnitude,
-            "sigmas": (magnitude / floor["sd_of_difference"]
-                       if magnitude is not None and floor.get("sd_of_difference")
+            "signed_magnitude": signed,
+            "sign_change": sign_change,
+            "sigmas": (best / floor["sd_of_difference"]
+                       if best is not None and floor.get("sd_of_difference")
                        else None),
-            "resolved": _resolves(magnitude, threshold),
+            "resolved": _resolves(best, threshold),
             "degenerate": table["degenerate"],
             "thin_levels": thin,
             "n_completed": table["n_completed"],
         })
-    rows.sort(key=lambda r: -(r["interaction_magnitude"] or -1.0))
+    rows.sort(key=lambda r: -max(
+        (m for m in (r["interaction_magnitude"], r["signed_magnitude"])
+         if m is not None), default=-1.0))
     return rows
 
 
@@ -1294,13 +1455,17 @@ def shortlist(study: optuna.study.Study,
             best(t for t in completed if t.params.get("ska_power_K") == k),
             empty_note=f"no completed trial ran at ska_power_K={k}")
 
+    # `is not None`, not truthiness -- the discipline `pareto_front` documents.
+    # A param_count of 0 is absurd and dropping it as though absent is a
+    # different statement from dropping it as impossible.
     counts = [t.user_attrs["param_count"] for t in completed
-              if t.user_attrs.get("param_count")]
+              if t.user_attrs.get("param_count") is not None]
     if counts:
         midpoint = (min(counts) + max(counts)) / 2.0
         add("best_low_capacity", _dict(_SLOTS)["best_low_capacity"],
             best(t for t in completed
-                 if (t.user_attrs.get("param_count") or math.inf) <= midpoint),
+                 if t.user_attrs.get("param_count") is not None
+                 and t.user_attrs["param_count"] <= midpoint),
             extra={"capacity_cutoff": midpoint})
     else:
         add("best_low_capacity", _dict(_SLOTS)["best_low_capacity"], None,
@@ -1540,7 +1705,16 @@ def _fmt(value, spec=".5g", dash="-"):
     return str(value)
 
 
-def _resolved_word(flag):
+def _resolved_word(flag, *, varied: bool = True):
+    """The verdict, with THREE non-verdicts kept apart.
+
+    `unresolvable` (measured, smaller than the floor), `DID NOT VARY` (never
+    measured -- a singleton axis), and `NO FLOOR` (the study measured no
+    replicates, so the question cannot be asked) are three different findings, and
+    printing any of them as another is a false statement about what was observed.
+    """
+    if not varied:
+        return "DID NOT VARY"
     if flag is None:
         return "NO FLOOR"
     return "RESOLVED" if flag else "unresolvable"
@@ -1621,6 +1795,19 @@ def _contrasts_markdown(rows: Sequence[Mapping[str, Any]]) -> List[str]:
 def _main_effects_markdown(result: Mapping[str, Any]) -> List[str]:
     lines = ["## 0c. Partial dependence / main effects", "",
              result["interpretation"], "",
+             # The threshold caveat, because it is NOT the same threshold section
+             # 0b and 0d use and the column header is the same word.
+             "**The verdict column here is the weakest of the three that carry "
+             "one.** A level mean averages over many trials, so its own "
+             "seed-noise standard error is `sigma/sqrt(n)` rather than `sigma`, "
+             "and the spread of two such means is correspondingly tighter than "
+             "the trial-vs-trial threshold it is being compared against. So an "
+             "axis marked `unresolvable` here may still have a resolvable effect "
+             "-- read the controlled anchor contrasts in section 0b, which "
+             "compare like with like. A `RESOLVED` here is safe in the other "
+             "direction, and `DID NOT VARY` means the axis took one value and "
+             "was never measured at all.",
+             "",
              "| axis | variance share | spread of level means | verdict | "
              "levels (mean, n) |",
              "|:--|---:|---:|:--|:--|"]
@@ -1631,7 +1818,8 @@ def _main_effects_markdown(result: Mapping[str, Any]) -> List[str]:
         lines.append(
             f"| `{axis['axis']}` | {axis['variance_share']:.4f} | "
             f"{_fmt(axis['spread'], '.4g')} | "
-            f"{_resolved_word(axis['resolved'])} | {cells} |")
+            f"{_resolved_word(axis['resolved'], varied=axis['varied'])} "
+            f"| {cells} |")
     lines.append("")
     return lines
 
@@ -1640,28 +1828,43 @@ def _conditional_markdown(rows: Sequence[Mapping[str, Any]]) -> List[str]:
     lines = [
         "## 0d. Conditional effects -- the interaction magnitudes",
         "",
-        "`interaction_magnitude` is how much the effect of `left` CHANGES across "
-        "the levels of `right`. That is what an interaction is, so this is the "
-        "one-number-per-pair summary of the question the study was launched to "
-        "answer. The full cell tables are in section 2.",
+        "How much the effect of `left` CHANGES across the levels of `right`. That "
+        "is what an interaction is, so these are the one-number-per-pair "
+        "summaries of the question the study was launched to answer. The full "
+        "cell tables are in section 2.",
         "",
-        "It is a difference OF differences, so it accumulates noise from four "
+        "Both are differences OF differences, so they accumulate noise from four "
         "cell means while being tested against a two-single-trials threshold -- "
         "which makes this the most OPTIMISTIC comparison in this report. A pair "
         "that fails it is certainly unresolvable; a pair that passes it narrowly "
         "needs its cell counts read before it is believed.",
         "",
-        "| left | right | magnitude | sigmas | verdict | conditional effects "
-        "(level: effect, n) |",
-        "|:--|:--|---:|---:|:--|:--|",
+        "**Two magnitudes, because an interaction can change a SIZE or a "
+        "DIRECTION and only one of those invalidates a single recommended "
+        "value.** `size` is how much the unsigned effect of `left` varies across "
+        "the levels of `right`. `signed` is the same statistic over the SIGNED "
+        "contrast (last minus first level of `left`), and it is the one that "
+        "catches a crossover: if `left` is better at one level of `right` and "
+        "worse by the same amount at another, the unsigned ranges are identical "
+        "and `size` is exactly 0.0 while the interaction is maximal. The verdict "
+        "reads whichever is larger, and `sign change` marks the rows where the "
+        "contrasts do not all point the same way -- those are the ones where "
+        "there is no single best value of `left` to recommend.",
+        "",
+        "| left | right | size | signed | sign change | sigmas | verdict | "
+        "conditional effects (level: effect, signed contrast, n) |",
+        "|:--|:--|---:|---:|:--|---:|:--|:--|",
     ]
     for row in rows:
         cells = "; ".join(
-            f"{c['level']}: {_fmt(c['effect'], '.4g')} (n={c['n']})"
+            f"{c['level']}: {_fmt(c['effect'], '.4g')} / "
+            f"{_fmt(c['contrast'], '+.4g')} (n={c['n']})"
             for c in row["conditionals"])
         lines.append(
             f"| `{row['left']}` | `{row['right']}` | "
             f"{_fmt(row['interaction_magnitude'], '.4g')} | "
+            f"{_fmt(row['signed_magnitude'], '.4g')} | "
+            f"{'**YES**' if row['sign_change'] else 'no'} | "
             f"{_fmt(row['sigmas'], '.1f')} | "
             f"{_resolved_word(row['resolved'])} | {cells} |")
     lines.append("")
@@ -1900,6 +2103,21 @@ def write_analysis(study: optuna.study.Study, out_dir, *, top_k: int = 15,
         "caveat": _CAVEAT,
         "shortlist": result["shortlist"]["entries"],
         "cannot_establish": list(CANNOT_ESTABLISH),
+        "throughput_notes": result["throughput_notes"],
+        # WITHOUT its label, `sampler_correlations.csv` is a bare `a,b,r,n`
+        # table -- exactly the thing this module refuses to publish. A machine
+        # consumer read the correlations and not the sentence saying they are
+        # not evidence, which is the one reader most likely to quote them.
+        "sampler_correlations": {
+            "is_evidence": result["sampler_correlations"]["is_evidence"],
+            "interpretation":
+                result["sampler_correlations"]["interpretation"],
+            "constant_columns":
+                result["sampler_correlations"]["constant_columns"],
+            "excluded_columns":
+                result["sampler_correlations"]["excluded_columns"],
+            "pairs": result["sampler_correlations"]["pairs"],
+        },
     })
 
     written["noise_floor"] = _write_csv(
@@ -1917,28 +2135,32 @@ def write_analysis(study: optuna.study.Study, out_dir, *, top_k: int = 15,
         out_dir / "anchor_contrasts.csv", result["anchor_contrasts"],
         columns=["anchor", "trial", "objective", "reference_mean",
                  "reference_n", "reference_sem", "delta", "abs_delta",
-                 "sigmas", "resolved"])
+                 "sd_of_contrast", "threshold", "sigmas", "resolved"])
     written["main_effects"] = _write_csv(
         out_dir / "main_effects.csv",
         [{"axis": a["axis"], "variance_share": a["variance_share"],
           "spread": a["spread"], "resolved": a["resolved"],
-          "binned": a["binned"],
+          "varied": a["varied"], "binned": a["binned"],
           "levels": "; ".join(f"{c['label']}={c['mean']} (n={c['n']})"
                               for c in a["levels"])}
          for a in result["main_effects"]["axes"]],
-        columns=["axis", "variance_share", "spread", "resolved", "binned",
-                 "levels"])
+        columns=["axis", "variance_share", "spread", "resolved", "varied",
+                 "binned", "levels"])
     written["conditional_effects"] = _write_csv(
         out_dir / "conditional_effects.csv",
         [{"left": r["left"], "right": r["right"],
           "interaction_magnitude": r["interaction_magnitude"],
+          "signed_magnitude": r["signed_magnitude"],
+          "sign_change": r["sign_change"],
           "sigmas": r["sigmas"], "resolved": r["resolved"],
           "degenerate": r["degenerate"], "thin_levels": r["thin_levels"],
-          "conditionals": "; ".join(f"{c['level']}={c['effect']} (n={c['n']})"
-                                    for c in r["conditionals"])}
+          "conditionals": "; ".join(
+              f"{c['level']}={c['effect']}/{c['contrast']} (n={c['n']})"
+              for c in r["conditionals"])}
          for r in result["conditional_effects"]],
-        columns=["left", "right", "interaction_magnitude", "sigmas", "resolved",
-                 "degenerate", "thin_levels", "conditionals"])
+        columns=["left", "right", "interaction_magnitude", "signed_magnitude",
+                 "sign_change", "sigmas", "resolved", "degenerate",
+                 "thin_levels", "conditionals"])
     written["throughput_pareto"] = _write_csv(
         out_dir / "throughput_pareto.csv", result["throughput_pareto"],
         columns=["tokens_per_sec", "objective", "trial",

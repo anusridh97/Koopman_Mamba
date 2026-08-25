@@ -130,6 +130,7 @@ def load_designs(path, *, minimum: int = 1) -> List[Design]:
             raise ValueError(
                 f"{path}: design #{position} has unknown field(s) {unknown}; "
                 f"known fields are {sorted(_FIELDS)}")
+        entry = _normalise_seed(path, position, dict(entry))
         name = entry.get("name")
         if not name:
             raise ValueError(
@@ -146,6 +147,50 @@ def load_designs(path, *, minimum: int = 1) -> List[Design]:
             f"least {minimum}")
     _check_reference_groups(path, designs)
     return designs
+
+
+def _normalise_seed(path, position: int, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce one entry's `seed` to an int or `"baseline"`. Raise on anything else.
+
+    Two shapes YAML makes easy and both were wrong further downstream:
+
+      * `seed:` with nothing after it parses as `None`. `enqueue_anchors` treated
+        that as "inherit", `resolved_seed` did `int(None)`, and the result was a
+        bare `TypeError` from inside `check_replicates_resolve` instead of one of
+        this module's messages. Normalised to `"baseline"` here, which is what the
+        author of a bare `seed:` meant.
+      * `seed: 43.5` reached `int()` and TRUNCATED to 43 -- silently, and possibly
+        onto a sibling's seed, which is the collision `check_replicates_resolve`
+        exists to catch and would then have caught for an unintelligible reason.
+        Refused, the same way `power_K` refuses a non-integral matrix power.
+    """
+    if "seed" not in entry:
+        return entry
+    seed = entry["seed"]
+    if seed is None:
+        entry["seed"] = _BASELINE
+        return entry
+    if seed == _BASELINE:
+        return entry
+    if isinstance(seed, bool) or not isinstance(seed, (int, float, str)):
+        raise ValueError(
+            f"{path}: design #{position} has seed={seed!r}; a training seed must "
+            f"be a whole number, or 'baseline' to inherit the base spec's own")
+    try:
+        as_float = float(seed)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{path}: design #{position} has seed={seed!r}, which is not a "
+            f"number. Use an integer, or 'baseline' to inherit the base spec's "
+            f"own `runtime.seed`.") from None
+    if as_float != int(as_float):
+        raise ValueError(
+            f"{path}: design #{position} has seed={seed!r}; a seed is an INDEX "
+            f"into a random stream and must be a whole number. int({seed!r}) "
+            f"would silently truncate it -- possibly onto a sibling's seed, "
+            f"which would collapse a replicate pair into one datapoint.")
+    entry["seed"] = int(as_float)
+    return entry
 
 
 def _check_reference_groups(path, designs: List[Design]) -> None:

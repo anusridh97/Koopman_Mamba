@@ -486,3 +486,70 @@ def test_the_sampler_seed_is_untouched_by_a_reference_repeat():
 
     assert sampler_seed_for(2026, 3) == 2029
     assert sampler_seed_for(2026, None) == 2026
+
+# ------------------------------------------- what YAML makes easy to get wrong ----
+
+def test_a_bare_seed_key_inherits_the_base_spec(tmp_path):
+    """`seed:` with nothing after it parses as `None`. `enqueue_anchors` treated
+    that as "inherit", `resolved_seed` did `int(None)`, and the result was a bare
+    `TypeError` from inside `check_replicates_resolve` instead of one of this
+    module's own messages. Normalised at load, which is what the author of a bare
+    `seed:` meant."""
+    from experimentation.sweep.search.anchors import load_designs
+
+    path = tmp_path / "designs.yaml"
+    path.write_text("designs:\n  - name: solo\n    seed:\n")
+    assert load_designs(path)[0].seed == "baseline"
+
+
+def test_a_bare_seed_key_survives_the_replicate_check(tmp_path):
+    """The end-to-end version: a group containing a bare `seed:` must reach one of
+    this module's messages, not a TypeError from `int(None)`."""
+    from experimentation.sweep.search.anchors import (
+        check_replicates_resolve, load_designs)
+
+    path = tmp_path / "designs.yaml"
+    path.write_text(
+        "designs:\n"
+        "  - name: ref-a\n"
+        "    seed:\n"
+        "    reference_group: ref\n"
+        "  - name: ref-b\n"
+        "    seed: 42\n"
+        "    reference_group: ref\n")
+    designs = load_designs(path)
+    # Both resolve to 42 against a base seed of 42, so this is the collision the
+    # resolve-time check exists for -- and it must say so rather than crash.
+    with pytest.raises(ValueError, match="distinct training"):
+        check_replicates_resolve(designs, 42)
+
+
+def test_a_fractional_seed_is_refused_rather_than_truncated(tmp_path):
+    """`seed: 43.5` reached `int()` and truncated to 43 -- silently, and possibly
+    onto a sibling's seed, which would collapse a replicate pair into one
+    datapoint and deflate the noise floor. Refused the same way `power_K` refuses
+    a non-integral matrix power."""
+    from experimentation.sweep.search.anchors import load_designs
+
+    path = tmp_path / "designs.yaml"
+    path.write_text("designs:\n  - name: solo\n    seed: 43.5\n")
+    with pytest.raises(ValueError, match="whole number"):
+        load_designs(path)
+
+
+def test_a_seed_that_is_not_a_number_is_refused(tmp_path):
+    from experimentation.sweep.search.anchors import load_designs
+
+    path = tmp_path / "designs.yaml"
+    path.write_text("designs:\n  - name: solo\n    seed: later\n")
+    with pytest.raises(ValueError, match="not a number"):
+        load_designs(path)
+
+
+def test_a_seed_written_as_a_numeric_string_is_still_accepted(tmp_path):
+    """YAML quoting is easy to add by accident and means nothing here."""
+    from experimentation.sweep.search.anchors import load_designs
+
+    path = tmp_path / "designs.yaml"
+    path.write_text("designs:\n  - name: solo\n    seed: '43'\n")
+    assert load_designs(path)[0].seed == 43
