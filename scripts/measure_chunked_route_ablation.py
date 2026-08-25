@@ -56,8 +56,10 @@ contrast, and the cheapest one in the file.
     vs exact (Welch):  cs16 keeps 84.0% (t 1.25, NOT resolvable)
                        cs64 keeps 57.7% (t 3.86, resolvable)
 
-(A sixth `chunked-cs16` seed was still queued when this was written; rerun the
-analysis script to fold it in. It cannot move t=1.25 to significance.)
+(A sixth `chunked-cs16` seed, job 446420, is missing: SLURM held it with "user
+env retrieval failed requeued held" and it was still queued after release. Rerun
+the analysis script to fold it in if it lands. It cannot move t=1.25 to
+significance -- one more point against a 0.0026 difference with SE 0.0021.)
 
 Harness validated against a number this branch did not produce: on the exact cell
 train.py's own 8-batch `--eval_on_final` delta reads +0.024418 against the
