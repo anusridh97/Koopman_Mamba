@@ -75,6 +75,25 @@ So the "spectral-normalization difference" between the four backends is a
 difference in COST, not in the operator they compute. That is what makes the
 clamp-free paths exact rather than approximate.
 
+And the cost is not negligible. Measured at the proxy geometry (r=24, B=8,
+T=1024, H=4, chunk 64), fp32 on 8 CPU threads -- so the RATIOS are indicative
+and a GPU would redistribute them, but the shapes are the ones these routes
+really build:
+
+    route              n matrices   cholesky   whiten_M   spec_w    spec_w share
+    chunked (B*nc*H)          512     0.97 ms    0.93 ms   2.76 ms       59%
+    exact_intrachunk (B*T*H) 32768    68.7 ms    81.7 ms   72.2 ms       32%
+
+`inverse_cholesky.py`'s header already records that "the 20-iteration power
+iteration over B*T*H matrices was a dominant cost of the previous exact path",
+which is the same observation from the other side. The recommendation that
+follows is NOT "delete spec_w": it is the guard that would fire if a two-stream
+weighting were ever reintroduced, and the falsification arm below shows what it
+would be guarding against. It is that the clamped routes are paying a third to a
+half of their whitening pipeline for a computation whose result is provably the
+multiplicative identity, and that this is a cheap and safe thing to skip
+BECAUSE the bound holds -- not in spite of not knowing whether it does.
+
 All pure-torch fp64 linear algebra -> runs on CPU.
 """
 import pytest
