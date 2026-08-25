@@ -1,0 +1,145 @@
+# The write-gate question, as a controlled 4x5 replicate design.
+#
+# Four policies, five seeds each, nothing else moving. Every design is a member
+# of a `reference_group`, which is unusual for this repo's anchor files and is
+# the whole point -- see the study file's header for why the alternative
+# (one grouped control plus fifteen lone anchors) throws away most of the
+# information this design buys.
+#
+# ## Why five seeds and not one
+#
+# Job 445832 measured sigma = 9.50e-3 across five seeds at 600 steps on this
+# exact base, so a trial-vs-trial difference has to exceed 2*sigma*sqrt(2) =
+# 0.0269 to be a finding. Nobody expects a write-gate parameterisation to move
+# held-out loss by 0.027. A single-seed 4-cell grid would therefore produce a
+# confident ranking of noise -- which is the specific failure this file is built
+# to avoid, not a hypothetical.
+#
+# With n = 5 per cell the comparison is mean-vs-mean, whose sd is
+# sigma*sqrt(2/5) = 0.632*sigma, so the resolvable effect is 1.265*sigma rather
+# than 2.83*sigma: a 2.2x improvement in sensitivity for a 4x increase in
+# trials. And pooling four groups gives 16 degrees of freedom on sigma itself
+# instead of 4, so the floor this study reports has usable error bars -- which
+# the 600-step measurement, with 4 dof, explicitly did not.
+#
+# ## Why these four policies
+#
+#   beta-learned      sigmoid(W h + b) per token and head, key weight
+#                     sqrt(beta). THE CONTROL. Identical in every scientific
+#                     factor to noise-floor-1500.yaml's `reference` group, so
+#                     this study's sigma is directly comparable to that one's
+#                     and the control cell is not a new measurement.
+#   beta-one          beta = 1. No gate, no parameters. If this is
+#                     indistinguishable from the control, the recommendation is
+#                     the simpler model, and that is a real result rather than a
+#                     failed one.
+#   beta-head-scalar  sigmoid(b_h): H learnable scalars, no token dependence.
+#                     Separates "the gate supplies a per-head write scale" --
+#                     which out_proj could absorb -- from "the gate is
+#                     content-dependent". Without this cell, a learned-vs-one
+#                     difference cannot be attributed to token dependence.
+#   beta-linear       key weight beta rather than sqrt(beta). The "simpler
+#                     alternative" to symmetric sqrt-beta that is still
+#                     contractive, and therefore the only version of that
+#                     question that can be asked on this backend at all. It
+#                     silently redefines the write weight as beta^2.
+#
+# The retired ASYMMETRIC convention is absent, and not for lack of interest: it
+# is not contractive (test_ska_contractivity_contract.py measures 22.8x over the
+# bound on a sharp gate), and this study's base pins
+# `ska_inverse_cholesky: true`, which has no spectral clamp. That cell would
+# apply an expansive operator K times and report a loss rather than an error.
+# The question it would have answered is answered instead by the bound, which is
+# a proof rather than a five-seed comparison against a noise floor.
+#
+# ## What makes this a controlled comparison
+#
+# All four policies are single-key-stream weightings, so all four are
+# contractive, so all four run on the SAME backend. No contrast here is
+# confounded with a change of kernel -- which is not luck, it is why `linear`
+# was chosen over the asymmetric form as the fourth cell.
+#
+# Seeds 42-46, the same five as noise-floor.yaml and noise-floor-1500.yaml, so
+# the control cell can be checked against two prior measurements of the same
+# quantity rather than taken on faith.
+designs:
+  # ---------------------------------------------------------------- control
+  - name: beta-learned-seed-42
+    beta_policy: learned
+    reference_group: beta_learned
+  - name: beta-learned-seed-43
+    beta_policy: learned
+    seed: 43
+    reference_group: beta_learned
+  - name: beta-learned-seed-44
+    beta_policy: learned
+    seed: 44
+    reference_group: beta_learned
+  - name: beta-learned-seed-45
+    beta_policy: learned
+    seed: 45
+    reference_group: beta_learned
+  - name: beta-learned-seed-46
+    beta_policy: learned
+    seed: 46
+    reference_group: beta_learned
+  # ------------------------------------------------------------- no gate
+  - name: beta-one-seed-42
+    beta_policy: one
+    reference_group: beta_one
+  - name: beta-one-seed-43
+    beta_policy: one
+    seed: 43
+    reference_group: beta_one
+  - name: beta-one-seed-44
+    beta_policy: one
+    seed: 44
+    reference_group: beta_one
+  - name: beta-one-seed-45
+    beta_policy: one
+    seed: 45
+    reference_group: beta_one
+  - name: beta-one-seed-46
+    beta_policy: one
+    seed: 46
+    reference_group: beta_one
+  # ------------------------------------------- per-head scale, no token dep
+  - name: beta-head-scalar-seed-42
+    beta_policy: head_scalar
+    reference_group: beta_head_scalar
+  - name: beta-head-scalar-seed-43
+    beta_policy: head_scalar
+    seed: 43
+    reference_group: beta_head_scalar
+  - name: beta-head-scalar-seed-44
+    beta_policy: head_scalar
+    seed: 44
+    reference_group: beta_head_scalar
+  - name: beta-head-scalar-seed-45
+    beta_policy: head_scalar
+    seed: 45
+    reference_group: beta_head_scalar
+  - name: beta-head-scalar-seed-46
+    beta_policy: head_scalar
+    seed: 46
+    reference_group: beta_head_scalar
+  # ------------------------------------------------- beta, not sqrt(beta)
+  - name: beta-linear-seed-42
+    beta_policy: linear
+    reference_group: beta_linear
+  - name: beta-linear-seed-43
+    beta_policy: linear
+    seed: 43
+    reference_group: beta_linear
+  - name: beta-linear-seed-44
+    beta_policy: linear
+    seed: 44
+    reference_group: beta_linear
+  - name: beta-linear-seed-45
+    beta_policy: linear
+    seed: 45
+    reference_group: beta_linear
+  - name: beta-linear-seed-46
+    beta_policy: linear
+    seed: 46
+    reference_group: beta_linear
