@@ -69,7 +69,22 @@ echo "=== job ${SLURM_JOB_ID:-<interactive>} on $(hostname) ==="
 date -Is
 cd "$REPO_ROOT" || { echo "FATAL: no repo root"; exit 1; }
 echo "commit: $(git rev-parse HEAD)"
-echo "tree:   $(git status --porcelain | wc -l) modified path(s)  (0 wanted)"
+DIRTY=$(git status --porcelain | wc -l)
+echo "tree:   $DIRTY modified path(s)  (0 wanted)"
+if [ "$DIRTY" -ne 0 ]; then
+    # ABORT, not warn. `experimentation.run` refuses a dirty tree itself
+    # (provenance.check_git_clean), so continuing only moves the failure 40
+    # seconds later into the trainer and then hands the comparator an empty log
+    # -- which is what job 447297 did, over one untracked scratch file. Failing
+    # here costs nothing and names the cause.
+    #
+    # Not --allow-dirty: a golden comparison against a tree that does not match
+    # the committed code is not a comparison. The point is to check THIS commit.
+    git status --porcelain | sed 's/^/    /'
+    echo "FATAL: refusing to compare a golden from a dirty tree. Commit or move"
+    echo "       the paths above, then resubmit."
+    exit 1
+fi
 
 module purge
 module load cuda12.9/toolkit/12.9.1
