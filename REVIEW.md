@@ -29,7 +29,7 @@ Then read §3's table and §6. Everything else is depth.
 |---|---|---|
 | **A** | Precision policy: `compute_precision` / `ska_precision` / `mlp_precision`, threaded into the SKA core, the Koopman rotation, and all five trainers via one `amp_for` helper | GPU job 436063: real 30-step H100 training, loss 10.08 → 8.26 |
 | **B** | Provenance: `code_id` + `dirty` in all four checkpoint writers; `harness.py` stops overwriting a recorded `cfg_hash` | GPU 436063 step 3b: `meta.pt` carries `code_id=3be37b7` |
-| **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **works end to end.** GPU job 439883: 4 trials COMPLETE with real objectives (7.18–7.64), 4 `quick_eval.json`, 20 reported steps each, all reports written. Caveat in §6 |
+| **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **works end to end.** GPU job 439883: 4 trials COMPLETE with real objectives (7.18–7.64), 4 `quick_eval.json`, 20 reported steps each, all reports written. Caveat in §6. **Those four numbers came from the CHUNKED route** (job 439883 ran under the since-retired `proxy_chunked` policy) — they evidence the wiring, not the architecture, and per `ska.py`'s construction warning must not be read as results |
 | **D** | `per_device_batch_size` moved `OptimSpec` → `RuntimeSpec`, so an OOM-ladder rung no longer renames the experiment | 0 of 11 config hashes moved |
 | **E** | Test infrastructure: import gate, static undefined-name check, `param_groups` characterization, loss-alignment conformance, two golden training curves | see §4 |
 | **G** | `TrainTask` seam: both trainers now get their loss from a task instead of inlining it, so the three-loop unification lands against loops that already delegate | **both gates passed on GPU** — 4m golden MATCH at 0.0001, MQAR golden MATCH at **0.000000**. §6 says what is left |
@@ -170,7 +170,15 @@ reported to a real journal. Job 439891 then ran 6 **non-anchor** trials to ask
 whether a prune fires, and **none did** — legitimately. The objectives went 7.337,
 7.461, 7.388 then 6.954, 6.965, 6.942, so every trial after the first two beat the
 running median. Nothing was ever hopeless enough to cut. That is a fact about the
-space, not a gap in the machinery.
+machinery being exercised, not a gap in it.
+
+It said "a fact about the space" until 2026-08-24, and that overreached: job
+439891, like 439883, ran the **CHUNKED** SKA route, whose operator is 92%-152%
+wrong in the forward (job 440122). Six objectives from a ~100%-wrong operator
+support "no prune fired, and legitimately so" — a statement about the pruner —
+but they cannot describe the search space, because the mechanism the space
+parameterises was not the one running. `ska_rank`, `ska_ridge` and
+`ska_norm_clip_c` reach the model ONLY through that operator.
 
 The pruning *decision* is pinned at unit level instead, which is where it belongs:
 `test_search_pruning.py` covers a hopeless trial being cancelled and marked PRUNED,
