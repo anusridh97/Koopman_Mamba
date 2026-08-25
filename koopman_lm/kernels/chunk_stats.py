@@ -7,9 +7,9 @@ ska.py. Every statistic at chunk c depends only on tokens in chunks < c
 (exclusive prefix) plus the cross-chunk boundary term, so chunk-causal
 training, prefix recurrence, and per-token decode all coincide.
 
-Inputs (already projected + per-token L2-normalized by the caller):
-  z  : (B,T,H,r)   key, right factor of G/M
-  zb : (B,T,H,r)   key, left factor of G/M
+Inputs (already projected + per-token normalized by the caller):
+  z  : (B,T,H,r)   key, right factor of G/M   (v1.1: the symmetric key x)
+  zb : (B,T,H,r)   key, left factor of G/M    (v1.1: the SAME symmetric key x)
   zq : (B,T,H,r)   L2-normalized query
   v  : (B,T,H,P)   value
   NOTE (v1.1 sqrt-beta convention): the caller now passes the SYMMETRIC key
@@ -87,7 +87,12 @@ def chunk_stats(z, zb, zq, v, ridge, CS):
     zqc = zq.reshape(B, nc, CS, H, r)
     vc  = v.reshape(B, nc, CS, H, P)
 
-    # within-chunk stats (Eq.7): G uses beta*z (zb) against z; M is lag-1; C_v = v zb^T
+    # within-chunk stats (Eq.7): G is the left key against the right key, M is
+    # lag-1 between them, C_v = v (left key)^T. The slot names `zb`/`z` are
+    # historical -- under the v1.1 convention every live caller passes the SAME
+    # symmetric key x = sqrt(beta) z into both (see the header NOTE and
+    # `symmetric_key_value`), so "G uses beta*z against z" describes the
+    # RETIRED asymmetric calling convention, not what any caller does.
     Gc = torch.einsum("bcthr,bcths->bchrs", zbc, zc)
     Mc = torch.einsum("bcthr,bcths->bchrs", zbc[:, :, 1:], zc[:, :, :-1])
     Cc = torch.einsum("bcthp,bcthr->bchpr", vc, zbc)
@@ -116,19 +121,23 @@ if __name__ == "__main__":
     B, T, H, r, P, CS = 2, 192, 4, 16, 8, 64
     z  = torch.randn(B, T, H, r)
     z  = z / (z.norm(dim=-1, keepdim=True) + 1e-12)
-    beta = torch.rand(B, T, H, 1)
-    zb = beta * z
+    beta = torch.rand(B, T, H)
     zq = torch.randn(B, T, H, r); zq = zq / (zq.norm(dim=-1, keepdim=True) + 1e-12)
     v  = torch.randn(B, T, H, P)
+    # The v1.1 SYMMETRIC call, because this block is the only runnable example
+    # of how to call this kernel and it used to demonstrate the retired
+    # asymmetric `zb = beta * z` form -- self-consistent, still passing, and
+    # teaching the convention that breaks contractivity.
+    x, vbar = symmetric_key_value(z, beta, v)
 
-    Gf1, Mf1, Cf1, qf1, shp = chunk_stats(z, zb, zq, v, 1e-3, CS)
+    Gf1, Mf1, Cf1, qf1, shp = chunk_stats(x, x, zq, vbar, 1e-3, CS)
 
     # perturb the LAST token
-    z2 = z.clone(); zb2 = zb.clone(); v2 = v.clone()
+    z2 = z.clone(); v2 = v.clone()
     z2[:, -1] = torch.randn(B, H, r); z2[:, -1] /= (z2[:, -1].norm(dim=-1, keepdim=True)+1e-12)
-    zb2[:, -1] = beta[:, -1] * z2[:, -1]
     v2[:, -1] = torch.randn(B, H, P)
-    Gf2, Mf2, Cf2, qf2, _ = chunk_stats(z2, zb2, zq, v2, 1e-3, CS)
+    x2, vbar2 = symmetric_key_value(z2, beta, v2)
+    Gf2, Mf2, Cf2, qf2, _ = chunk_stats(x2, x2, zq, vbar2, 1e-3, CS)
 
     nc = shp[1]
     # stats for chunks strictly before the last chunk must be identical

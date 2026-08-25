@@ -18,12 +18,21 @@ import torch
 
 from koopman_lm.kernels.ska_operator import ska_core
 from koopman_lm.kernels.factor_scan import ska_core_given_L, rank1_chol_update_
+from koopman_lm.kernels.chunk_stats import symmetric_key_value
 
 pytestmark = pytest.mark.correctness
 
 
 def _build_stats(N, H, T, r, P, ridge, seed=0):
-    """Beta-gated causal stats matching recurrent.py / training semantics."""
+    """Beta-gated causal stats matching recurrent.py / training semantics.
+
+    "Matching" is load-bearing and was false until 2026-08-24: this helper's
+    caller built the cross-weight as `M = sum beta_t z_t z_{t-1}^T`, the
+    pre-v1.1 ASYMMETRIC convention, while `recurrent.py` and every training
+    path had migrated to the symmetric `x = sqrt(beta) z` form. Both sides of
+    the parity used the same wrong convention, so the test passed -- it was a
+    decode-vs-prefill parity check on a convention the model does not run.
+    """
     g = torch.Generator().manual_seed(seed)
     z = torch.randn(N, H, T, r, dtype=torch.float64, generator=g)
     z = z / (z.norm(dim=-1, keepdim=True) + 1e-12)            # per-token L2
@@ -41,30 +50,36 @@ def test_ska_operator_decode_equals_prefill():
     beta = beta.reshape(BH, T)
     v = v.reshape(BH, T, P)
     q = q.reshape(BH, r, 1)
-    zb = beta.unsqueeze(-1) * z                                # sqrt? no: zb = beta*z_n
+    # The v1.1 SYMMETRIC key/value, via the one helper every production site
+    # uses, so this parity cannot drift from the shipped convention again.
+    x, vbar = symmetric_key_value(z, beta, v)
 
     eye = torch.eye(r, dtype=torch.float64)
     # --- PREFILL: full-sequence stats + fresh Cholesky (ska_core) ---
-    G = torch.einsum('btr,bts->brs', zb, z) + ridge * eye
-    M = torch.einsum('btr,bts->brs', zb[:, 1:], z[:, :-1])
-    Cv = torch.einsum('btp,btr->bpr', v, zb)
+    G = torch.einsum('btr,bts->brs', x, x) + ridge * eye
+    M = torch.einsum('btr,bts->brs', x[:, 1:], x[:, :-1])
+    Cv = torch.einsum('btp,btr->bpr', vbar, x)
     y_prefill = ska_core(G, M, Cv, q, K)
 
     # --- DECODE: stream tokens, carry L via rank-1 cholupdate, read carried L ---
-    # the G update increment is beta_t z_t z_t^T = w_t w_t^T with w = sqrt(beta) z
-    w = beta.sqrt().unsqueeze(-1) * z
+    # The G update increment is x_t x_t^T = beta_t z_t z_t^T, so the rank-1
+    # Cholesky update vector IS the symmetric key. Under the old asymmetric
+    # convention this line needed its own `w = sqrt(beta) * z` that differed
+    # from the `zb` feeding G -- the two agreed only because w w^T happened to
+    # equal the G increment, which is exactly the "re-derive beta from a vector
+    # norm" trap `symmetric_key_value`'s docstring warns about.
     L = math.sqrt(ridge) * eye.expand(BH, r, r).contiguous()
     Gd = ridge * eye.expand(BH, r, r).clone()
     Md = torch.zeros(BH, r, r, dtype=torch.float64)
     Cd = torch.zeros(BH, P, r, dtype=torch.float64)
-    z_prev = None
+    x_prev = None
     for t in range(T):
-        rank1_chol_update_(L, w[:, t])                         # L <- chol(G + zz^T)
-        Gd = Gd + torch.einsum('br,bs->brs', zb[:, t], z[:, t])
-        if z_prev is not None:
-            Md = Md + torch.einsum('br,bs->brs', zb[:, t], z_prev)
-        Cd = Cd + torch.einsum('bp,br->bpr', v[:, t], zb[:, t])
-        z_prev = z[:, t]
+        rank1_chol_update_(L, x[:, t])                         # L <- chol(G + xx^T)
+        Gd = Gd + torch.einsum('br,bs->brs', x[:, t], x[:, t])
+        if x_prev is not None:
+            Md = Md + torch.einsum('br,bs->brs', x[:, t], x_prev)
+        Cd = Cd + torch.einsum('bp,br->bpr', vbar[:, t], x[:, t])
+        x_prev = x[:, t]
     y_decode = ska_core_given_L(Gd, Md, Cd, q, L, K)
 
     assert (Gd - G).abs().max() < 1e-10
