@@ -80,8 +80,24 @@ def _raw_init(val, lo, hi):
 class SKAModule(nn.Module):
     """Structured Kernel Attention with exact-scan and legacy chunked backends.
 
-    The recommended quality path is ``prefix_scan=True``. It is strictly causal
-    at token resolution; ``prefix_scan_block_size`` controls scheduling only.
+    ``prefix_scan=True`` is strictly causal at token resolution;
+    ``prefix_scan_block_size`` controls scheduling only.
+
+    This said "the recommended quality path is ``prefix_scan=True``" until
+    2026-08-24, which stopped being true when the routes were actually timed.
+    Per `space.py`'s table (jobs 440122 correctness / 440135 cost) the
+    recommendation is geometry-dependent, and stating one winner hid that:
+
+      * rank 24 AND value width 64 -> ``prefix_scan=True``, which reaches the
+        fused CUDA kernel at 1.01x the chunked cost. Only ``50m`` and ``180m``
+        qualify, and both already set it.
+      * anything else with rank <= 64 -> ``inverse_cholesky=True``. Exact to
+        5.1e-13 in fp64 and 0.92x-1.41x chunked at the measured geometries. Off
+        the fused kernel's geometry ``prefix_scan`` silently falls back to the
+        Python reference scan at 137x-160x, so it is the WRONG default there.
+      * rank > 64 -> no exact route trains. ``inverse_cholesky`` asserts
+        rank <= 64; ``exact_intrachunk`` is 57x-87x. See
+        `code-tests/test_exact_route_reachability.py`.
     """
     def __init__(self, d_model, n_heads, rank=48, head_dim=None,
                  ridge_eps=1e-3, scale=1.5, power_K=2, chunk_size=64,
@@ -122,9 +138,21 @@ class SKAModule(nn.Module):
         self.prefix_scan_jitter = float(prefix_scan_jitter)
         if self.prefix_scan_block_size <= 0:
             raise ValueError("prefix_scan_block_size must be positive")
-        # Legacy small-rank exact path that materializes per-token inverse-
-        # Cholesky statistics. The prefix-scan backend supersedes it for new
-        # quality runs; this branch remains for checkpoint compatibility.
+        # Small-rank exact path that materializes per-token inverse-Cholesky
+        # statistics.
+        #
+        # NOT "legacy", and NOT "superseded by prefix_scan for new quality runs"
+        # -- which is what this comment said until 2026-08-24. It is the DEFAULT
+        # exact route (`space.py`'s `backend_policy` defaults to
+        # `exact_invchol`), because off the fused kernel's rank-24/width-64
+        # geometry prefix_scan falls back to the Python reference scan at
+        # 137x-160x while this path stays at 0.92x-1.41x chunked. Calling it
+        # legacy pointed a reader at the expensive route on every geometry but
+        # two.
+        #
+        # Its real limit is the assert below, not obsolescence: per-token stats
+        # are (B,T,H,r,r), so rank > 64 is refused outright and rank 64 at
+        # seq 8192 is tens of GiB per SKA layer at batch 1.
         self.inverse_cholesky = inverse_cholesky
 
         # THE CHUNKED PATH ANNOUNCES ITSELF, because it is not a slower-but-fine
@@ -133,11 +161,30 @@ class SKAModule(nn.Module):
         # With none of prefix_scan / inverse_cholesky / exact_intrachunk set,
         # chunk_stats uses EXCLUSIVE-CHUNK-PREFIX boundaries: a token in chunk c
         # sees only completed chunks < c, so every within-chunk lag-1..lag-(S-1)
-        # cross-covariance term is missing. chunk_stats_exact.py's own header
-        # measures that at "~100% relative error vs a true per-token-causal
-        # reference on short-range recall" -- which is the capability SKA exists
+        # cross-covariance term is missing -- which is the capability SKA exists
         # to provide. A number produced this way is a speed upper bound, not a
         # result.
+        #
+        # THE PROVENANCE OF "~100%", because this comment used to get it wrong.
+        # It said "chunk_stats_exact.py's own header MEASURES that at ...". That
+        # header does not measure anything: it ASSERTS the figure, and it has
+        # asserted it since commit 40f6653 ("Add files via upload", 2026-05-21),
+        # a bulk import of an external echo-ska-440m tree that arrived with no
+        # harness, no geometry and no job id. Citing it as a measurement gave an
+        # inherited sentence the standing of an artefact.
+        #
+        # There are now two real artefacts, and they agree with the figure:
+        #   * job 440122 (H100, fp64, vs prefix_scan.dense_exact_oracle) --
+        #     0.92-1.52 forward error, 93%-101% in the gradients, at both the 4m
+        #     and 50m geometries. Recorded in experimentation/sweep/search/
+        #     space.py; the harness itself is not committed.
+        #   * code-tests/test_chunked_route_staleness.py -- in-suite, fp64, and
+        #     it characterises the STRUCTURE rather than restating the scalar:
+        #     exact at every chunk's first token, worst at its last; lag-1 recall
+        #     destroyed for query-to-key distance 2 <= d <= j+1 where j is the
+        #     token's offset into its chunk, and inflated ~20% beyond; and
+        #     controlled by ska_chunk_size ALONE, with no sequence-length
+        #     dependence. That last point is why max_seq_len 8192 does not help.
         #
         # Warned at CONSTRUCTION, not per forward: once per model, before any
         # time is spent, and it names all three exact routes so the reader does
@@ -152,8 +199,23 @@ class SKAModule(nn.Module):
                 "~100% RELATIVE ERROR against a per-token-causal reference on "
                 "short-range recall, i.e. on exactly what SKA is for. Treat any "
                 "number from this configuration as an upper bound on SPEED and "
-                "not as a result. Exact alternatives, cheapest first to try: "
-                "ska_inverse_cholesky=True (batched matmul, no power iteration), "
+                "not as a result. Measured by job 440122 (see space.py) and by "
+                "code-tests/test_chunked_route_staleness.py, which also shows "
+                "the shape: the route is EXACT at each chunk's first token and "
+                f"worst at its last, so with ska_chunk_size={chunk_size} a "
+                "token is stale by up to that many tokens; lag-1 recall is "
+                "destroyed for query-to-key distances up to the token's offset "
+                "into its chunk and INFLATED ~20% beyond it; and the error is "
+                "set by ska_chunk_size alone -- a longer max_seq_len does not "
+                "dilute it. Exact alternatives, cheapest first to try: "
+                + ("ska_inverse_cholesky=True (batched matmul, no power "
+                   "iteration), "
+                   if rank <= 64 else
+                   f"NOT ska_inverse_cholesky -- it asserts rank <= 64 and this "
+                   f"config is rank {rank}, so that route is UNAVAILABLE here "
+                   f"(see code-tests/test_exact_route_reachability.py; the same "
+                   f"is true of the fused prefix-scan kernel, which needs rank "
+                   f"== 24 and value width == 64). ") +
                 "ska_exact_intrachunk=True (per-token stats, same verified core), "
                 "ska_prefix_scan=True (exact two-level scan; ~137x slower than "
                 "chunked when the fused CUDA kernel's geometry does not match).",

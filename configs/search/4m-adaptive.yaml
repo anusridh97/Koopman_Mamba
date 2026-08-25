@@ -30,6 +30,9 @@
 #
 # max_steps 1500 rather than the golden curve's 400: at 200 steps the smoke
 # study's four anchors already spread 7.18-7.64, so 400 would probably rank them
+# (that spread is from job 439883, which ran the CHUNKED route -- it sizes the
+# horizon, which is a property of the optimiser and the data, and must not be
+# read as a spread over SKA configurations; see ska.py's construction warning)
 # -- but ranking on a curve that has not yet left its warmup transient ranks
 # optimisation noise as much as architecture. 1500 is ~4x the golden and puts
 # every trial well past `warmup_steps` (warmup_ratio maxes at 0.06 -> 90 steps).

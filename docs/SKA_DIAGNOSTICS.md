@@ -91,10 +91,14 @@ strategies selected by `prefix_scan` / `inverse_cholesky` /
 `exact_intrachunk` / the chunked default. `collect_diagnostics` always
 reports the CHUNKED-path operator (the family the "exact_intrachunk" note
 below already called the bounded-cost health view) regardless of which
-strategy is actually active -- including when `prefix_scan=True`, now the
-*recommended* quality path, which computes its own per-token operators via a
-different kernel (`kernels/prefix_scan.py`) that this method does not reach
-into. The chunk-level operator remains a faithful, cheap proxy for the same
+strategy is actually active -- including when `prefix_scan=True`, which
+computes its own per-token operators via a different kernel
+(`kernels/prefix_scan.py`) that this method does not reach into. (This called
+`prefix_scan` "the *recommended* quality path" until 2026-08-24. It is the
+recommended one only at rank 24 with value width 64, where the fused CUDA kernel
+applies; elsewhere it falls back to the Python reference scan at 137x-160x and
+`inverse_cholesky` is the default exact route -- see `space.py`'s route table and
+`SKAModule`'s class docstring.) The chunk-level operator remains a faithful, cheap proxy for the same
 underlying `(G, M, C_v)` sufficient-statistics family every strategy shares,
 but it is not a bit-identical trace of what `prefix_scan`/`inverse_cholesky`
 computed on that forward pass.
@@ -393,5 +397,5 @@ same diagnostics forward onto that layout, plus two behavioral catch-ups in
 | at `1c4a058` (July) | now |
 |---|---|
 | key/value fed to `chunk_stats` as raw `z_n` (right factor) and `beta * z_n` (left factor, asymmetric) | v1.1 symmetric convention: both key slots get `x = sqrt(beta) * z_n`, value is `sqrt(beta) * v` (`causal_normalize` + `symmetric_key_value`); `G`/`C` are numerically unchanged, `M`'s cross-weight becomes `sqrt(beta_t beta_{t-1})` |
-| `forward()` had one strategy (chunked) | `forward()` now has four (`chunked` default, `exact_intrachunk`, `inverse_cholesky`, `prefix_scan` -- the last now the *recommended* quality path); `collect_diagnostics` still reports only the chunked-path operator as the bounded-cost proxy (see "Which forward path this reflects" above) |
+| `forward()` had one strategy (chunked) | `forward()` now has four (`chunked` default, `exact_intrachunk`, `inverse_cholesky`, `prefix_scan`; `inverse_cholesky` is the default exact route, `prefix_scan` the recommended one only at the fused kernel's rank-24/width-64 geometry); `collect_diagnostics` still reports only the chunked-path operator as the bounded-cost proxy (see "Which forward path this reflects" above) |
 | key/query normalization was always per-token L2 | `causal_normalize` also supports a norm-CLIP mode (`ska_norm_clip`/`norm_clip_c`); `collect_diagnostics` now calls `causal_normalize` (not a hand-rolled L2) so it picks up whichever mode the module was built with |

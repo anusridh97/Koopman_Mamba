@@ -29,7 +29,7 @@ Then read §3's table and §6. Everything else is depth.
 |---|---|---|
 | **A** | Precision policy: `compute_precision` / `ska_precision` / `mlp_precision`, threaded into the SKA core, the Koopman rotation, and all five trainers via one `amp_for` helper | GPU job 436063: real 30-step H100 training, loss 10.08 → 8.26 |
 | **B** | Provenance: `code_id` + `dirty` in all four checkpoint writers; `harness.py` stops overwriting a recorded `cfg_hash` | GPU 436063 step 3b: `meta.pt` carries `code_id=3be37b7` |
-| **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **works end to end.** GPU job 439883: 4 trials COMPLETE with real objectives (7.18–7.64), 4 `quick_eval.json`, 20 reported steps each, all reports written. Caveat in §6 |
+| **C** | Adaptive search (`experimentation/sweep/search/`, 9 modules + a CLI): the space declared once, TPE + median pruning, ask/tell over the **unmodified** run system | **works end to end.** GPU job 439883: 4 trials COMPLETE with real objectives (7.18–7.64), 4 `quick_eval.json`, 20 reported steps each, all reports written. Caveat in §6. **Those four numbers came from the CHUNKED route** (job 439883 ran under the since-retired `proxy_chunked` policy) — they evidence the wiring, not the architecture, and per `ska.py`'s construction warning must not be read as results |
 | **D** | `per_device_batch_size` moved `OptimSpec` → `RuntimeSpec`, so an OOM-ladder rung no longer renames the experiment | 0 of 11 config hashes moved |
 | **E** | Test infrastructure: import gate, static undefined-name check, `param_groups` characterization, loss-alignment conformance, two golden training curves | see §4 |
 | **G** | `TrainTask` seam: both trainers now get their loss from a task instead of inlining it, so the three-loop unification lands against loops that already delegate | **both gates passed on GPU** — 4m golden MATCH at 0.0001, MQAR golden MATCH at **0.000000**. §6 says what is left |
@@ -170,7 +170,15 @@ reported to a real journal. Job 439891 then ran 6 **non-anchor** trials to ask
 whether a prune fires, and **none did** — legitimately. The objectives went 7.337,
 7.461, 7.388 then 6.954, 6.965, 6.942, so every trial after the first two beat the
 running median. Nothing was ever hopeless enough to cut. That is a fact about the
-space, not a gap in the machinery.
+machinery being exercised, not a gap in it.
+
+It said "a fact about the space" until 2026-08-24, and that overreached: job
+439891, like 439883, ran the **CHUNKED** SKA route, whose operator is 92%-152%
+wrong in the forward (job 440122). Six objectives from a ~100%-wrong operator
+support "no prune fired, and legitimately so" — a statement about the pruner —
+but they cannot describe the search space, because the mechanism the space
+parameterises was not the one running. `ska_rank`, `ska_ridge` and
+`ska_norm_clip_c` reach the model ONLY through that operator.
 
 The pruning *decision* is pinned at unit level instead, which is where it belongs:
 `test_search_pruning.py` covers a hopeless trial being cancelled and marked PRUNED,
@@ -292,10 +300,164 @@ Consequences, all now measured (jobs 440211 / 440216):
   unresolvable. Deterministic runs resolve to 1e-4 (the log prints `loss %.4f`),
   and 2.3e-4 is above that, so the question "how much training loss does the
   chunked approximation actually cost" is now answerable and worth answering
-  before trusting a short-horizon study.
+  before trusting a short-horizon study. **Taken up 2026-08-24 -- see
+  §6a.**
 - Search trials are still not reproducible: `StudySpec` has no way to request
   determinism for its trials. Deliberate for now (it would slow every trial), but
   it means trial-to-trial differences below ~2e-4 are noise.
+
+### §6a. The chunked SKA route: what is established, and the one open decision
+
+Taken up because nine of eleven registry configs (`1m`, `180m_dense`,
+`180m_gated`, `180m_v2`, `370m`, `440m`, `880m`, `1p5b`, `3b`) plus
+`configs/runs/4m-golden.yaml` run the chunked approximation, and
+`SKAModule.__init__` says a number from it is "an upper bound on SPEED and not a
+result".
+
+**The "~100%" figure had no artefact.** It came verbatim from commit `40f6653`
+("Add files via upload", 2026-05-21), a bulk import of an external
+`echo-ska-440m` tree, and `ska.py` cited that import's header as having *measured*
+it. It is now measured twice: job 440122 (already in `space.py`) and
+`code-tests/test_chunked_route_staleness.py`, in-suite, fp64, 6 seconds. The
+figure survives; the framing does not. "~100%" is an average over token offsets,
+and the structure is what tells you who is affected:
+
+- the route is EXACT at every chunk's first token and worst at its last;
+- lag-1 recall -- SKA's actual mechanism, `M = sum x_t x_{t-1}^T` -- is destroyed
+  for query-to-key distances `2 <= d <= j+1` where `j` is the token's offset into
+  its chunk, and INFLATED ~20% beyond (less ridge shrinkage on a shorter prefix).
+  A step function, not a decay;
+- so at the shortest real lag the fraction of tokens affected is `(CS-1)/CS`:
+  **93.8% at `1m`'s `ska_chunk_size` of 16, 98.4% at 64**;
+- the controlling variable is `ska_chunk_size` ALONE. Growing the sequence
+  128 -> 1024 at fixed chunk size moves the error by <0.12, so `max_seq_len 8192`
+  does not dilute it;
+- and the GRADIENT is 99%-105% wrong with cosine 0.14 -- so the backward does not
+  rescue the forward. `beta_proj.bias` has gradient cosine ~0.00, meaning a
+  `ska_beta_policy` study on a chunked config measures an uncorrelated signal.
+  (`scripts/run_beta_policy_mqar.sbatch` already refuses `configs/1m.yaml` for
+  that arm. This is why that was right.)
+
+**No committed artefact reports a chunked number AS a result.** Audited
+exhaustively: `docs/`, `configs/`, `README.md`, this file, `archive/`, and all
+seven `code-tests/*.json`. Every chunked-derived number is a byte hash, a
+curve-delta regression pin, an explicit speed figure, or an error measurement
+*about* the route. In particular **`golden_table2_curve.json` (`model_size: 1m`)
+remains a fully valid regression baseline**: `scripts/compare_golden_curve.py`
+reads deltas against a `noise_floor` of 0.000000 and never the level, and an
+approximate operator is still deterministic, so "the code did not change" is
+exactly what it can pin. It is not a scientifically meaningful loss and never was
+used as one -- its curve is flat at 4.86-4.90. Four places where the provenance
+was merely *absent at the point of use* now disclose it (two here, plus
+`4m-adaptive.yaml` and `4m-golden.yaml` itself).
+
+**Route cost and reachability, measured -- job 446319**, H100, one SKA layer,
+fwd+bwd, batch 1, each config at its own `max_seq_len`:
+
+| config | rank | invchol | peak | verdict |
+|---|---|---|---|---|
+| `1m` | 24 | **1.61x** | 0.5 GiB | flip is nearly free (2 SKA layers of 4) |
+| `180m_dense/gated/v2` | 48 | 10.2x | 9.4 GiB | legal, affordable, not free |
+| `370m` | 64 | 12.6x | 20.6 GiB | 7 SKA layers x 20.6 GiB -- past an 80GB H100 |
+| `440m`, `880m` | 96 | REFUSED | -- | `exact_intrachunk` 488x-495x, 43-59 GiB |
+| `1p5b`, `3b` | 128 | REFUSED | -- | `exact_intrachunk` **OOMs at batch 1** |
+
+So `space.py`'s "0.92x at 4m / 1.41x at 50m, exactness is free" does not travel:
+at the 50m geometry this measures 5.60x for one layer at seq 8192. Both can be
+true (space.py timed a FULL-MODEL micro-step, which includes the Mamba/MLP time
+both routes share); the inference that the flag flips anywhere at no cost is what
+fails. And no chunked config is eligible for the fused CUDA prefix scan, which
+needs rank 24 AND value width 64 -- only `50m` and `180m` qualify, and both
+already use it. Pinned as data in
+`code-tests/test_exact_route_reachability.py`.
+
+**Recommendation: change no config's route on this branch.** Three reasons, in
+order of how hard they are to argue with.
+
+1. For `1p5b` and `3b` there is no exact route that *runs*, and `440m`/`880m`
+   need 43-59 GiB for one layer. A flip is not available for four of the nine at
+   their current rank, so it cannot be a uniform action.
+2. Flipping only the feasible four would make the ladder's *route* a function of
+   its *scale* -- a confound in exactly the comparison a scaling ladder exists to
+   make. A uniformly approximate ladder is a worse instrument than an exact one
+   and a better one than a split ladder.
+3. It renumbers. `ska_inverse_cholesky` is a plain hashed field, so a flip moves
+   `config_hash`/`group_id`/`run_id` -- measured: `1m` 10f09f4b -> f5507042,
+   `180m_dense` 3f89d0f3 -> 41c412b9, `370m` a214f6a7 -> 45eee72b.
+   `IDENTITY_TRANSPARENT_DEFAULTS` cannot absorb it (that registry is for fields
+   added *after* identity was pinned; this one predates it, and its stated
+   requirement is that a non-default value MUST move the hash).
+
+What was done instead: the warning now cites real artefacts, states the mechanism,
+and is rank-aware -- it previously recommended `ska_inverse_cholesky=True` on
+rank-96/128 configs where that route asserts, i.e. it named an unavailable remedy
+on precisely the configs where it mattered most.
+
+**The open decisions, all Jack's:**
+
+- whether the four feasible configs may be renumbered, and whether a split-route
+  ladder is acceptable. `docs/superpowers/specs/2026-08-19-precision-identity-mapping.md`
+  is the format an old->new mapping would take.
+- **whether the ladder's rank should come down.** This is the upstream question
+  the route flag has been standing in for: rank >= 96 is what makes exactness
+  unreachable, and rank 24 + value width 64 is what makes it *free* (the fused
+  kernel, 1.01x). A ladder at rank 24 would be exact everywhere at no cost.
+- whether to escalate the construction warning to a hard error. Not done here
+  because it cannot be made identity-neutral through a config field (a field
+  defaulting to "refuse" is a new behaviour, so it cannot enter
+  `IDENTITY_TRANSPARENT_DEFAULTS`, so it renumbers), and because with four
+  configs having no feasible exact route a hard error would make `440m`-`3b`
+  unconstructible. A process-level opt-in (an env var, set explicitly by the
+  golden-capture sbatches) would be identity-neutral, but it is a repo-wide
+  behaviour change.
+
+**The LM-side answer, measured** -- jobs 446363-446371 / 446412-446420, six
+seeds per cell (five on cs16), 1500 steps:
+
+| cell | n | held-out loss | SKA ablation delta | vs exact | route-swap penalty |
+|---|---|---|---|---|---|
+| `exact-invchol` | 6 | 4.39369 | +0.016402 ± .00157 (t 10.4) | — | +0.001448 |
+| `chunked-cs16` (`1m`'s) | 5 | 4.39579 | +0.013781 ± .00138 (t 10.0) | 84.0%, t 1.25 | **−0.000072** |
+| `chunked-cs64` | 6 | 4.39284 | +0.009460 ± .00088 (t 10.8) | 57.7%, t 3.86 | +0.000755 |
+
+Harness validated against a number this work did not produce: the exact cell's
+8-batch `--eval_on_final` delta reads +0.024418 against job 445994's independently
+known +0.025139 ± 0.002976, measured through that same 8-batch path.
+
+Two results, and the second is the one that matters.
+
+**The chunked route's SKA is not dead.** The tempting clean story -- "SKA on a
+chunked config contributes nothing, so those runs are Mamba baselines wearing
+SKA's parameter count" -- is FALSE. At `1m`'s chunk size of 16 the chunked route
+retains 84% of the exact route's whole SKA contribution and the shortfall is not
+resolvable (t = 1.25). At chunk 64 it retains 58%, and that is resolvable
+(t = 3.86). Real dose-response in chunk size; no chunk size switches SKA off.
+
+**Held-out loss cannot see the route at all.** The three cells span 0.00295 in
+held-out loss against a 0.0213 resolvable effect -- 7x below the floor, and the
+ordering does not even track the mechanism (`chunked-cs64`, the most damaged cell,
+has the *lowest* loss). The paired swap penalty -- same weights, same held-out
+batches, other operator -- is +0.0014 exact-trained and −0.00007 at chunk 16.
+So the 2.3e-4 non-result above was never a seed-count problem: no n would have
+resolved it.
+
+**The dissociation is the finding, and it cuts both ways.** The same configuration
+that destroys lag-2 recall for 93.8% of tokens, whose forward is ~100% wrong and
+whose gradient is ~100% wrong at cosine 0.14, pays essentially nothing in
+aggregate LM loss. Therefore:
+
+- goldens, LM-loss studies and loss-ranked searches on chunked configs are **safe**
+  -- and no amount of extra seeds would ever make them sensitive to the route;
+- any claim about SKA's **mechanism** on a chunked config -- recall, induction,
+  `ska_beta_policy` -- is measuring an operator that is ~100% wrong, and no
+  aggregate-loss check will ever reveal it.
+
+That makes `ska.py`'s "an upper bound on SPEED and not a result" too broad as
+written. A chunked LM-loss number is a perfectly good LM-loss number. What it is
+not is evidence about SKA. Narrowing that sentence is worth doing and is left
+alone here, because the warning's wording is pinned by
+`test_backend_geometry.py` and rewording it is a decision about what the project
+wants the warning to say, not a correction of something false.
 
 **What the instruments can resolve.** The progress line prints `loss %.4f`, so
 1e-4 is the smallest representable difference and `compare_golden_curve.py`'s

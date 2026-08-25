@@ -3,9 +3,22 @@ chunk_stats_exact_torch.py -- EXACT per-token-causal SKA statistics.
 
 The default chunk_stats uses EXCLUSIVE-CHUNK-PREFIX boundaries: a token in
 chunk c sees only completed chunks < c, so the within-chunk lag-1..lag-(S-1)
-cross-covariance terms are absent. Measured cost: ~100% relative error vs a
-true per-token-causal reference on short-range recall (the conv bypasses this;
-this module FIXES it inside SKA).
+cross-covariance terms are absent. Cost: ~100% relative error vs a true
+per-token-causal reference on short-range recall (the conv bypasses this; this
+module FIXES it inside SKA).
+
+That sentence said "Measured cost" until 2026-08-24, and nothing here measured
+anything. It arrived with commit 40f6653 ("Add files via upload", 2026-05-21), a
+bulk import of an external echo-ska-440m tree, carrying no harness, no geometry
+and no job id -- and `modules/seq/ska.py`'s construction warning then cited THIS
+HEADER as the measurement, which turned an inherited sentence into an apparent
+artefact. The figure is right; it just was not established here. Two things now
+establish it: job 440122 (H100, fp64, vs prefix_scan.dense_exact_oracle --
+0.92-1.52 forward, 93%-101% gradients, recorded in space.py) and
+`code-tests/test_chunked_route_staleness.py`, which is in-suite and characterises
+the structure rather than restating the scalar -- exact at each chunk's first
+token, worst at its last, lag-1 recall destroyed only INSIDE the query's own
+chunk, and controlled by ska_chunk_size with no sequence-length dependence.
 
 This builds the EXACT per-token statistics:
     G_t = ridge*I + sum_{i<t} beta_i z_i z_i^T

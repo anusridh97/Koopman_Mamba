@@ -41,6 +41,23 @@ model:
   # Pinned explicitly rather than defaulted. A golden that silently changes
   # backend between capture and comparison measures the backend, not the loop.
   ska_backend: pytorch
+  # ALL THREE FALSE MEANS THE CHUNKED APPROXIMATION, and it is deliberate here.
+  #
+  # `SKAModule.__init__` warns that a number from this route is an upper bound on
+  # SPEED and not a result, so it is worth saying why this spec may hold it: this
+  # run exists to be re-run and DIFFERENCED against itself. Every consumer of it
+  # -- golden_4m_curve.json, golden_resume_curve.json,
+  # scripts/compare_golden_curve.py -- reads a delta against a measured noise
+  # floor of 0.000000 and never the level. A regression pin is valid whatever
+  # operator it pins, because what it asserts is "the code did not change", and
+  # the route is part of the code. Pinning the exact route would be a different
+  # instrument, not a better one, and switching now would renumber run_id
+  # 2e63f16e / group_id d812e412.
+  #
+  # What it is NOT valid for: reading 10.3896 -> 6.5122 as a quality curve, or
+  # comparing it to any exact-route run's loss. Nothing in the repo does either
+  # (audited 2026-08-24), and this note exists so it stays that way -- the route
+  # was previously undisclosed at every point the goldens were described.
   ska_inverse_cholesky: false
   ska_exact_intrachunk: false
   ska_prefix_scan: false
