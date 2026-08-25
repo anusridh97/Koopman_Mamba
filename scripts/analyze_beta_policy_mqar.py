@@ -48,6 +48,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from collections import defaultdict
@@ -59,6 +60,63 @@ _NAME = re.compile(r"^mqar-(?P<policy>.+)-seed(?P<seed>\d+)$")
 
 def _curve(log: Path):
     return [(int(s), float(a)) for s, a in _ACC.findall(log.read_text())]
+
+
+def _fisher_one_sided(a: int, b: int, c: int, d: int) -> float:
+    """One-sided Fisher exact p for the 2x2 table [[a, b], [c, d]].
+
+    Sums the hypergeometric tail at or above `a`. Written out rather than
+    imported: scipy is not in this repo's CPU venv, and a 2x2 exact test is
+    three lines of `math.comb`.
+    """
+    n = a + b + c + d
+    row1, col1 = a + b, a + c
+    total = 0.0
+    for k in range(a, min(row1, col1) + 1):
+        total += (math.comb(col1, k) * math.comb(n - col1, row1 - k)
+                  / math.comb(n, row1))
+    return total
+
+
+def _grok_rate_test(by_policy) -> None:
+    """The best policy's grok rate against the pooled rest, honestly penalised.
+
+    When the budget straddles the transition, "grokked or not" is the only
+    quantity that survives -- accuracy is a coin flip about timing. It is
+    Bernoulli, so the test is Fisher exact, and at three seeds per cell it has
+    very little power. Printed anyway, because a reader will otherwise do the
+    arithmetic in their head and skip the correction.
+
+    THE CORRECTION MATTERS MORE THAN THE P-VALUE. The policy being tested is the
+    one that looked best, chosen after seeing the data, so the uncorrected p is
+    optimistic by roughly the number of policies. Both are printed and the
+    corrected one is the one labelled as the claim.
+    """
+    rates = {p: (sum(1 for r in g if r["grok_step"] is not None), len(g))
+             for p, g in by_policy.items()}
+    best = max(rates, key=lambda p: (rates[p][0] / rates[p][1], rates[p][1]))
+    a, n_a = rates[best]
+    c = sum(k for p, (k, _n) in rates.items() if p != best)
+    n_c = sum(n for p, (_k, n) in rates.items() if p != best)
+    if not n_c or a == 0:
+        return
+    p_raw = _fisher_one_sided(a, n_a - a, c, n_c - c)
+    k_policies = len(rates)
+    p_adj = min(1.0, p_raw * k_policies)
+    print(f"grok rate: {best} {a}/{n_a} against the other {k_policies - 1} "
+          f"policies pooled at {c}/{n_c}")
+    print(f"  Fisher one-sided p = {p_raw:.3f} uncorrected")
+    print(f"                     = {p_adj:.3f} after multiplying by "
+          f"{k_policies} for having picked the best cell post hoc")
+    if p_adj < 0.05:
+        print(f"  READING: {best} grokks more often than the rest, and it "
+              f"survives the selection penalty.")
+    else:
+        print(f"  READING: SUGGESTIVE, NOT ESTABLISHED. {best} looks better and "
+              f"the corrected p does not")
+        print(f"  clear 0.05. More seeds is the only fix -- {n_a} Bernoulli "
+              f"trials cannot do better,")
+        print(f"  whatever the effect size.")
 
 
 def main(argv=None) -> int:
@@ -173,7 +231,7 @@ def main(argv=None) -> int:
                   f"Those policies both grokked and failed to grok across their "
                   f"own seeds, so accuracy at this budget is measuring WHETHER "
                   f"each seed crossed in time -- not what the policy can do.")
-            print("  Any ordering read from the means here is grokking-time "
+            print("  Any ordering read from the MEANS here is grokking-time "
                   "noise. This is not a")
             print("  small effect being missed: it is a large one that changes "
                   "sign with the seed.")
@@ -182,6 +240,8 @@ def main(argv=None) -> int:
             print("  accuracy is a ceiling and grok_step is the live "
                   "quantity), or by using a cell")
             print("  hard enough that none of them does.")
+            print()
+            _grok_rate_test(by_policy)
             return 0
         # The honest substitute for a noise floor: compare the between-policy
         # spread of cell means against the largest WITHIN-policy spread.
