@@ -44,34 +44,40 @@ x {SKA on, SKA zeroed}. The route flag changes no parameter shape, so the swap i
 a pure evaluation of the same weights under the other operator: another paired
 contrast, and the cheapest one in the file.
 
-## MEASURED -- jobs 446363-446371, three seeds per cell, 1500 steps, H100.
+## MEASURED -- jobs 446363-446371 and 446412-446420, 1500 steps, H100.
 ## Analysis: scripts/analyze_chunked_route_ablation.py
 
-    cell            n   held-out loss   ska_delta (64b)   t     swap penalty
-    -------------  --   -------------   ---------------   ---   ------------
-    exact-invchol   3        4.39688    +0.016732+-.0022  7.71     +0.001463
-    chunked-cs16    3        4.39697    +0.014523+-.0022  6.74     -0.000122
-    chunked-cs64    3        4.39633    +0.009703+-.0014  6.70     +0.000805
+    cell           n   held-out    ska_delta (64b)     t     swap penalty
+    ------------  --   ---------   ----------------   -----  ------------
+    exact-invchol  6    4.39369    +0.016402+-.00157  10.45     +0.001448
+    chunked-cs16   5    4.39579    +0.013781+-.00138   9.98     -0.000072
+    chunked-cs64   6    4.39284    +0.009460+-.00088  10.80     +0.000755
 
-    vs exact (Welch):  cs16 keeps 86.8% (t 0.72)   cs64 keeps 58.0% (t 2.69)
+    vs exact (Welch):  cs16 keeps 84.0% (t 1.25, NOT resolvable)
+                       cs64 keeps 57.7% (t 3.86, resolvable)
 
-Harness validated: on the exact cell train.py's own 8-batch `--eval_on_final`
-delta reads +0.025190 against the independently known +0.025139 +- 0.002976
-(job 445994), which used that same 8-batch path.
+(A sixth `chunked-cs16` seed was still queued when this was written; rerun the
+analysis script to fold it in. It cannot move t=1.25 to significance.)
+
+Harness validated against a number this branch did not produce: on the exact cell
+train.py's own 8-batch `--eval_on_final` delta reads +0.024418 against the
+independently known +0.025139 +- 0.002976 (job 445994), which used that same
+8-batch path.
 
 **The hypothesis this was built to test is FALSE.** "If the chunked route's SKA
 contributes nothing measurable, that is the cleanest possible statement of the
-problem" -- it contributes plenty. At `1m`'s ska_chunk_size of 16 it retains 87%
-of the exact route's entire SKA contribution and the difference is not resolvable
-(t = 0.72). Even at chunk 64 it retains 58%.
+problem" -- it contributes plenty. At `1m`'s ska_chunk_size of 16 it retains 84%
+of the exact route's entire SKA contribution and the shortfall is NOT resolvable
+(t = 1.25). At chunk 64 it retains 58% and that IS resolvable (t = 3.86). So
+there is a real dose-response in chunk size, and no chunk size kills SKA.
 
-**And the route is nearly invisible to held-out loss.** The three cells span
-0.00064 in held-out loss -- 33x BELOW the 0.0213 that is resolvable trial-to-trial
-at this horizon. The paired swap penalty (same weights, same batches, other
-operator) is +0.0015 for the exact-trained model and -0.0001 at chunk 16, i.e.
-zero. So no amount of seeds would have let a loss comparison detect this; that is
-a fact about the instrument, and it is why REVIEW.md's earlier 2.3e-4 attempt was
-never going to resolve.
+**And held-out loss cannot see the route at all.** The three cells span 0.00295 in
+held-out loss against a trial-to-trial resolvable effect of 0.0213 -- 7x below the
+floor, with the cell ORDER not even matching the mechanism (cs64 has the lowest
+loss). The paired swap penalty -- same weights, same batches, other operator -- is
++0.0014 for the exact-trained model and -0.00007 at chunk 16, i.e. zero. So this
+was never a seed-count problem: REVIEW.md's earlier 2.3e-4 attempt could not have
+resolved at any n, and neither could a bigger one.
 
 **Which makes the dissociation the finding.** The same configuration that loses
 short-range recall for 93.8% of tokens at chunk 16, and whose gradient is ~100%

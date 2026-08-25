@@ -411,15 +411,53 @@ on precisely the configs where it mattered most.
   golden-capture sbatches) would be identity-neutral, but it is a repo-wide
   behaviour change.
 
-Still open at the time of writing: the paired **ablation delta per route** (does
-the chunked route's SKA earn anything at all?), running as
-`scripts/measure_chunked_route_ablation.py`. Note in advance why the obvious
-alternative cannot settle it: SKA's whole contribution to held-out loss at 1500
-proxy steps is 0.0251, and the trial-vs-trial resolvable effect at that horizon is
-0.0213, so a between-cell chunked-vs-exact loss contrast has a ceiling 1.18x its
-own noise floor. That is the instrument, not the route, and it explains the 2.3e-4
-non-result above. The within-run delta is t = 8.4 at n = 5, so it can answer at
-n = 3.
+**The LM-side answer, measured** -- jobs 446363-446371 / 446412-446420, six
+seeds per cell (five on cs16), 1500 steps:
+
+| cell | n | held-out loss | SKA ablation delta | vs exact | route-swap penalty |
+|---|---|---|---|---|---|
+| `exact-invchol` | 6 | 4.39369 | +0.016402 ± .00157 (t 10.4) | — | +0.001448 |
+| `chunked-cs16` (`1m`'s) | 5 | 4.39579 | +0.013781 ± .00138 (t 10.0) | 84.0%, t 1.25 | **−0.000072** |
+| `chunked-cs64` | 6 | 4.39284 | +0.009460 ± .00088 (t 10.8) | 57.7%, t 3.86 | +0.000755 |
+
+Harness validated against a number this work did not produce: the exact cell's
+8-batch `--eval_on_final` delta reads +0.024418 against job 445994's independently
+known +0.025139 ± 0.002976, measured through that same 8-batch path.
+
+Two results, and the second is the one that matters.
+
+**The chunked route's SKA is not dead.** The tempting clean story -- "SKA on a
+chunked config contributes nothing, so those runs are Mamba baselines wearing
+SKA's parameter count" -- is FALSE. At `1m`'s chunk size of 16 the chunked route
+retains 84% of the exact route's whole SKA contribution and the shortfall is not
+resolvable (t = 1.25). At chunk 64 it retains 58%, and that is resolvable
+(t = 3.86). Real dose-response in chunk size; no chunk size switches SKA off.
+
+**Held-out loss cannot see the route at all.** The three cells span 0.00295 in
+held-out loss against a 0.0213 resolvable effect -- 7x below the floor, and the
+ordering does not even track the mechanism (`chunked-cs64`, the most damaged cell,
+has the *lowest* loss). The paired swap penalty -- same weights, same held-out
+batches, other operator -- is +0.0014 exact-trained and −0.00007 at chunk 16.
+So the 2.3e-4 non-result above was never a seed-count problem: no n would have
+resolved it.
+
+**The dissociation is the finding, and it cuts both ways.** The same configuration
+that destroys lag-2 recall for 93.8% of tokens, whose forward is ~100% wrong and
+whose gradient is ~100% wrong at cosine 0.14, pays essentially nothing in
+aggregate LM loss. Therefore:
+
+- goldens, LM-loss studies and loss-ranked searches on chunked configs are **safe**
+  -- and no amount of extra seeds would ever make them sensitive to the route;
+- any claim about SKA's **mechanism** on a chunked config -- recall, induction,
+  `ska_beta_policy` -- is measuring an operator that is ~100% wrong, and no
+  aggregate-loss check will ever reveal it.
+
+That makes `ska.py`'s "an upper bound on SPEED and not a result" too broad as
+written. A chunked LM-loss number is a perfectly good LM-loss number. What it is
+not is evidence about SKA. Narrowing that sentence is worth doing and is left
+alone here, because the warning's wording is pinned by
+`test_backend_geometry.py` and rewording it is a decision about what the project
+wants the warning to say, not a correction of something false.
 
 **What the instruments can resolve.** The progress line prints `loss %.4f`, so
 1e-4 is the smallest representable difference and `compare_golden_curve.py`'s
