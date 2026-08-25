@@ -30,22 +30,52 @@
 # nothing. The distribution and the loss effect are reported separately and
 # neither stands in for the other.
 #
-# ======================= WHY 1500 STEPS AND NOT 600 =======================
+# ============ THE HORIZON, AND WHAT IT TURNED OUT NOT TO FIX ============
 #
 # Job 445832 measured sigma = 9.50e-3 across five seeds at 600 steps on this
-# base: a trial-vs-trial resolvable effect of 0.0269. At that floor this study
-# would be unrunnable -- no write-gate parameterisation is going to move
-# held-out loss by 0.027, and a 4-cell grid at one seed each would return a
-# confident ranking of noise.
+# base: a trial-vs-trial resolvable effect of 0.0269. At that floor a 4-cell
+# grid at one seed each returns a confident ranking of noise.
 #
-# Job 445994 re-measured the same five references at 1500 steps to test whether
-# the spread was mostly WHERE ON THE CURVE a seed sits rather than a quality
-# difference between seeds. Its first two trials came in at 4.40165240 (seed 42)
-# and 4.40158451 (seed 43) -- a gap of 6.8e-5, against 6.08e-3 for the same seed
-# pair at 600 steps, roughly 90x smaller. The curve flattening is what shrinks
-# sigma, so the horizon was the problem and 1500 steps is the fix. (The final
-# sigma from all five is what this study's own control cell should reproduce;
-# see below.)
+# Job 445994 re-measured the same five references at 1500 steps, testing the
+# hypothesis that most of that spread was WHERE ON THE CURVE a seed sits rather
+# than a quality difference between seeds -- in which case sigma should shrink
+# as the curve flattens and the proxy would become a sharper instrument.
+#
+# **IT DOES NOT.** Measured at 1500 steps:
+#
+#     seed 42   4.40165240
+#     seed 43   4.40158451
+#     seed 44   4.41825330
+#
+#   -> sigma = 9.60e-3 at n=3, against 9.50e-3 at n=5 at 600 steps.
+#
+# The first two seeds landed 6.8e-5 apart, which looked like a 90x improvement
+# on the 6.08e-3 that same pair showed at 600 steps -- and an earlier revision
+# of this header said so. Seed 44 falsified it. Two draws from a distribution
+# with sigma ~ 1e-2 landing 7e-5 apart is an unremarkable coincidence, and
+# reading a variance off two points is how it gets mistaken for a result. The
+# number stands as recorded rather than being quietly deleted, because the
+# inference is the instructive part.
+#
+# Consequences, which are the reason this section is long:
+#
+#   1. The horizon is NOT the problem. Sigma is a property of the seed-to-seed
+#      spread at this scale, not of an unconverged curve, so no affordable
+#      number of steps fixes it. The OBJECTIVE is the problem -- which is a
+#      direct argument for the retrieval arm
+#      (scripts/run_beta_policy_mqar.sbatch) carrying the decision rather than
+#      LM loss.
+#   2. This study's job changes from RANKING to BOUNDING. At n=5 per cell the
+#      mean-vs-mean resolvable effect is 2*sigma*sqrt(2/5) = 1.2e-2, so the
+#      honest output is "no policy differs from the control by more than about
+#      1.2e-2", not an ordering. That is still worth having: it is the first
+#      quantitative statement anyone has made about this gate.
+#   3. Since sigma is horizon-independent, more seeds at a SHORTER horizon would
+#      buy more resolution per GPU-hour (48 trials at 600 steps costs about what
+#      20 at 1500 does and would resolve 7.8e-3). 1500 is kept anyway, for one
+#      reason: it is 0.98 epochs, the regime a real run is in, and a bound
+#      measured at 40% of an epoch would not describe it. The cheaper design is
+#      recorded here so the choice is visible rather than implied.
 #
 # 1500 x 64 effective_batch x 1024 seq = 98,304,000 tokens against a
 # 100,000,536-token shard: 0.98 epochs, and one epoch is 1525 steps. This is the
