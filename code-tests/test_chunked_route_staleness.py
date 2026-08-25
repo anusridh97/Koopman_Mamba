@@ -33,6 +33,7 @@ Everything here is deterministic, CPU-only, fp64, and seconds to run.
 
 import pathlib
 import sys
+import warnings
 
 import pytest
 import torch
@@ -287,6 +288,108 @@ def test_relative_error_is_independent_of_sequence_length():
     lo, hi = min(errs.values()), max(errs.values())
     assert lo > 0.9, f"error should be ~100% at every length, got {errs}"
     assert hi - lo < 0.12, f"error must not depend on T; spread {hi-lo:.3f}: {errs}"
+
+
+@pytest.mark.parametrize("CS,expect", [(16, 0.9375), (64, 0.984375)])
+def test_what_fraction_of_tokens_lose_short_range_recall(CS, expect):
+    """The interpretable summary, and the one to quote instead of "~100%".
+
+    The dead window is 2 <= d <= j+1, so at the SHORTEST real lag (d = 2; d = 1
+    is unavailable to both routes, since the value at p+1 = t is not yet written)
+    the broken tokens are those with j >= 1 -- a fraction (CS-1)/CS. That is
+    93.8% of tokens at `1m`'s ska_chunk_size of 16 and 98.4% at 64.
+
+    So the warning's "~100% relative error on short-range recall" is not
+    hyperbole and not an average over a smooth decay: at lag 2 it is very nearly
+    every token, by construction, and the fraction is set by `ska_chunk_size`.
+    """
+    T, B, d, c = 6 * CS, 256, 2, 4        # chunk 4 has full history behind it
+    z_n, v, x_n, v_w = _stream(B, T, seed=7)
+    # Statistics ONCE for the whole sequence, then index every offset out of
+    # them. Rebuilding them per offset is O(CS) redundant passes over T tokens
+    # and took 30s at CS=64, which is not a CPU-suite test.
+    zero_q = torch.zeros_like(x_n)
+    Ge, Me, Ce, _, (_b, Te, He, _p) = exact_stats(x_n, x_n, zero_q, v_w, RIDGE)
+    Gc, Mc, Cc, _, shp = causal_chunk_stats(x_n, x_n, zero_q, v_w, RIDGE, CS)
+    nc = shp[1]
+    ratios = {}
+    for j in range(CS):
+        t = c * CS + j
+        ie = torch.arange(B) * Te * He + t
+        ic = torch.arange(B) * nc * He + (t // CS)
+        q = z_n[:, t - d, 0].unsqueeze(-1)
+        tg = v[:, t - d + 1, 0]
+        tg = tg / tg.norm(dim=-1, keepdim=True)
+        se = (_whitened(Ge[ie], Me[ie], Ce[ie], q)[:, :, 0] * tg).sum(-1).mean()
+        sc = (_whitened(Gc[ic], Mc[ic], Cc[ic], q)[:, :, 0] * tg).sum(-1).mean()
+        ratios[j] = (sc / se).item()
+
+    broken = sum(1 for r in ratios.values() if abs(r) < 0.5)
+    frac = broken / CS
+    assert frac == pytest.approx(expect, abs=2.0 / CS), (
+        f"CS={CS}: measured {frac:.4f} of tokens with lag-2 recall destroyed, "
+        f"expected (CS-1)/CS = {expect:.4f}; ratios={ratios}")
+    # The structural half, which is exact and not a threshold: offset 0 is served
+    # the full prefix, so its ratio is 1. Every other offset is inside the dead
+    # window at d = 2. The COUNT above is thresholded on a noisy ratio (residual
+    # crosstalk occasionally clears 0.5 against a weak reference signal), so it
+    # gets a tolerance; this does not.
+    assert ratios[0] == pytest.approx(1.0, abs=1e-9), (
+        f"offset 0 must be exact, ratio={ratios[0]}")
+    assert max(abs(r) for j, r in ratios.items() if j > 0) < 1.0, (
+        "no offset past the first should retain full recall at lag 2")
+
+
+def test_the_gradient_is_as_wrong_as_the_forward_and_barely_aligned():
+    """Training consumes dL/dW, not y. So the forward error only matters if it
+    survives the backward -- if the gradient happened to point the same way, a
+    chunked run could still train to nearly the same place, and the route would
+    be a speed/accuracy trade rather than a different experiment.
+
+    It does not. Same weights, same input, same loss: the whole-module gradient
+    is ~90-115% wrong with cosine similarity 0.2-0.5, independently reproducing
+    space.py's "93%-101% wrong in the GRADIENTS" (job 440122).
+
+    The `beta_proj.bias` row is the one to notice: its gradient cosine is ~0, so
+    the write gate's bias receives a signal UNCORRELATED with the true one. Any
+    conclusion about `ska_beta_policy` drawn on a chunked config would be
+    measuring that. `scripts/run_beta_policy_mqar.sbatch` already refuses
+    configs/1m.yaml for exactly this reason; this test is why that refusal is
+    right.
+    """
+    from koopman_lm.modules.seq.ska import SKAModule
+    import torch.nn.functional as F
+
+    kw = dict(d_model=256, n_heads=4, rank=R, chunk_size=64, power_K=K,
+              precision="fp64")
+    torch.manual_seed(0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        exact = SKAModule(inverse_cholesky=True, **kw).double()
+        chunked = SKAModule(**kw).double()
+    chunked.load_state_dict(exact.state_dict())      # identical weights
+
+    x = torch.randn(2, 256, 256, dtype=DT)
+    tgt = torch.randn(2, 256, 256, dtype=DT)
+    for m in (exact, chunked):
+        m.zero_grad()
+        ((m(x) - tgt) ** 2).mean().backward()
+
+    ge = torch.cat([p.grad.reshape(-1) for p in exact.parameters()])
+    gc = torch.cat([p.grad.reshape(-1) for p in chunked.parameters()])
+    rel = ((gc - ge).norm() / ge.norm()).item()
+    cos = F.cosine_similarity(ge, gc, dim=0).item()
+    assert 0.7 < rel < 1.4, f"whole-module gradient rel err {rel:.3f}"
+    assert cos < 0.75, f"gradients should be poorly aligned, cosine {cos:.3f}"
+
+    # the write gate's bias, specifically: essentially no shared signal
+    bias_e = dict(exact.named_parameters())["beta_proj.bias"].grad
+    bias_c = dict(chunked.named_parameters())["beta_proj.bias"].grad
+    bcos = F.cosine_similarity(bias_e, bias_c, dim=0).item()
+    assert abs(bcos) < 0.4, (
+        f"beta_proj.bias gradient cosine {bcos:.3f}: this test asserts the "
+        f"write-gate signal is uncorrelated between routes, which is what makes "
+        f"a beta-policy study on a chunked config meaningless")
 
 
 def test_the_quoted_hundred_percent_is_reproduced_at_the_ladders_chunk_sizes():
