@@ -248,6 +248,24 @@
 # simply wastes fewer of them (up to 4 instead of up to 7), at a cost of one
 # extra wave -- about 90 minutes instead of 66.
 #
+# CONFIRMED IN JOB 446074, and the margin was thinner than the argument above
+# makes it sound. Four overshoot trials appeared, and they sampled one of EACH
+# policy -- linear, head_scalar, learned, one -- so with the float axes pinned
+# all four would have collided with an anchor rather than merely one of them.
+# What separated them was exactly the three continuous draws:
+#
+#     group_id   policy       ska_ridge              optim.lr
+#     8d68c78d   linear       0.01      (anchor)     0.0004    (anchor)
+#     1a36ce8b   linear       0.004971  (sampled)    0.000301  (sampled)
+#     28e3c8b6   head_scalar  0.01      (anchor)     0.0004    (anchor)
+#     5a33f71c   head_scalar  0.006884  (sampled)    0.000498  (sampled)
+#     c7b818ff   learned      0.01      (anchor)     0.0004    (anchor)
+#     db4bfdf8   learned      0.003645  (sampled)    0.000362  (sampled)
+#     4188d889   one          0.01      (anchor)     0.0004    (anchor)
+#     dd0eb3b6   one          0.018997  (sampled)    0.000481  (sampled)
+#
+# Eight distinct group_ids, no directory claimed twice.
+#
 # `_print_plan` warns below 5 waves, so ONE warning is expected in the output.
 name: beta-policy-1500
 base: configs/runs/proxy-256x17.yaml
