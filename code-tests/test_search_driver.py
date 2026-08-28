@@ -218,6 +218,32 @@ def test_the_trial_result_reaches_the_study(tmp_path):
     assert study.trials[0].state.name == "COMPLETE"
 
 
+def test_completed_duplicate_reuses_its_result_without_relaunching(tmp_path):
+    """Concurrent workers can sample one discrete point; never clobber it."""
+    from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
+    launcher = _FakeLauncher()
+    first = study.ask(to_distributions(context["space"]))
+    first_outcome = run_trial(
+        study, first, launcher=launcher,
+        objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+    (first_outcome.run_dir / "final").mkdir()
+
+    study.enqueue_trial(first.params)
+    duplicate = study.ask(to_distributions(context["space"]))
+    duplicate_outcome = run_trial(
+        study, duplicate, launcher=launcher,
+        objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+
+    assert duplicate_outcome.state == "complete"
+    assert duplicate_outcome.run_dir == first_outcome.run_dir
+    assert len(launcher.submitted) == 1
+
+
 def test_run_trial_records_the_run_id_and_the_anchor_name(tmp_path):
     from experimentation.sweep.search.anchors import Design
     from experimentation.sweep.search.driver import run_trial

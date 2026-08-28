@@ -1,20 +1,18 @@
-# Approximately 3M non-embedding parameters with the 32k FineWeb tokenizer.
-# Estimated non-embedding parameters: 3,161,248.
-# Estimated total parameters, including tied embeddings: 8,281,248.
-# This file follows the current branch schema used by configs/runs/4m-golden.yaml.
-d_model: 160
-n_layers: 8
+# Approximately 100M non-embedding parameters; 119.54M total with tied embeddings.
+# This continues the 50M -> 180M width/depth progression for scaling sweeps.
+d_model: 544
+n_layers: 23
 vocab_size: 32000
-d_state: 16
+d_state: 64
 d_conv: 4
 mamba_expand: 2
 
-ska_n_heads: 4
-ska_rank: 16
+ska_n_heads: 8
+ska_rank: 24
 ska_ridge: 0.001
 ska_power_K: 2
-ska_chunk_size: 16
-ska_layer_indices: [6, 7]
+ska_chunk_size: 64
+ska_layer_indices: [3, 7, 11, 15, 19]
 ska_mode: parallel
 ska_backend: pytorch
 ska_inverse_cholesky: true
@@ -46,7 +44,6 @@ rescale_prenorm_residual: true
 max_seq_len: 2048
 tie_embeddings: true
 
-# Current precision policy fields.
 compute_precision: bf16
 ska_precision: fp32
 mlp_precision: null

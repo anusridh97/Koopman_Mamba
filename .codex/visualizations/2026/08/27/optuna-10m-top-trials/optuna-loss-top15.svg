@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" role="img" aria-labelledby="title desc">
+  <title id="title">10M Optuna top 15 final objectives</title>
+  <desc id="desc">Scatter plot of objective by trial number. Lower is better. Colour indicates SKA rank and circle size indicates number of SKA layers.</desc>
+  <rect width="960" height="600" fill="#ffffff"/>
+  <text x="72" y="42" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#172033">10M Optuna: top 15 final objectives</text>
+  <text x="72" y="66" font-family="Arial, sans-serif" font-size="14" fill="#556070">Lower is better · colour = SKA rank · larger point = more SKA layers</text>
+  <g stroke="#d8dee9" stroke-width="1" stroke-dasharray="4 5">
+    <line x1="90" y1="90" x2="850" y2="90"/><line x1="90" y1="190" x2="850" y2="190"/>
+    <line x1="90" y1="290" x2="850" y2="290"/><line x1="90" y1="390" x2="850" y2="390"/>
+    <line x1="90" y1="490" x2="850" y2="490"/>
+  </g>
+  <g stroke="#526078" stroke-width="1.5"><line x1="90" y1="90" x2="90" y2="490"/><line x1="90" y1="490" x2="850" y2="490"/></g>
+  <g font-family="Arial, sans-serif" font-size="13" fill="#556070">
+    <text x="79" y="95" text-anchor="end">4.01</text><text x="79" y="195" text-anchor="end">4.00</text><text x="79" y="295" text-anchor="end">3.99</text><text x="79" y="395" text-anchor="end">3.98</text><text x="79" y="495" text-anchor="end">3.97</text>
+    <text x="107" y="516" text-anchor="middle">5</text><text x="192" y="516" text-anchor="middle">10</text><text x="361" y="516" text-anchor="middle">20</text><text x="530" y="516" text-anchor="middle">30</text><text x="699" y="516" text-anchor="middle">40</text><text x="834" y="516" text-anchor="middle">48</text>
+    <text x="470" y="555" text-anchor="middle" font-size="15" font-weight="700" fill="#172033">Optuna trial number</text>
+    <text x="25" y="300" transform="rotate(-90 25 300)" text-anchor="middle" font-size="15" font-weight="700" fill="#172033">Final objective</text>
+  </g>
+  <g stroke="#ffffff" stroke-width="2">
+    <circle cx="327" cy="441" r="7" fill="#3478c5"/><circle cx="496" cy="404" r="7" fill="#d48a20"/>
+    <circle cx="834" cy="394" r="10" fill="#3478c5"/><circle cx="563" cy="372" r="7" fill="#d48a20"/>
+    <circle cx="800" cy="366" r="10" fill="#3478c5"/><circle cx="631" cy="354" r="10" fill="#d48a20"/>
+    <circle cx="124" cy="319" r="7" fill="#7a5bb7"/><circle cx="276" cy="270" r="12" fill="#7a5bb7"/>
+    <circle cx="648" cy="239" r="10" fill="#d48a20"/><circle cx="141" cy="237" r="12" fill="#7a5bb7"/>
+    <circle cx="580" cy="233" r="7" fill="#d48a20"/><circle cx="225" cy="220" r="12" fill="#7a5bb7"/>
+    <circle cx="766" cy="218" r="7" fill="#3478c5"/><circle cx="817" cy="207" r="10" fill="#3478c5"/>
+    <circle cx="107" cy="153" r="7" fill="#d48a20"/>
+  </g>
+  <g font-family="Arial, sans-serif" font-size="13" fill="#172033">
+    <text x="339" y="432" font-weight="700">#1 trial 18 · 3.97487</text>
+    <text x="508" y="395">#2 trial 28 · 3.97862</text>
+    <text x="720" y="383">#3 trial 48 · 3.97959</text>
+  </g>
+  <g transform="translate(105,575)" font-family="Arial, sans-serif" font-size="13" fill="#334155">
+    <circle cx="0" cy="-4" r="6" fill="#7a5bb7"/><text x="11" y="0">rank 16</text>
+    <circle cx="100" cy="-4" r="6" fill="#d48a20"/><text x="111" y="0">rank 24</text>
+    <circle cx="200" cy="-4" r="6" fill="#3478c5"/><text x="211" y="0">rank 32</text>
+    <text x="325" y="0" fill="#556070">Top 15 only; not a full-trial distribution.</text>
+  </g>
+</svg>

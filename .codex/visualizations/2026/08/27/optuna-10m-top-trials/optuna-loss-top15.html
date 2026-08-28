@@ -1,0 +1,89 @@
+<section class="viz" aria-labelledby="title">
+  <style>
+    .viz { font-family: var(--font-sans); color: var(--color-text-primary); max-width: 920px; }
+    .viz h2 { font-size: 18px; margin: 0 0 4px; }
+    .viz p { color: var(--color-text-secondary); margin: 0 0 16px; font-size: 13px; }
+    .viz-grid { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; align-items: start; }
+    .panel { background: var(--color-background-secondary); border: 1px solid var(--color-border-primary); border-radius: 10px; padding: 12px; }
+    svg { display: block; width: 100%; height: auto; }
+    .axis { stroke: var(--color-border-primary); stroke-width: 1; }
+    .grid { stroke: var(--color-border-secondary); stroke-width: 1; stroke-dasharray: 3 4; }
+    .tick { fill: var(--color-text-secondary); font-size: 11px; }
+    .label { fill: var(--color-text-primary); font-size: 12px; font-weight: 600; }
+    .dot { cursor: pointer; stroke: var(--color-background-primary); stroke-width: 2; }
+    .dot:focus { outline: none; stroke: var(--color-text-primary); stroke-width: 3; }
+    .legend { display: grid; gap: 8px; font-size: 13px; }
+    .legend-row { display: flex; align-items: center; gap: 8px; }
+    .swatch { width: 10px; height: 10px; border-radius: 999px; flex: 0 0 auto; }
+    .best { font-size: 26px; font-weight: 700; margin: 2px 0 12px; }
+    .key { color: var(--color-text-secondary); font-size: 12px; }
+    .tooltip { min-height: 78px; font-size: 13px; line-height: 1.45; color: var(--color-text-secondary); }
+    .tooltip strong { color: var(--color-text-primary); }
+    @media (max-width: 700px) { .viz-grid { grid-template-columns: 1fr; } }
+  </style>
+  <h2 id="title">10M Optuna: top 15 final objectives</h2>
+  <p>Lower is better. Each point is a completed 1,500-step trial; this is not a scaling-law curve.</p>
+  <div class="viz-grid">
+    <div class="panel">
+      <svg id="plot" viewBox="0 0 650 365" role="img" aria-label="Scatter plot of final objective by Optuna trial number, coloured by SKA rank"></svg>
+    </div>
+    <aside class="panel" aria-live="polite">
+      <div class="key">Best final objective</div>
+      <div class="best">3.97487</div>
+      <div class="legend" id="legend"></div>
+      <hr style="border:0;border-top:1px solid var(--color-border-primary);margin:14px 0">
+      <div id="tooltip" class="tooltip"><strong>Hover or select a point</strong><br>Point size represents the number of SKA layers.</div>
+    </aside>
+  </div>
+  <script>
+    (() => {
+      const trials = [
+        {trial:18, objective:3.97487, rank:32, layers:3, placement:'even', lr:0.000536, wd:0.05, id:'a5d6c0a3'},
+        {trial:28, objective:3.97862, rank:24, layers:3, placement:'late', lr:0.000539, wd:0.05, id:'1095a738'},
+        {trial:48, objective:3.97959, rank:32, layers:6, placement:'late', lr:0.000537, wd:0.05, id:'5859d563'},
+        {trial:32, objective:3.98180, rank:24, layers:3, placement:'late', lr:0.000537, wd:0.05, id:'6fc966af'},
+        {trial:46, objective:3.98245, rank:32, layers:6, placement:'late', lr:0.000540, wd:0.05, id:'26f4668b'},
+        {trial:36, objective:3.98365, rank:24, layers:6, placement:'baseline', lr:0.000540, wd:0.05, id:'8151c2af'},
+        {trial:6, objective:3.98714, rank:16, layers:3, placement:'midlate', lr:0.000528, wd:0.05, id:'781259bc'},
+        {trial:15, objective:3.99204, rank:16, layers:8, placement:'even', lr:0.000538, wd:0.15, id:'ec18fe87'},
+        {trial:37, objective:3.99513, rank:24, layers:6, placement:'baseline', lr:0.000539, wd:0.05, id:'57a31228'},
+        {trial:7, objective:3.99528, rank:16, layers:8, placement:'midlate', lr:0.000531, wd:0.15, id:'be11af16'},
+        {trial:33, objective:3.99571, rank:24, layers:3, placement:'late', lr:0.000518, wd:0.05, id:'26678602'},
+        {trial:12, objective:3.99701, rank:16, layers:8, placement:'midlate', lr:0.000531, wd:0.15, id:'b5edd2de'},
+        {trial:44, objective:3.99716, rank:32, layers:3, placement:'baseline', lr:0.000521, wd:0.05, id:'e4adbfa8'},
+        {trial:47, objective:3.99827, rank:32, layers:6, placement:'late', lr:0.000518, wd:0.05, id:'31d2d078'},
+        {trial:5, objective:4.00372, rank:24, layers:3, placement:'midlate', lr:0.000509, wd:0.05, id:'1bb35a56'}
+      ];
+      const colors = {16:'var(--color-series-1)',24:'var(--color-series-2)',32:'var(--color-series-3)'};
+      const svg = document.getElementById('plot');
+      const legend = document.getElementById('legend');
+      const tooltip = document.getElementById('tooltip');
+      const ns = 'http://www.w3.org/2000/svg';
+      const W=650,H=365,left=58,right=18,top=24,bottom=48;
+      const xMin=4,xMax=49,yMin=3.97,yMax=4.01;
+      const x=v=>left+(v-xMin)/(xMax-xMin)*(W-left-right);
+      const y=v=>top+(yMax-v)/(yMax-yMin)*(H-top-bottom);
+      const el=(name,attrs={},text='')=>{const node=document.createElementNS(ns,name);Object.entries(attrs).forEach(([k,v])=>node.setAttribute(k,v));node.textContent=text;return node};
+      [3.97,3.98,3.99,4.00,4.01].forEach(v=>{
+        svg.append(el('line',{x1:left,y1:y(v),x2:W-right,y2:y(v),class:'grid'}));
+        svg.append(el('text',{x:left-8,y:y(v)+4,'text-anchor':'end',class:'tick'},v.toFixed(2)));
+      });
+      [5,10,20,30,40,48].forEach(v=>{
+        svg.append(el('line',{x1:x(v),y1:top,x2:x(v),y2:H-bottom,class:'grid'}));
+        svg.append(el('text',{x:x(v),y:H-bottom+20,'text-anchor':'middle',class:'tick'},String(v)));
+      });
+      svg.append(el('line',{x1:left,y1:H-bottom,x2:W-right,y2:H-bottom,class:'axis'}));
+      svg.append(el('line',{x1:left,y1:top,x2:left,y2:H-bottom,class:'axis'}));
+      svg.append(el('text',{x:(left+W-right)/2,y:H-10,'text-anchor':'middle',class:'label'},'Optuna trial number'));
+      svg.append(el('text',{x:16,y:(top+H-bottom)/2,transform:`rotate(-90 16 ${(top+H-bottom)/2})`,'text-anchor':'middle',class:'label'},'Final objective'));
+      const show = t => { tooltip.innerHTML = `<strong>Trial ${t.trial} · objective ${t.objective.toFixed(5)}</strong><br>SKA rank ${t.rank}; ${t.layers} SKA layers; ${t.placement} placement<br>LR ${t.lr.toFixed(6)} · weight decay ${t.wd} · run ${t.id}`; };
+      trials.forEach(t=>{
+        const dot=el('circle',{cx:x(t.trial),cy:y(t.objective),r:4+t.layers/2,fill:colors[t.rank],class:'dot',tabindex:'0','aria-label':`Trial ${t.trial}, objective ${t.objective}`});
+        dot.addEventListener('mouseenter',()=>show(t)); dot.addEventListener('focus',()=>show(t)); dot.addEventListener('click',()=>show(t));
+        svg.append(dot);
+      });
+      [16,24,32].forEach(rank=>{ const row=document.createElement('div'); row.className='legend-row'; row.innerHTML=`<span class="swatch" style="background:${colors[rank]}"></span><span>SKA rank ${rank}</span>`; legend.append(row); });
+      const size=document.createElement('div'); size.className='key'; size.textContent='Larger point = more SKA layers'; legend.append(size);
+    })();
+  </script>
+</section>

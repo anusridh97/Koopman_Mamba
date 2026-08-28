@@ -1,0 +1,15 @@
+name: 50m-nonembed-adaptive-local
+base: configs/runs/50m-nonembed-golden.yaml
+n_trials: 48
+max_steps: 1500
+prune_after_step: 400
+logging_steps: 25
+launcher: local
+n_jobs: 1
+seed: 2026
+direction: minimize
+design_file: configs/search/example_anchors.yaml
+run_root: /anvil/scratch/x-ajohansen/50m-nonembed-optuna-local-runs
+storage: /anvil/scratch/x-ajohansen/50m-nonembed-optuna-local-runs/optuna_journal.log
+trial_timeout_seconds: 7200
+objective: {}

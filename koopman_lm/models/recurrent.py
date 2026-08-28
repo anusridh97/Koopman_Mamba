@@ -220,7 +220,7 @@ class RecurrentKoopmanLM(nn.Module):
             conv_state, ssm_state = mamba.allocate_inference_cache(
                 B, self.cfg.max_seq_len, dtype=x.dtype)
             ip.key_value_memory_dict[mamba.layer_idx] = (conv_state, ssm_state)
-            h_normed = mamba_block.norm(x)
+            h_normed = mamba_block.norm(x).contiguous()
             out = mamba(h_normed, inference_params=ip)
             output = x + out
             ip.seqlen_offset = x.shape[1]
@@ -425,7 +425,7 @@ class RecurrentKoopmanLM(nn.Module):
 
     def _mamba_step(self, mamba_block, x, idx):
         conv_state, ssm_state = self._mamba_states[idx]
-        h_normed = mamba_block.norm(x)
+        h_normed = mamba_block.norm(x).contiguous()
         out, conv_state, ssm_state = mamba_block.mamba.step(
             h_normed, conv_state, ssm_state)
         self._mamba_states[idx] = (conv_state, ssm_state)

@@ -411,6 +411,9 @@ CONFIG_REGISTRY = {
     "10m_nonembed": "10m-nonembed.yaml",
     "30m_nonembed": "30m-nonembed.yaml",
     "50m_nonembed": "50m-nonembed.yaml",
+    "50m_nonembed_best6k": "50m-nonembed-best6k.yaml",
+    "100m_nonembed": "100m-nonembed.yaml",
+    "180m_nonembed": "180m-nonembed.yaml",
     # Canonical fused-prefix production configurations.
     "50m": "50m.yaml",
     "180m": "180m.yaml",

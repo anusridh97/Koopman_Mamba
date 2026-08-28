@@ -53,6 +53,7 @@ import optuna
 
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.run.train_argv import batch_plans
+from experimentation.run.write_policy import RunDirConflictError
 from experimentation.sweep.launch import materialize_cell
 from experimentation.sweep.search.metrics import (
     looks_like_oom, objective_from_metrics)
@@ -146,6 +147,7 @@ def run_trial(study: optuna.study.Study, trial, *,
     rungs = _ladder(base_sections, enabled=batch_ladder)
     identity: Dict[str, Any] = {}
     last_failure = "no attempt was made"
+    reused_completed_run = False
 
     for position, pdbs in enumerate(rungs):
         attempt_overrides = dict(overrides)
@@ -159,8 +161,14 @@ def run_trial(study: optuna.study.Study, trial, *,
         # attempts.jsonl record rather than forking a second identity. force=True
         # is what lets the second rung write into a directory the first already
         # created.
-        run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
-                                   force=force or position > 0, dry_run=dry_run)
+        try:
+            run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
+                                       force=force or position > 0, dry_run=dry_run)
+        except RunDirConflictError:
+            from experimentation.run.spec import run_dir_path
+
+            run_dir = run_dir_path(run_root, spec)
+            reused_completed_run = True
         identity = dict(trial_number=trial.number, run_id=run_id(spec),
                         group_id=group_id(spec), run_dir=run_dir, anchor=anchor,
                         per_device_batch_size=spec.runtime.per_device_batch_size)
@@ -168,7 +176,8 @@ def run_trial(study: optuna.study.Study, trial, *,
             # wait=False so the objective reader can WATCH this run rather than
             # only inspect its corpse. With a blocking submit the reader starts
             # after training ended, so pruning had nothing to prune.
-            launcher.submit(spec, run_dir, dry_run=dry_run, wait=False)
+            if not reused_completed_run:
+                launcher.submit(spec, run_dir, dry_run=dry_run, wait=False)
             break
         except Exception as exc:                   # noqa: BLE001 -- see docstring
             last_failure = f"{type(exc).__name__}: {exc}"

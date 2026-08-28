@@ -1,0 +1,16 @@
+# Fresh 6K confirmation of the best 50M Optuna trial (trial 24).
+# Do not resume the 1,500-step proxy checkpoint: its cosine schedule is finished.
+extends: 50m-nonembed-golden.yaml
+name: 50m-nonembed-best6k
+model: 50m_nonembed_best6k
+optim:
+  lr: 0.0005304358168548704
+  warmup_steps: 360
+  max_steps: 6000
+  schedule: cosine
+  effective_batch: 64
+  weight_decay: 0.15
+  grad_clip: 0.5
+runtime:
+  per_device_batch_size: 16
+  time_limit: "04:00:00"

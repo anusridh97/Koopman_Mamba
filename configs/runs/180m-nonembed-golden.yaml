@@ -1,0 +1,18 @@
+# Full 180M non-embedding scaling run using the materialized FineWeb shard.
+extends: 3m-golden.yaml
+name: 180m-nonembed-golden
+model: 180m_nonembed
+data:
+  shard_dir: /anvil/scratch/x-ajohansen/data/fineweb_12_6b_train
+  n_tokens: 11412764076
+optim:
+  lr: 3.0e-4
+  warmup_steps: 3500
+  max_steps: 87069
+  schedule: cosine
+  effective_batch: 64
+  weight_decay: 0.1
+  grad_clip: 1.0
+runtime:
+  per_device_batch_size: 4
+  time_limit: "04:00:00"
