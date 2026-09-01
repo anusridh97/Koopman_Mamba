@@ -56,6 +56,49 @@ Write gate 0.01 → 0.164 (16×), ‖Δ SKA‖/‖Δ Mamba‖ 0.113 → 0.266, g
 3.79 → 1.02** — pinned at the floor, the rank-deficient-keys signature. `ska_rank`
 won at the ceiling of its searched range (32), so that axis may be bound by its limit.
 
+## Which swept axis contributed what (`figures/fig5–7`)
+
+**Learning rate dominates.** PedANOVA importance 0.686 global / 0.589 local — larger
+than every architecture axis combined. Inside the 256-trial random startup, LR alone
+accounts for **70.9%** of the objective variance.
+
+**The marginals in `main_effects.csv` are confounded, and that is not a footnote.**
+TPE spent 715 of 1,041 completed trials on `ska_rank=32` and 868 on the top LR bin,
+so a raw level mean mixes "this level is good" with "TPE co-selected it alongside a
+good LR". Splitting the trials makes the size of that confound visible:
+
+| axis | var share, random startup (n=186) | var share, good-LR band (n=868) |
+|---|---|---|
+| mamba_expand | 2.7% | **40.2%** |
+| ska_rank | 2.3% | **35.4%** |
+| beta_policy | 2.7% | **24.7%** |
+| ska_power_K | 0.8% | **20.8%** |
+| warmup_ratio | 2.1% | 15.1% |
+| n_ska_layers | 1.4% | 10.9% |
+| depth_tier | 0.2% | 8.0% |
+| d_state | 2.6% | 5.9% |
+
+**Read the left column as "cannot resolve", NOT as "no effect".** The random phase is
+underpowered: per-level SE is ~0.019 at n≈46, so a two-level gap needs >0.054 to
+register, and the observed spreads there are 0.011–0.056 — mostly inside the bar.
+
+**This is the joint search paying for itself.** The study asked "which architecture
+wins, and does the answer depend on the optimizer?" The answer to the second half is
+yes: at uncontrolled LR no architecture axis is rankable, and once LR is in its good
+band `mamba_expand` and `ska_rank` become the two largest terms in the model. An
+architecture study with LR pinned at the wrong value would have concluded nothing;
+one with LR pinned at the right value would have gotten the ranking without knowing
+it depended on that choice.
+
+Caveat: the good-LR band is itself TPE-selected, so residual confounding remains —
+it is a controlled comparison, not a randomised one. The clean fix is a small
+confirmation grid at fixed LR, which is cheap and not yet run.
+
+Ordering inside the good-LR band (`fig7`, every gap ≥ 4× the 0.0040 resolvable floor):
+`mamba_expand` 3 > 2 > 1 · `ska_rank` 32 > 24 > 16 > 8 · `beta_policy` linear >
+learned > head_scalar > one · `n_ska_layers` 6 > 4 ≈ 3 > 2.
+
+
 ## Failures
 
 156 of 2,007 (7.8%): 102 OOM, 54 Lustre `EDQUOT`. Both are infrastructure, not config.
@@ -90,4 +133,9 @@ trial), so treat `recovered_failures.csv` as a supplement, not part of the searc
     figures/fig2_arch_vs_baseline.png
     figures/fig3_ska_delta_vs_loss.png
     figures/fig4_ska_diagnostics.png
+    figures/fig5_axis_importance.png          PedANOVA importance, local vs global
+    figures/fig6_conditional_variance.png     variance share: random startup vs good-LR band
+    figures/fig7_level_means_controlled.png   level means inside the good-LR band
+    data/importances.csv  main_effects.csv  conditional_effects.csv
+    data/sampler_correlations.csv  macro_pairwise.json  interactions.md
     make_figures.py
