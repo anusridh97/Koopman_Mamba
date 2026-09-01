@@ -454,5 +454,10 @@ def wait_for_objective(study: optuna.study.Study, trial, run_dir, *,
             return objective
 
         if timeout_seconds is not None and clock() - started >= timeout_seconds:
+            # A timeout marks the TRIAL failed; it must also stop the RUN.  If it
+            # keeps training, the worker immediately launches another process on
+            # the same assigned GPU and a packing study accumulates orphaned CUDA
+            # contexts until otherwise valid trials OOM.
+            cancel(run_dir)
             return None
         sleep(poll_seconds)

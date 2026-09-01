@@ -125,7 +125,8 @@ class OptimSpec:
 
 _BATCH_REQUIRED_ACCOUNT = "marlowe-m000151-pm06"
 _BATCH_REQUIRED_QOS = "medium"
-_KNOWN_PARTITIONS = {"batch", "hero", "preempt"}
+_ANVIL_PARTITIONS = {"ai", "gpu", "gpu-debug"}
+_KNOWN_PARTITIONS = {"batch", "hero", "preempt", *_ANVIL_PARTITIONS}
 
 
 @dataclass(frozen=True)
@@ -169,7 +170,10 @@ class RuntimeSpec:
     nodes: int = 1
     partition: str = "batch"
     account: str = "marlowe-m000151-pm06"
-    qos: str = "medium"
+    # Some clusters (including Anvil's ``ai`` partition) do not use a QoS.
+    # None means omit the #SBATCH directive; Marlowe's batch policy below still
+    # requires the literal "medium" value.
+    qos: Optional[str] = "medium"
     workers: int = 4
     time_limit: str = "2-00:00:00"
     # H100 80GB, compute capability 9.0 (sm_90). Marlowe has NO B200/sm_100

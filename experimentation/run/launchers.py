@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import abc
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -30,9 +31,9 @@ _SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --account={account}
 #SBATCH --partition={partition}
-#SBATCH --qos={qos}
+{qos_directive}
 #SBATCH --nodes={nodes}
-#SBATCH --gpus-per-node={gpus}
+{gpu_directive}
 #SBATCH --time={time_limit}
 #SBATCH --signal=B:USR1@300
 #SBATCH --requeue
@@ -58,9 +59,9 @@ _ARRAY_SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --account={account}
 #SBATCH --partition={partition}
-#SBATCH --qos={qos}
+{qos_directive}
 #SBATCH --nodes={nodes}
-#SBATCH --gpus-per-node={gpus}
+{gpu_directive}
 #SBATCH --time={time_limit}
 #SBATCH --signal=B:USR1@300
 #SBATCH --requeue
@@ -87,6 +88,36 @@ exec bash "$RUN_DIR/launch_line.sh"
 _ARRAY_RUNTIME_FIELDS = ("partition", "account", "qos", "gpus", "nodes",
                           "time_limit", "gpu_arch")
 
+_ANVIL_PARTITIONS = {"ai", "gpu", "gpu-debug"}
+
+
+def _slurm_resource_directives(runtime: RuntimeSpec) -> Tuple[str, str]:
+    """The site-specific spellings Slurm needs, without site-specific paths.
+
+    Anvil exposes GPUs through ``--gres=gpu:N`` and commonly has no QoS.  The
+    Marlowe partitions use ``--gpus-per-node=N``.  Environment activation is
+    deliberately not embedded here: the generated command already uses the
+    driver's absolute ``sys.executable``, while hard-coding one user's checkout
+    or CUDA module would make the launcher unusable for everyone else.
+    """
+    gpu = (f"#SBATCH --gres=gpu:{runtime.gpus}"
+           if runtime.partition in _ANVIL_PARTITIONS
+           else f"#SBATCH --gpus-per-node={runtime.gpus}")
+    qos = f"#SBATCH --qos={runtime.qos}" if runtime.qos else ""
+    return gpu, qos
+
+
+def _submit_sbatch(path: Path) -> str:
+    """Submit one generated script and retain Slurm's actionable error text."""
+    try:
+        result = subprocess.run(["sbatch", str(path)], check=True,
+                                capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "no Slurm error output").strip()
+        raise RuntimeError(
+            f"Slurm rejected generated script {path}: {detail}") from exc
+    return result.stdout.strip()
+
 
 class Launcher(abc.ABC):
     """The spec says *what* to run; the launcher says *where* (§3.4)."""
@@ -108,6 +139,16 @@ class Launcher(abc.ABC):
         so SlurmLauncher accepts the flag and ignores it. Local execution is the
         one that has to change behaviour.
         """
+
+    def wait_for_exit(self, handle, run_dir):
+        """Finish a non-blocking local hand-off before a worker reuses a GPU.
+
+        Slurm owns process lifetime and resource release, so its default is a
+        no-op.  LocalLauncher overrides this to reap the child whose handle was
+        returned by ``submit(wait=False)``.
+        """
+        del handle, run_dir
+        return None
 
 
 class _ScoresRuns:
@@ -170,6 +211,11 @@ class LocalLauncher(Launcher, _ScoresRuns):
     #: pruner cannot see it.
     LOG_FILE = "train.log"
 
+    # quick_eval.json is written just before the trainer exits.  Waiting a few
+    # seconds is normal; five minutes indicates cleanup is stuck and the process
+    # must not be left holding a CUDA context while the next trial starts.
+    EXIT_TIMEOUT_SECONDS = 300
+
     def submit(self, spec: RunSpec, run_dir, dry_run: bool = False, *,
                resume: bool = False, wait: bool = True):
         """Run training here. Blocking by default, and that default is load-bearing.
@@ -222,10 +268,45 @@ class LocalLauncher(Launcher, _ScoresRuns):
         # flush=True on their progress line; this is the belt to that braces, so a
         # new trainer that forgets does not silently disable pruning again.
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-        proc = subprocess.Popen(cmd, start_new_session=True, env=env,
-                                stdout=log, stderr=subprocess.STDOUT)
+        try:
+            proc = subprocess.Popen(cmd, start_new_session=True, env=env,
+                                    stdout=log, stderr=subprocess.STDOUT)
+        finally:
+            # The child inherited its own fd.  Keeping the parent's file object
+            # open for every trial leaks descriptors across a long study.
+            log.close()
         atomic_write_text(Path(run_dir) / self.PID_FILE, f"{proc.pid}\n")
         return proc
+
+    def wait_for_exit(self, handle, run_dir):
+        """Reap a watched trainer so its CUDA context is gone before reuse."""
+        if not isinstance(handle, subprocess.Popen):
+            return None
+        try:
+            return handle.wait(timeout=self.EXIT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            # ``submit(wait=False)`` starts a new session specifically so the
+            # whole torchrun tree can be stopped together.
+            for sig, timeout in ((signal.SIGTERM, 30), (signal.SIGKILL, 10)):
+                try:
+                    os.killpg(handle.pid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    handle.wait(timeout=timeout)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            raise RuntimeError(
+                f"local trainer pid {handle.pid} produced an objective but did "
+                f"not exit within {self.EXIT_TIMEOUT_SECONDS}s; terminated it "
+                f"instead of starting another trial on the same GPU") from exc
+        finally:
+            if handle.poll() is not None:
+                try:
+                    (Path(run_dir) / self.PID_FILE).unlink()
+                except FileNotFoundError:
+                    pass
 
 
 def _require_uniform_array_runtime(cells: List[Tuple[RunSpec, "Path"]]) -> RuntimeSpec:
@@ -258,7 +339,10 @@ def render_array_sbatch(sweep_name: str, cells: List[Tuple[RunSpec, "Path"]],
         raise ValueError("concurrency (the array's %K cap) must be >= 1")
     sweep_dir = Path(sweep_dir)
     concurrency_suffix = f"%{concurrency}" if concurrency else ""
+    gpu_directive, qos_directive = _slurm_resource_directives(runtime)
     return _ARRAY_SBATCH_TEMPLATE.format(
+        gpu_directive=gpu_directive,
+        qos_directive=qos_directive,
         job_name=sweep_name,
         account=runtime.account,
         partition=runtime.partition,
@@ -298,7 +382,10 @@ class SlurmLauncher(Launcher, _ScoresRuns):
     def render_sbatch(self, spec: RunSpec, run_dir, *, resume: bool = False) -> str:
         run_dir = Path(run_dir)
         launch_line = " ".join(self.build_command(spec, run_dir, resume=resume))
+        gpu_directive, qos_directive = _slurm_resource_directives(spec.runtime)
         return _SBATCH_TEMPLATE.format(
+            gpu_directive=gpu_directive,
+            qos_directive=qos_directive,
             job_name=spec.name,
             account=spec.runtime.account,
             partition=spec.runtime.partition,
@@ -325,9 +412,7 @@ class SlurmLauncher(Launcher, _ScoresRuns):
         atomic_write_text(sbatch_path, self.render_sbatch(spec, run_dir, resume=resume))
         if dry_run:
             return sbatch_path
-        result = subprocess.run(["sbatch", str(sbatch_path)],
-                                 check=True, capture_output=True, text=True)
-        return result.stdout.strip()
+        return _submit_sbatch(sbatch_path)
 
     def submit_array(self, sweep_name: str, cells: List[Tuple[RunSpec, "Path"]],
                       sweep_dir, *, concurrency: Optional[int] = None,
@@ -355,6 +440,4 @@ class SlurmLauncher(Launcher, _ScoresRuns):
         atomic_write_text(array_path, text)
         if dry_run:
             return array_path
-        result = subprocess.run(["sbatch", str(array_path)],
-                                 check=True, capture_output=True, text=True)
-        return result.stdout.strip()
+        return _submit_sbatch(array_path)

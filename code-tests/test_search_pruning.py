@@ -273,11 +273,16 @@ def test_waiting_gives_up_after_the_timeout(tmp_path):
     def _sleep(seconds):
         elapsed["t"] += seconds
 
-    value = wait_for_objective(study, trial, run_dir, sleep=_sleep,
-                               poll_seconds=30, timeout_seconds=120,
-                               clock=lambda: elapsed["t"])
+    cancelled = []
+    value = wait_for_objective(
+        study, trial, run_dir, sleep=_sleep, poll_seconds=30,
+        timeout_seconds=120, clock=lambda: elapsed["t"],
+        cancel=lambda path: cancelled.append(path))
     assert value is None, "None becomes a FAIL in the driver, not a fake number"
     assert elapsed["t"] >= 120
+    assert cancelled == [run_dir], (
+        "a timed-out local process must not remain on the GPU when the worker "
+        "starts its next trial")
 
 
 def test_the_same_step_is_never_reported_twice(tmp_path):

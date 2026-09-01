@@ -218,6 +218,94 @@ def test_the_trial_result_reaches_the_study(tmp_path):
     assert study.trials[0].state.name == "COMPLETE"
 
 
+def test_completed_duplicate_reuses_its_result_without_relaunching(tmp_path):
+    """Discrete concurrent searches may revisit a point; earned bytes win."""
+    from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
+    launcher = _FakeLauncher()
+    first = study.ask(to_distributions(context["space"]))
+    first_outcome = run_trial(
+        study, first, launcher=launcher,
+        objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+    (first_outcome.run_dir / "final").mkdir()
+
+    study.enqueue_trial(first.params)
+    duplicate = study.ask(to_distributions(context["space"]))
+    duplicate_outcome = run_trial(
+        study, duplicate, launcher=launcher,
+        objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+
+    assert duplicate_outcome.state == "complete"
+    assert duplicate_outcome.run_dir == first_outcome.run_dir
+    assert duplicate.user_attrs["reused_run"] is True
+    assert len(launcher.submitted) == 1
+
+
+def test_completed_duplicate_from_different_code_is_not_reused(tmp_path):
+    """ATI's broad catch would silently mix implementations in one study."""
+    from experimentation.run.write_policy import RunDirConflictError
+    from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
+    launcher = _FakeLauncher()
+    first = study.ask(to_distributions(context["space"]))
+    first_outcome = run_trial(
+        study, first, launcher=launcher,
+        objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+    (first_outcome.run_dir / "final").mkdir()
+    materialized = yaml.safe_load((first_outcome.run_dir / "spec.yaml").read_text())
+    materialized["code_id"] = "different-commit"
+    (first_outcome.run_dir / "spec.yaml").write_text(
+        yaml.safe_dump(materialized, sort_keys=False))
+
+    study.enqueue_trial(first.params)
+    duplicate = study.ask(to_distributions(context["space"]))
+    with pytest.raises(RunDirConflictError, match="different code_id"):
+        run_trial(study, duplicate, launcher=launcher,
+                  objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+    assert len(launcher.submitted) == 1
+
+
+def test_driver_waits_for_local_process_exit_before_completing_trial(tmp_path):
+    from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    class _ExitAwareLauncher(_FakeLauncher):
+        def __init__(self):
+            super().__init__()
+            self.handle = object()
+            self.waited = False
+
+        def submit(self, spec, run_dir, dry_run=False, resume=False, wait=False):
+            super().submit(spec, run_dir, dry_run=dry_run, resume=resume, wait=wait)
+            return self.handle
+
+        def wait_for_exit(self, handle, run_dir):
+            assert handle is self.handle
+            self.waited = True
+            return 0
+
+    context = _context(tmp_path)
+    study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
+    trial = study.ask(to_distributions(context["space"]))
+    launcher = _ExitAwareLauncher()
+    outcome = run_trial(
+        study, trial, launcher=launcher,
+        objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+
+    assert outcome.state == "complete"
+    assert launcher.waited is True
+    assert trial.user_attrs["process_exit_code"] == 0
+
+
 def test_run_trial_records_the_run_id_and_the_anchor_name(tmp_path):
     from experimentation.sweep.search.anchors import Design
     from experimentation.sweep.search.driver import run_trial

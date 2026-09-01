@@ -138,6 +138,14 @@ def test_runtime_spec_hero_and_preempt_allowed():
     RuntimeSpec(partition="preempt")
 
 
+@pytest.mark.parametrize("partition", ["ai", "gpu", "gpu-debug"])
+def test_runtime_spec_anvil_partitions_allow_no_qos(partition):
+    from experimentation.run.spec import RuntimeSpec
+
+    rt = RuntimeSpec(partition=partition, account="cis261066-ai", qos=None)
+    assert rt.qos is None
+
+
 def test_run_spec_type_checks_its_fields():
     from koopman_lm.config import build_config
     from experimentation.run.spec import (

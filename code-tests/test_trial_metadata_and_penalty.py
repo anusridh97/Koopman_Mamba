@@ -237,7 +237,10 @@ def test_the_recorded_attrs_are_the_ones_the_module_declares():
         # Stamped after the run, from quick_eval.json, not at materialization.
         # All four were measured per trial and none but `ska_delta` reached the
         # journal, so the loss/throughput Pareto front had no data at all.
-        "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens"}
+        "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens",
+        # Operational provenance: whether an identical completed run was
+        # reused, and the reaped local trainer's actual exit code.
+        "reused_run", "process_exit_code"}
 
 
 def _spec_and_base():

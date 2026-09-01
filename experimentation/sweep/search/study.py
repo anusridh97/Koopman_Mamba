@@ -246,8 +246,22 @@ def make_pruner(*, prune_after_step: int = DEFAULT_PRUNE_AFTER_STEP,
 
 
 def make_storage(study_dir, storage_url: Optional[str] = None):
-    """A journal file under `study_dir`, or an explicit RDB URL if given."""
+    """A journal file under `study_dir`, an explicit file, or an RDB URL."""
     if storage_url:
+        # Optuna interprets a bare filesystem path as a SQLAlchemy URL.  Study
+        # files use bare paths for shared journals, so construct that backend
+        # explicitly while preserving real URLs such as sqlite:/// or postgresql://.
+        if "://" not in storage_url:
+            journal = Path(storage_url).expanduser()
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                backend = optuna.storages.journal.JournalFileBackend(str(journal))
+            except AttributeError as exc:                      # pragma: no cover
+                raise RuntimeError(
+                    "JournalStorage requires optuna 4.x (optuna 3 spelled it "
+                    "JournalFileStorage). Install a 4.x release, or pass an "
+                    "explicit storage URL.") from exc
+            return optuna.storages.JournalStorage(backend)
         return storage_url
     study_dir = Path(study_dir)
     study_dir.mkdir(parents=True, exist_ok=True)

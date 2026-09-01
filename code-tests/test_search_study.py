@@ -121,6 +121,21 @@ def test_storage_is_a_journal_file_that_survives_reload(tmp_path):
     assert len(reopened.trials) == 1, "reopening must attach to the same study"
 
 
+def test_an_explicit_bare_storage_path_is_a_journal_not_an_rdb_url(tmp_path):
+    from experimentation.sweep.search.study import create_study
+
+    journal = tmp_path / "shared" / "study.log"
+    study = create_study(study_name="explicit-file", study_dir=tmp_path,
+                         storage_url=str(journal), seed=1)
+    trial = study.ask()
+    study.tell(trial, 1.0)
+    assert journal.is_file()
+
+    reopened = create_study(study_name="explicit-file", study_dir=tmp_path,
+                            storage_url=str(journal), seed=1)
+    assert len(reopened.trials) == 1
+
+
 def test_study_minimises(tmp_path):
     from experimentation.sweep.search.study import create_study
 

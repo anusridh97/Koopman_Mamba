@@ -25,7 +25,18 @@ from experimentation.atomic_io import atomic_write_text
 
 
 class RunDirConflictError(RuntimeError):
-    """Raised when a run directory already holds a completed run (`final/`)."""
+    """Raised when a run directory already holds a completed run (`final/`).
+
+    ``reusable`` is true only when the existing run records the exact current
+    commit.  An adaptive search can then score the already-earned result instead
+    of launching the same content-derived run twice.  A code-id mismatch (or a
+    legacy run with no code id) remains a hard conflict: identical scientific
+    inputs do not make results from different code interchangeable.
+    """
+
+    def __init__(self, message: str, *, reusable: bool = False):
+        super().__init__(message)
+        self.reusable = bool(reusable)
 
 
 class RunDirClaimedError(RuntimeError):
@@ -80,7 +91,11 @@ def create_run_dir(run_dir, *, resume: bool = False, force: bool = False,
         raise RunDirConflictError(
             f"{run_dir} already contains a completed run (final/ exists). "
             f"Pass --resume to continue from resume.pt or --force to "
-            f"overwrite (recorded in attempts.jsonl).")
+            f"overwrite (recorded in attempts.jsonl).",
+            # ``unknown`` is not provenance.  Treating two unknowns as the same
+            # code would silently bless a result whose implementation cannot be
+            # recovered.
+            reusable=(code_id not in (None, "unknown") and existing == code_id))
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 

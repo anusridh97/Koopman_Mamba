@@ -40,6 +40,19 @@ def test_render_sbatch_contains_correct_account_qos_and_h100_arch(tmp_path):
     assert "SKA_REQUIRE_B200" not in text
 
 
+def test_render_sbatch_uses_anvil_gpu_spelling_and_omits_empty_qos(tmp_path):
+    """Portability without embedding another user's checkout or venv path."""
+    from experimentation.run.launchers import SlurmLauncher
+
+    spec = _shard_spec(partition="ai", account="cis261066-ai", qos=None)
+    text = SlurmLauncher().render_sbatch(spec, tmp_path)
+    assert "#SBATCH --gres=gpu:1" in text
+    assert "#SBATCH --gpus-per-node" not in text
+    assert "#SBATCH --qos=" not in text
+    assert "$SCRATCH/research/Koopman_Mamba" not in text
+    assert "source " not in text
+
+
 def test_render_sbatch_single_node_uses_python_dash_m(tmp_path):
     from experimentation.run.launchers import SlurmLauncher
 
@@ -82,6 +95,23 @@ def test_submit_dry_run_writes_sbatch_without_calling_sbatch(tmp_path, monkeypat
     assert path == tmp_path / "launch.sbatch"
     assert path.is_file()
     assert (tmp_path / "model_config.json").is_file()
+
+
+def test_sbatch_rejection_preserves_scheduler_error_text(tmp_path, monkeypatch):
+    import subprocess
+
+    from experimentation.run.launchers import _submit_sbatch
+
+    script = tmp_path / "launch.sbatch"
+    script.write_text("#!/bin/bash\n")
+
+    def _reject(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, args[0], stderr="Invalid account or account/partition combination")
+
+    monkeypatch.setattr("experimentation.run.launchers.subprocess.run", _reject)
+    with pytest.raises(RuntimeError, match="Invalid account"):
+        _submit_sbatch(script)
 
 
 # ---------------------------------------------------------------------------

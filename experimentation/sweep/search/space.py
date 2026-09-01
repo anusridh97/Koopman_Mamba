@@ -145,6 +145,15 @@ DEFAULT_GAMMAS = (0.90, 1.00, 1.05)
 DEFAULT_POWER_KS = (1, 2)
 DEFAULT_NORM_CLIP_MULTIPLIERS = (0.75, 1.00, 1.25)
 
+#: The beta policies sampled by a study that does not declare its own axis.
+#:
+#: This is intentionally distinct from ``BETA_POLICIES``, the set a config may
+#: legally hold. Optuna persists categorical choices as an ordered tuple and
+#: rejects a resumed study if that tuple changes. Therefore adding a new legal
+#: experimental policy must not silently widen every existing study's default
+#: distribution; a study that wants it opts in through ``search_axes``.
+DEFAULT_BETA_POLICIES = ("head_scalar", "learned", "linear", "one")
+
 RIDGE_BOUNDS = (3e-3, 3e-2)
 LAYERSCALE_BOUNDS = (2e-3, 3e-2)
 LR_FACTOR_BOUNDS = (0.65, 1.35)
@@ -251,7 +260,7 @@ def search_space(base_model: KoopmanLMConfig, *,
         # makes this axis safe to search rather than something that has to be
         # crossed with `backend_policy`.
         "beta_policy": {"kind": "categorical",
-                        "choices": sorted(BETA_POLICIES)},
+                        "choices": list(DEFAULT_BETA_POLICIES)},
         "learning_rate": {"kind": "float", "log": True,
                           "low": lr * LR_FACTOR_BOUNDS[0], "high": lr * LR_FACTOR_BOUNDS[1]},
         "weight_decay": {"kind": "categorical", "choices": list(DEFAULT_WEIGHT_DECAYS)},

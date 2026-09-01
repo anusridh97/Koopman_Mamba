@@ -218,6 +218,28 @@ def test_a_non_blocking_local_run_writes_that_log(tmp_path, monkeypatch):
     assert [p.step for p in points] == [10], f"read_progress got {points}"
 
 
+def test_wait_for_exit_reaps_the_child_and_removes_the_pidfile(tmp_path,
+                                                               monkeypatch):
+    """The objective can arrive before process teardown; GPU reuse waits for it."""
+    from experimentation.run import launchers as L
+
+    monkeypatch.setattr(L, "write_model_config", lambda spec, run_dir: None)
+    launcher = LocalLauncher()
+    marker = tmp_path / "exited"
+    monkeypatch.setattr(
+        launcher, "build_command",
+        lambda spec, run_dir, resume=False: [
+            sys.executable, "-c",
+            f"import pathlib,time; time.sleep(0.2); "
+            f"pathlib.Path({str(marker)!r}).write_text('done')"])
+
+    proc = launcher.submit(object(), tmp_path, wait=False)
+    assert (tmp_path / LocalLauncher.PID_FILE).is_file()
+    assert launcher.wait_for_exit(proc, tmp_path) == 0
+    assert marker.read_text() == "done"
+    assert not (tmp_path / LocalLauncher.PID_FILE).exists()
+
+
 def test_a_blocking_local_run_still_inherits_stdout(tmp_path, monkeypatch):
     """The asymmetry is deliberate: an interactive run wants its output on the
     terminal. Redirecting by default would silently take that away from

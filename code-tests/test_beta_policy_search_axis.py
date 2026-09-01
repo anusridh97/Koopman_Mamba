@@ -30,8 +30,8 @@ import pytest
 from koopman_lm.config import BETA_POLICIES, build_config
 from experimentation.sweep.search.anchors import Design, resolve_design
 from experimentation.sweep.search.space import (
-    _AXIS_DOMAINS, REQUIRED_PARAMS, base_reference_point, params_to_overrides,
-    search_space)
+    DEFAULT_BETA_POLICIES, _AXIS_DOMAINS, REQUIRED_PARAMS,
+    base_reference_point, params_to_overrides, search_space)
 
 pytestmark = pytest.mark.correctness
 
@@ -51,10 +51,11 @@ def _space(base_model):
 # The axis exists, is complete, and contains the base config.
 # ---------------------------------------------------------------------------
 
-def test_beta_policy_is_a_declared_axis_over_all_four_policies():
+def test_beta_policy_default_is_frozen_in_archived_order():
     space = _space(_base().model)
     assert space["beta_policy"]["kind"] == "categorical"
-    assert set(space["beta_policy"]["choices"]) == set(BETA_POLICIES)
+    assert tuple(space["beta_policy"]["choices"]) == DEFAULT_BETA_POLICIES
+    assert set(DEFAULT_BETA_POLICIES) <= set(BETA_POLICIES)
 
 
 def test_the_axis_is_wired_end_to_end():

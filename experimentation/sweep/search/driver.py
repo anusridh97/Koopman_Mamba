@@ -45,15 +45,19 @@ the reader injectable in the first place -- see
 """
 from __future__ import annotations
 
+import dataclasses
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import optuna
+import yaml
 
 from koopman_lm.config import KoopmanLMConfig
 from experimentation.run.train_argv import batch_plans
+from experimentation.run.write_policy import RunDirConflictError
 from experimentation.sweep.launch import materialize_cell
 from experimentation.sweep.search.metrics import (
     looks_like_oom, objective_from_metrics)
@@ -61,7 +65,7 @@ from experimentation.sweep.search.space import params_to_overrides
 from experimentation.sweep.search.study import (
     ANCHOR_ATTR, REFERENCE_GROUP_ATTR, SEED_ATTR, to_distributions)
 from experimentation.sweep.spec import build_cell_run_spec
-from experimentation.run.spec import group_id, run_id
+from experimentation.run.spec import group_id, run_dir_path, run_id
 
 __all__ = ["FATAL_EXCEPTIONS", "TRIAL_ATTRS", "FatalTrialError", "TrialOutcome",
            "objective_from_metrics", "run_trial", "drive"]
@@ -155,7 +159,10 @@ TRIAL_ATTRS = ("param_count", "baseline_param_count", "worker_id",
                # Stamped after the run finishes, not at materialization: they
                # come from quick_eval.json. Absent when the run produced none,
                # and `analysis` excludes rather than zero-fills such a trial.
-               "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens")
+               "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens",
+               # Operational facts for collision reuse and local-process
+               # teardown. Neither changes scientific identity.
+               "reused_run", "process_exit_code")
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,78 @@ class TrialOutcome:
     # number is now provenance -- which microbatch the result was produced at --
     # rather than the only way to find the directory.
     per_device_batch_size: Optional[int] = None
+
+
+def _completed_run_metadata(run_dir: Path, spec, conflict: RunDirConflictError,
+                            *, dirty: bool) -> Mapping[str, Any]:
+    """Validate that a completed content collision is safe to score again.
+
+    ATI's branch caught every ``RunDirConflictError`` and reused the directory.
+    That also catches the deliberately explicit *different code_id* conflict,
+    which would silently mix implementations in one Optuna study. Reuse here is
+    narrower: same recorded commit, clean code on both sides, and equivalent
+    scientific sections. Runtime details other than the seed may differ because
+    they are deliberately unhashed (for example an OOM ladder's microbatch).
+    """
+    if dirty or not conflict.reusable:
+        raise conflict
+    spec_path = Path(run_dir) / "spec.yaml"
+    try:
+        raw = yaml.safe_load(spec_path.read_text()) or {}
+    except Exception as exc:                              # noqa: BLE001
+        raise RunDirConflictError(
+            f"{conflict} Automatic reuse refused because {spec_path} is not "
+            f"readable: {type(exc).__name__}: {exc}") from conflict
+    if raw.get("dirty"):
+        raise RunDirConflictError(
+            f"{conflict} Automatic reuse refused because the completed run was "
+            f"materialized from a dirty tree.") from conflict
+    if raw.get("run_id") != run_id(spec) or raw.get("group_id") != group_id(spec):
+        raise RunDirConflictError(
+            f"{conflict} Automatic reuse refused because the directory's "
+            f"recorded identity does not match the proposed RunSpec.") from conflict
+
+    expected = {
+        "model": dataclasses.asdict(spec.model),
+        "data": dataclasses.asdict(spec.data),
+        "optim": dataclasses.asdict(spec.optim),
+        "seed": spec.runtime.seed,
+        "schedules": spec.schedules or {},
+    }
+    actual = {
+        "model": raw.get("model"),
+        "data": raw.get("data"),
+        "optim": raw.get("optim"),
+        "seed": (raw.get("runtime") or {}).get("seed"),
+        "schedules": raw.get("schedules") or {},
+    }
+    # JSON normalization makes YAML lists and dataclass tuples compare as the
+    # same sequence while retaining every value and mapping key.
+    def normalize(value):
+        return json.dumps(value, sort_keys=True, default=str)
+
+    if normalize(actual) != normalize(expected):
+        raise RunDirConflictError(
+            f"{conflict} Automatic reuse refused because the completed run's "
+            f"scientific sections differ despite the short hash collision.") from conflict
+    return raw
+
+
+def _finish_launch(launcher, handle, run_dir) -> tuple[Optional[int], Optional[str]]:
+    """Ask a launcher to release local resources; return provenance + failure."""
+    waiter = getattr(launcher, "wait_for_exit", None)
+    if handle is None or not callable(waiter):
+        return None, None
+    try:
+        returncode = waiter(handle, run_dir)
+    except Exception as exc:                              # noqa: BLE001
+        return None, f"{type(exc).__name__}: {exc}"
+    if returncode is None:
+        return None, None
+    returncode = int(returncode)
+    if returncode != 0:
+        return returncode, f"local training process exited with code {returncode}"
+    return returncode, None
 
 
 def run_trial(study: optuna.study.Study, trial, *,
@@ -267,6 +346,7 @@ def run_trial(study: optuna.study.Study, trial, *,
     rungs = _ladder(base_sections, enabled=batch_ladder)
     identity: Dict[str, Any] = {}
     last_failure = "no attempt was made"
+    launch_handle = None
 
     for position, pdbs in enumerate(rungs):
         attempt_overrides = dict(overrides)
@@ -280,11 +360,23 @@ def run_trial(study: optuna.study.Study, trial, *,
         # attempts.jsonl record rather than forking a second identity. force=True
         # is what lets the second rung write into a directory the first already
         # created.
-        run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
-                                   force=force or position > 0, dry_run=dry_run)
+        reused_completed_run = False
+        reused_metadata: Mapping[str, Any] = {}
+        try:
+            run_dir = materialize_cell(spec, run_root, extra=stamp, dirty=dirty,
+                                       force=force or position > 0,
+                                       dry_run=dry_run)
+        except RunDirConflictError as conflict:
+            run_dir = run_dir_path(run_root, spec)
+            reused_metadata = _completed_run_metadata(
+                run_dir, spec, conflict, dirty=dirty)
+            reused_completed_run = True
+        actual_pdbs = ((reused_metadata.get("runtime") or {}).get(
+            "per_device_batch_size", spec.runtime.per_device_batch_size)
+            if reused_completed_run else spec.runtime.per_device_batch_size)
         identity = dict(trial_number=trial.number, run_id=run_id(spec),
                         group_id=group_id(spec), run_dir=run_dir, anchor=anchor,
-                        per_device_batch_size=spec.runtime.per_device_batch_size)
+                        per_device_batch_size=int(actual_pdbs))
         # Recorded HERE -- after the spec exists, before the launch can fail --
         # so a FAILED or PRUNED trial still carries its resolved parameter count
         # and its provenance. Recording it after the objective arrives would lose
@@ -299,11 +391,19 @@ def run_trial(study: optuna.study.Study, trial, *,
             sampler_seed=sampler_seed, anchor=anchor,
             reference_group=trial.user_attrs.get(REFERENCE_GROUP_ATTR),
             worker_trial_ordinal=worker_trial_ordinal)
+        if reused_completed_run:
+            trial.set_user_attr("reused_run", True)
+            # _record_trial_attrs saw the newly proposed runtime. If the earned
+            # result fit via a lower OOM-ladder rung, provenance must name the
+            # microbatch that actually produced it.
+            trial.set_user_attr("per_device_batch_size", int(actual_pdbs))
         try:
             # wait=False so the objective reader can WATCH this run rather than
             # only inspect its corpse. With a blocking submit the reader starts
             # after training ended, so pruning had nothing to prune.
-            launcher.submit(spec, run_dir, dry_run=dry_run, wait=False)
+            if not reused_completed_run:
+                launch_handle = launcher.submit(
+                    spec, run_dir, dry_run=dry_run, wait=False)
             break
         except Exception as exc:                   # noqa: BLE001 -- see docstring
             last_failure = f"{type(exc).__name__}: {exc}"
@@ -366,15 +466,33 @@ def run_trial(study: optuna.study.Study, trial, *,
     # for both-given. Four states where there is one. A required keyword argument
     # gets Python's own error for free.
     reader = objective_reader_for(study, trial)
+    pruned = None
     try:
         objective = reader(run_dir)
-    except optuna.TrialPruned as pruned:
+    except optuna.TrialPruned as exc:
+        pruned = exc
+        objective = None
+    finally:
+        exit_code, process_failure = _finish_launch(
+            launcher, launch_handle, run_dir)
+        if exit_code is not None:
+            trial.set_user_attr("process_exit_code", exit_code)
+
+    if pruned is not None:
         # metrics.wait_for_objective raises this after cancelling the job. It
         # arrives through the objective_reader_for seam rather than a driver
         # flag, which is why pruning needed no structural change here.
         trial.set_user_attr("pruned", str(pruned))
         study.tell(trial, state=optuna.trial.TrialState.PRUNED)
         return TrialOutcome(state="pruned", objective=None, **identity)
+    if process_failure is not None:
+        # quick_eval.json is written just before the trainer exits. Do not call
+        # the trial complete until its producer has exited cleanly; more
+        # importantly, do not start this worker's next trial while the old CUDA
+        # context still owns tens of GiB.
+        trial.set_user_attr("failure", process_failure)
+        study.tell(trial, state=optuna.trial.TrialState.FAIL)
+        return TrialOutcome(state="failed", objective=None, **identity)
     if objective is None:
         # Training can exit cleanly and still leave no metric -- a missing
         # checkpoint, a preemption between the save and the eval. Telling optuna

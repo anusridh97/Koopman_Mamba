@@ -122,6 +122,25 @@ def test_create_run_dir_same_code_id_gives_generic_conflict(tmp_path):
     with pytest.raises(RunDirConflictError) as excinfo:
         create_run_dir(run_dir, code_id="aaaaaaa")
     assert "different code_id" not in str(excinfo.value)
+    assert excinfo.value.reusable is True
+
+
+def test_only_a_known_matching_code_id_is_marked_reusable(tmp_path):
+    import yaml
+
+    from experimentation.run.write_policy import RunDirConflictError, create_run_dir
+
+    run_dir = tmp_path / "run"
+    (run_dir / "final").mkdir(parents=True)
+    (run_dir / "spec.yaml").write_text(yaml.safe_dump({"code_id": "aaaaaaa"}))
+
+    with pytest.raises(RunDirConflictError) as mismatch:
+        create_run_dir(run_dir, code_id="bbbbbbb")
+    assert mismatch.value.reusable is False
+
+    with pytest.raises(RunDirConflictError) as unknown:
+        create_run_dir(run_dir, code_id="unknown")
+    assert unknown.value.reusable is False
 
 
 def test_atomic_torch_save_round_trips_and_leaves_no_tmp(tmp_path):
