@@ -1,0 +1,4 @@
+arm,arch,params,geometry,seed42,seed43,seed44,mean,sd,min_per_run
+mamba_only_ref_match,Mamba-2 only,2974640,d64 e2 s24 depth14,4.348,4.3598,4.3761,4.3613,0.01411,5.0
+mamba_only_best_match,Mamba-2 only,3010800,d64 e3 s32 depth12,4.3453,4.352,4.3248,4.3407,0.01417,4.9
+ska_reference,Mamba-2 + SKA,2991928,"d64 e2 s24 depth13, 4 SKA",4.3437,4.3431,4.3458,4.3442,0.00142,15.6

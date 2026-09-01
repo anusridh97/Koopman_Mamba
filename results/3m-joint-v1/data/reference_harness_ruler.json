@@ -1,0 +1,52 @@
+{
+  "checkpoint": "/scratch/m000151-pm06/cqiu/ref-3m-joint/3m-joint-base.ccac0a3c/seed42.fe189497/step_1068/model.pt",
+  "scale": {
+    "model_size": "/scratch/m000151-pm06/cqiu/ref-3m-joint/3m-joint-base.ccac0a3c/seed42.fe189497/model_config.json",
+    "model_type": "koopman",
+    "cfg_hash": "a9a228e1dd1dc5af264ac9598a6c6490e6e73105e0590c3ad9dc0f1da0843982",
+    "param_count": 2991928,
+    "matched_factory": null
+  },
+  "eval_plan": {
+    "ppl_batch_size": 8,
+    "ppl_max_seq_len": 2048,
+    "niah_context_lens": [
+      1024,
+      2048,
+      4096
+    ],
+    "niah_batch_size": 4,
+    "mqar_seq_lens": [
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "mqar_kv_pairs": [
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "ruler_context_lens": [
+      4096
+    ],
+    "babilong_context_lens": [
+      4096
+    ]
+  },
+  "metrics": {
+    "ruler": {
+      "multikey_niah": {
+        "4096": 0.0
+      },
+      "variable_tracking": {
+        "4096": 0.0
+      },
+      "common_word_extraction": {
+        "4096": 0.0
+      }
+    }
+  }
+}
