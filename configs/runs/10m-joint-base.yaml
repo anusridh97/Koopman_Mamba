@@ -1,0 +1,163 @@
+# Reference point for the 10M joint architecture + optimizer search.
+#
+# The 10M analogue of `configs/runs/3m-joint-base.yaml`, and it is not a claim
+# that 128x23 is the winning architecture -- `scripts/search_10m_joint.py`
+# overrides n_layers, mamba_expand, d_state and ska_n_heads on every trial. It is
+# the RunSpec every trial derives from, the config `param_count_estimate` reports
+# as "base", and the one to hand-launch for a single reference run.
+#
+# 10,217,328 parameters as written, inside the approved 9.2M-11.0M band.
+#
+# ## Why d_model 128
+#
+# Scale here is TOTAL parameters, tied embedding counted once, so the embedding
+# is what the width buys. At 128 the 32K embedding is 4,096,000 = 40% of the
+# total, against 68% at 3M -- most of the budget is finally in the model rather
+# than the lookup table.
+#
+# The alternatives were enumerated against `param_count_estimate` and rejected:
+# d_model 192 reaches the band only at depth 6-10, and `make_layer_indices`
+# CLAMPS rather than raising, so `n_ska_layers: 6` would silently collapse onto
+# the same indices as 4 and `placement` would resolve identically at every
+# level -- three dead axes, the exact failure the 3M study's MIN_DEPTH check
+# exists to catch. d_model 96 needs depth 39 and only reaches the band at
+# expansion 3, which would kill the `mamba_expand` contrast outright.
+#
+# ## Token accounting, unchanged in convention from 3M
+#
+#   96 sequences/update * 2048 tokens * 3400 updates = 668,467,200 tokens
+#
+# 65.4 tokens per TOTAL parameter -- the same convention the 3M study used
+# (it spent 209,977,344 tokens on 2,991,928 parameters = 70/total), so the two
+# scales sit on one protocol and the 3M -> 10M comparison means something.
+#
+# Holding the budget constant across architectures is load-bearing for the same
+# reason it was at 3M: the space spans 12.9% in parameter count, and paying the
+# larger candidates proportionally more data would confound architecture with
+# data. There is no 10M model in the Mamba-2 paper to match steps against --
+# its smallest is 130M on 300B Pile tokens, ~2,308 tokens per parameter, 36x
+# this rule -- so the protocol is ours, not borrowed.
+name: 10m-joint-base
+model:
+  d_model: 128
+  n_layers: 23
+  vocab_size: 32000
+  d_state: 24
+  d_conv: 4
+  mamba_expand: 2
+  # PINNED at 16 exactly as at 3M, and the search does not touch it: with
+  # mamba_expand over {1, 2, 3} this gives d_inner 128/256/384 and so 8/16/24
+  # Mamba-2 heads. Pinning headdim rather than nheads is what keeps the
+  # expansion axis meaning "more SSM width" rather than "a different head shape".
+  mamba_headdim: 16
+
+  # Overridden per trial. head_dim = 128 // ska_n_heads, so {1,2,4,8} gives
+  # value widths {128, 64, 32, 16}.
+  ska_n_heads: 4
+  ska_rank: 24
+  ska_ridge: 0.01
+  ska_power_K: 1
+  ska_chunk_size: 64
+  # Depth 23, 4 layers, even placement -- resolved by make_layer_indices, the
+  # same function the search calls, so base and trial cannot disagree.
+  ska_layer_indices: [1, 8, 14, 21]
+  ska_mode: parallel
+
+  # One exact route for every rank/head/depth combination. The StudySpec's
+  # backend_policy re-pins these on every sampled trial.
+  ska_prefix_scan: false
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+
+  ska_norm_clip: true
+  ska_norm_clip_c: 4.0
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.0
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+  ska_beta_policy: learned
+
+  compute_precision: bf16
+  ska_precision: fp32
+  tie_embeddings: true
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 1.0e-05
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 2048
+
+# The same shard and tokenizer the 3M study used, so the only thing that changed
+# between scales is the model. At seq_len 2048 the 100M-token shard is traversed
+# about 6.7 times over a full 668M-token trial; held-out ranking uses the
+# disjoint fineweb_small_val shard named by the StudySpec.
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix:
+    fineweb: 1.0
+    pg19: 0.0
+    scrolls: 0.0
+  n_tokens: 100000536
+
+optim:
+  # Deliberately NOT the 3M optimum. That study's best drew 5.406e-3 against a
+  # ceiling of 5.5e-3 -- it won at the edge of its own space, so it is a lower
+  # bound on the 3M optimum rather than a measurement of it, and optimal LR
+  # usually falls as models grow. 3e-3 is a central starting point that the
+  # study searches around in BOTH directions; the anchors' lr_factor multiplies
+  # this value, so it also sets where the LR screen anchors land.
+  lr: 0.003
+  # 2% of max_steps, the reference protocol's ratio.
+  warmup_steps: 68
+  max_steps: 3400
+  schedule: cosine
+  effective_batch: 96
+  weight_decay: 0.1
+  grad_clip: 1.0
+
+runtime:
+  # 12, and it is MEASURED, not guessed. The value went 6 -> 24 -> 12; the last
+  # move is the one that matters and it was forced by `scripts/gpu_capacity.py`.
+  #
+  # At mb24 the EXPENSIVE CORNER (rank 48, 8 heads, 6 SKA layers) needs a
+  # predicted 78.99 GiB against a 79 GiB card. That prediction was then confirmed
+  # by running it: `MPS ska_rich mb24 x 1: FAILED -- Triton Error [CUDA]: out of
+  # memory`. mb24 is only safe for the CHEAP end of the space, and this study
+  # samples the whole space, so the microbatch has to fit the worst cell.
+  #
+  # Measured throughput per GPU, base geometry, one H100:
+  #     mb24  192,104 tok/s   (28.3 GiB)   -- OOMs at the corner
+  #     mb12  162,584 tok/s   (14.1 GiB)   -- corner fits at 39.5 GiB
+  #     mb6    93,679 tok/s   ( 7.1 GiB)
+  # So mb12 costs 15% throughput against mb24 and buys the whole space.
+  #
+  # 96 % 12 == 0, so accumulation is 8 and the effective batch is exact.
+  # per_device_batch_size is not hashed into run_id, so this stays free to
+  # retune. `batch_ladder` is NOT the safety net -- it fires only on a
+  # synchronous submit() raise, and 1,963 of 1,963 trials at 3M never descended.
+  per_device_batch_size: 12
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: 03:00:00
+  gpu_arch: '9.0'

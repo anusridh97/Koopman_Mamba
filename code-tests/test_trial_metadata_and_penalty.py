@@ -240,7 +240,9 @@ def test_the_recorded_attrs_are_the_ones_the_module_declares():
         "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens",
         # Operational provenance: whether an identical completed run was
         # reused, and the reaped local trainer's actual exit code.
-        "reused_run", "process_exit_code"}
+        # A trial that produced an objective but whose trainer exited nonzero
+        # completes and records this, rather than discarding a measured result.
+        "reused_run", "process_exit_code", "process_failure"}
 
 
 def _spec_and_base():

@@ -1,0 +1,159 @@
+# Anchors for `configs/search/10m-joint-v1.yaml`.
+#
+# Two jobs, and the first one is why this file exists at all.
+#
+# ## 1. The noise floor (`reference-k1` .. `reference-k5`)
+#
+# Five evaluations of ONE configuration differing only in `runtime.seed`. Their
+# pooled spread is the smallest difference this study can resolve, and every
+# magnitude `analysis.py` prints is stated against it.
+#
+# The 3M study had no design file. `analysis.noise_floor` needs two COMPLETED
+# trials sharing a `reference_group`, found none, and returned nothing -- so
+# 2,007 trials produced a ranking with no scale attached to it, and the floor
+# only appeared afterwards by accident, from the Mamba-2 baseline replicates
+# (sigma = 0.00142). At a few hundred trials that is not survivable: a
+# confirmatory study exists to say which differences are real.
+#
+# Five and not two: the relative uncertainty on sigma is ~1/sqrt(2(n-1)), so 71%
+# at n=2, 41% at n=4, 35% at n=5. Five trials of 256 is ~2% of the budget.
+#
+# `reference-k1` sets NO `seed:` key on purpose -- it inherits the base spec's
+# own seed (42). Writing `seed: 42` explicitly is how you collide with a sibling,
+# which is what `check_replicates_resolve` exists to catch at --dry_run.
+#
+# ## 2. A one-factor-at-a-time screen around the base
+#
+# Every factor defaults to 1.0 / `baseline`, so a design that sets nothing IS the
+# base config and each entry below reads as its diff. These give
+# `anchor_contrasts` a calibrated reference for each live axis, and they are
+# pruning-exempt (`wait_for_objective`'s `prune_anchors` defaults False) because
+# they ARE the reference population a median pruner compares against.
+#
+# ## The clamping check, done rather than assumed
+#
+# Factors are relative and are silently CLAMPED into the study's declared space,
+# so a factor chosen without checking the bounds quietly becomes a smaller move
+# than its name claims. Against `10m-joint-v1.yaml`'s widened ranges and the base
+# spec's lr 3e-3 / layerscale 0.01:
+#
+#     lr_factor 0.4  -> 1.2e-3   (floor 1.0e-3)   reaches
+#     lr_factor 2.5  -> 7.5e-3   (ceil  8.0e-3)   reaches
+#     layerscale 0.5 -> 0.005    (floor 0.005)    reaches exactly
+#     layerscale 20  -> 0.2      (ceil  0.3)      reaches
+#
+# Nothing clamps. `--dry_run` re-verifies this by resolving every design.
+#
+# ## Why every design repeats `placement: late`
+#
+# Most pinned axes can be left at `baseline` -- `resolve_design` SNAPS them to
+# the study's single value. `placement` is one of the three that REFUSE rather
+# than snap (with `power_K` and `beta_policy`), so `placement: baseline` against
+# a study declaring only `['late']` is a hard error at --dry_run. Repeating it is
+# the price of that strictness, and the strictness is right: a silently snapped
+# placement would put SKA somewhere the anchor's name does not say.
+#
+# `ska_power_K` is left at `baseline` and does snap, because the study pins it to
+# 1 and the Design default is `baseline` rather than an explicit value.
+
+designs:
+  # ---------------------------------------------------------- the noise floor
+  - name: reference-k1
+    placement: late
+    reference_group: reference
+  - name: reference-k2
+    placement: late
+    seed: 43
+    reference_group: reference
+  - name: reference-k3
+    placement: late
+    seed: 44
+    reference_group: reference
+  - name: reference-k4
+    placement: late
+    seed: 45
+    reference_group: reference
+  - name: reference-k5
+    placement: late
+    seed: 46
+    reference_group: reference
+
+  # ------------------------------------------------- learning rate (4 points)
+  # The dominant axis: 68.6% of global PedANOVA importance at 3M, and 70.9% of
+  # the variance during random search. It gets the most screen points because it
+  # is the axis whose main effect the study most needs anchored.
+  - name: lr-0.4x
+    placement: late
+    lr_factor: 0.4
+  - name: lr-0.7x
+    placement: late
+    lr_factor: 0.7
+  - name: lr-1.5x
+    placement: late
+    lr_factor: 1.5
+  - name: lr-2.5x
+    placement: late
+    lr_factor: 2.5
+
+  # ------------------------------------------------------- ska_rank (3 points)
+  # Spanning the floor, the 3M winner, and the newly added level above it.
+  - name: rank-8
+    placement: late
+    rank: 8
+  - name: rank-32
+    placement: late
+    rank: 32
+  - name: rank-48
+    placement: late
+    rank: 48
+
+  # -------------------------------------------------- n_ska_layers (2 points)
+  # layer_factor multiplies the base's 4 SKA layers.
+  - name: ska-layers-2
+    placement: late
+    layer_factor: 0.5
+  - name: ska-layers-6
+    placement: late
+    layer_factor: 1.5
+
+  # ------------------------------------------ ska_layerscale_init (3 points)
+  # Second-highest LOCAL importance at 3M and still unresolved there -- the top
+  # 12 trials spanned 0.0059 to 0.185, so this screen is doing real work.
+  - name: layerscale-0.5x
+    placement: late
+    layerscale_factor: 0.5
+  - name: layerscale-5x
+    placement: late
+    layerscale_factor: 5.0
+  - name: layerscale-20x
+    placement: late
+    layerscale_factor: 20.0
+
+  # ------------------------------------------------------ beta_policy (3 pts)
+  # `learned` is the base, so the other three declared levels are screened.
+  # This is one of the two orderings the study exists to confirm at 10M.
+  - name: beta-head-scalar
+    placement: late
+    beta_policy: head_scalar
+  - name: beta-linear
+    placement: late
+    beta_policy: linear
+  - name: beta-one
+    placement: late
+    beta_policy: one
+
+  # ----------------------------------------------------- weight_decay (2 pts)
+  - name: wd-0.0
+    placement: late
+    weight_decay: 0.0
+  - name: wd-0.15
+    placement: late
+    weight_decay: 0.15
+
+  # ---------------------------------------------------- warmup_ratio (2 pts)
+  - name: warmup-0.01
+    placement: late
+    warmup_ratio: 0.01
+  - name: warmup-0.06
+    placement: late
+    warmup_ratio: 0.06

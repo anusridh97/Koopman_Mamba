@@ -306,6 +306,72 @@ def test_driver_waits_for_local_process_exit_before_completing_trial(tmp_path):
     assert trial.user_attrs["process_exit_code"] == 0
 
 
+class _ExitCodeLauncher(_FakeLauncher):
+    """A launcher whose reaped child returns a caller-chosen exit code."""
+
+    def __init__(self, returncode):
+        super().__init__()
+        self.handle = object()
+        self.returncode = returncode
+
+    def submit(self, spec, run_dir, dry_run=False, resume=False, wait=False):
+        super().submit(spec, run_dir, dry_run=dry_run, resume=resume, wait=wait)
+        return self.handle
+
+    def wait_for_exit(self, handle, run_dir):
+        return self.returncode
+
+
+def test_an_earned_objective_survives_a_nonzero_exit(tmp_path):
+    """A measured result is not discarded because teardown exited badly.
+
+    `wait_for_exit` has already reaped the child by the time `run_trial`
+    returns, so the CUDA context is released whatever the exit code was. Failing
+    the trial on top of that is a second, unrelated policy, and it would throw
+    away an objective that was computed and written to disk.
+    """
+    from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
+    trial = study.ask(to_distributions(context["space"]))
+    outcome = run_trial(
+        study, trial, launcher=_ExitCodeLauncher(1),
+        objective_reader_for=fixed_reader(lambda run_dir: 1.75), **context)
+
+    assert outcome.state == "complete"
+    assert outcome.objective == 1.75
+    # Recorded as provenance, not as a verdict -- a run of these is the first
+    # sign that packing several trials onto one GPU is going wrong.
+    assert trial.user_attrs["process_exit_code"] == 1
+    assert "exited with code 1" in trial.user_attrs["process_failure"]
+    assert "failure" not in trial.user_attrs
+
+
+def test_a_missing_objective_names_the_timeout_and_the_exit_code(tmp_path):
+    """`wait_for_objective` cancels on timeout, so a timed-out trial arrives
+    here with BOTH no objective and a SIGKILL exit code. Reporting only the exit
+    code would relabel every timeout as a crashed process and erase the string
+    that made the 3M study's OOM failures classifiable as one cause."""
+    from experimentation.sweep.search.driver import run_trial
+    from experimentation.sweep.search.metrics import fixed_reader
+    from experimentation.sweep.search.study import create_study, to_distributions
+
+    context = _context(tmp_path)
+    study = create_study(study_name="ska-depth", study_dir=tmp_path, seed=1)
+    trial = study.ask(to_distributions(context["space"]))
+    outcome = run_trial(
+        study, trial, launcher=_ExitCodeLauncher(-9),
+        objective_reader_for=fixed_reader(lambda run_dir: None), **context)
+
+    assert outcome.state == "failed"
+    failure = trial.user_attrs["failure"]
+    assert "no objective could be read" in failure
+    assert "exited with code -9" in failure
+
+
 def test_run_trial_records_the_run_id_and_the_anchor_name(tmp_path):
     from experimentation.sweep.search.anchors import Design
     from experimentation.sweep.search.driver import run_trial

@@ -162,7 +162,12 @@ TRIAL_ATTRS = ("param_count", "baseline_param_count", "worker_id",
                "ska_delta", "tokens_per_sec", "peak_memory_gib", "n_eval_tokens",
                # Operational facts for collision reuse and local-process
                # teardown. Neither changes scientific identity.
-               "reused_run", "process_exit_code")
+               # Set only when a trial COMPLETED with an objective but its
+               # trainer exited nonzero. That combination no longer fails the
+               # trial (the result was measured and written), so without a
+               # column it would be invisible -- and a run of them is the first
+               # sign that packing several trials onto one GPU is going wrong.
+               "reused_run", "process_exit_code", "process_failure")
 
 
 @dataclass(frozen=True)
@@ -485,21 +490,33 @@ def run_trial(study: optuna.study.Study, trial, *,
         trial.set_user_attr("pruned", str(pruned))
         study.tell(trial, state=optuna.trial.TrialState.PRUNED)
         return TrialOutcome(state="pruned", objective=None, **identity)
-    if process_failure is not None:
-        # quick_eval.json is written just before the trainer exits. Do not call
-        # the trial complete until its producer has exited cleanly; more
-        # importantly, do not start this worker's next trial while the old CUDA
-        # context still owns tens of GiB.
-        trial.set_user_attr("failure", process_failure)
-        study.tell(trial, state=optuna.trial.TrialState.FAIL)
-        return TrialOutcome(state="failed", objective=None, **identity)
     if objective is None:
         # Training can exit cleanly and still leave no metric -- a missing
         # checkpoint, a preemption between the save and the eval. Telling optuna
         # a stand-in number would steer every later proposal off a fiction.
-        trial.set_user_attr("failure", "no objective could be read")
+        #
+        # Checked BEFORE `process_failure`, and the two are reported together.
+        # `metrics.wait_for_objective` now cancels the run on timeout, so a
+        # timed-out trial dies by SIGKILL and arrives here with a nonzero exit
+        # code as well. Reporting only the exit code would relabel every timeout
+        # as "exited with code -9" and erase the string that distinguishes a
+        # missing objective from a crashed process -- which is how the 3M
+        # study's 102 OOM failures were classified as a single cause at all.
+        reason = "no objective could be read"
+        if process_failure is not None:
+            reason = f"{reason}; {process_failure}"
+        trial.set_user_attr("failure", reason)
         study.tell(trial, state=optuna.trial.TrialState.FAIL)
         return TrialOutcome(state="failed", objective=None, **identity)
+    if process_failure is not None:
+        # An objective EXISTS and the process has been reaped. The GPU-safety
+        # goal is already met by `_finish_launch` waiting -- the context is gone
+        # before this function returns, whatever the exit code was. Discarding a
+        # result that was measured and written would be a second, unrelated
+        # policy, and it contradicts this module's own rule that a lost score
+        # must not lose the training run. So this is recorded as provenance and
+        # the trial completes.
+        trial.set_user_attr("process_failure", process_failure)
 
     trial.set_user_attr("run_id", identity["run_id"])
     trial.set_user_attr("run_dir", str(run_dir))

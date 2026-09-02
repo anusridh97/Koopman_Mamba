@@ -1,0 +1,255 @@
+# The 10M joint architecture + optimizer search -- the confirmatory stage.
+#
+#     python scripts/search_10m_joint.py configs/search/10m-joint-v1.yaml --dry_run
+#
+# Launched by `scripts/search_10m_joint.py`, not by `python -m
+# experimentation.sweep.search`: the four macro axes (mamba_expand, depth_tier,
+# d_state, ska_n_heads) live in that script for the same reason they did at 3M --
+# `search_space()` is the space every other study inherits by omission, and
+# widening it would change their dimensionality and their study_id.
+#
+# ## What this study is for
+#
+# The 3M study (`results/3m-joint-v1/`) was exploratory: 2,007 trials over 17
+# axes. This one is CONFIRMATORY. It asks whether the 3M ordering survives a 3.4x
+# scale-up, and it is sized to answer that rather than to rediscover the space.
+# Three things the 3M results changed here:
+#
+#   1. Five axes are PINNED, not searched. Each was under 2% variance share inside
+#      the 3M good-LR band, and spending a confirmatory budget re-measuring them
+#      would leave nothing for the axes that matter.
+#   2. `ska_rank` and `learning_rate` are WIDENED, not narrowed. Both won at the
+#      CEILING of their 3M range (rank 32 of max 32; lr 5.406e-3 of max 5.5e-3),
+#      so those results are lower bounds on the optimum rather than measurements
+#      of it. Narrowing around a boundary optimum would bake in the boundary.
+#   3. There is a design file. See `design_file` below.
+#
+# ## Scale and budget
+#
+# 10M TOTAL parameters, tied embedding counted once, band 9.2M-11.0M.
+#
+#     96 sequences x 2048 tokens x 3400 updates = 668,467,200 tokens
+#
+# 65.4 tokens per TOTAL parameter, the same convention the 3M study used
+# (209,977,344 tokens / 2,991,928 parameters = 70/total). Holding the convention
+# fixed is what makes 3M -> 10M a comparison rather than two unrelated runs.
+#
+# There is no 10M model in the Mamba-2 paper to match step counts against: its
+# smallest is 130M trained on 300B Pile tokens (~2,308 tokens/parameter, ~600,000
+# steps at batch 0.5M), which is 36x this rule at 13x the size. The protocol is
+# ours.
+name: 10m-joint-v1
+base: configs/runs/10m-joint-base.yaml
+
+n_trials: 256
+max_steps: 3400
+
+# ------------------------------------------------------------------ sampler
+sampler: tpe_multivariate
+# 48 random draws before the joint KDE is fitted -- 19% of the budget, against
+# 13% at 3M. A confirmatory study has fewer trials to spend but the same need for
+# an unbiased sample, and this is also the subset the post-hoc main-effect tables
+# are least biased on. The 3M analysis showed why that matters: TPE spent 715 of
+# 1,041 completed trials on ska_rank=32, so its raw marginals confound "this
+# level is good" with "TPE co-selected it alongside a good LR".
+sampler_startup_trials: 48
+# COMPLETE only, unlike the sampler's, which counts COMPLETE and PRUNED. Left
+# below the sampler's startup deliberately: anchors are pruning-exempt, so the
+# pruner's reference population fills more slowly than the sampler's.
+#
+# The DERIVED default at n_trials 256 would be min(6, max(3, 256//3)) = 6, which
+# is far too small to median-prune against; it must be set explicitly.
+prune_startup_trials: 32
+# Step 1200 of 3400 -- 35%, mirroring 400/1068 at 3M. Late enough that warmup
+# (34-204 steps at the searched ratios) is long past, which matters because this
+# study searches warmup_ratio and learning_rate and pruning during the transient
+# would rank how fast a config warms up rather than how good it is.
+prune_after_step: 1200
+logging_steps: 25
+
+# ------------------------------------------------------------------- fleet
+# ONE TRIAL PER GPU, and that is a measured decision rather than the default.
+#
+# The plan for this study assumed packing several trials per GPU would be the
+# thing that made it feasible. It is not, and the measurements are worth keeping
+# because the assumption is intuitive and wrong:
+#
+#     1 process  @ mb24            191,410 tok/s
+#     2 processes @ mb24, MPS      218,010 tok/s aggregate   (+14%)
+#     6 processes @ mb6,  MPS      206,956 tok/s aggregate
+#     6 processes @ mb3,  NO MPS    25,742 tok/s aggregate   (WORSE than 1)
+#
+# Per-trial throughput falls almost exactly in proportion to tenancy: ~200K
+# tok/s per H100 is a ceiling and slicing the work differently does not move it.
+# Without MPS, CUDA contexts time-slice rather than overlap, so packing is
+# strictly worse than not packing.
+#
+# What decides it is memory heterogeneity, not throughput. At mb12 the base
+# geometry peaks at 14.1 GiB but the expensive corner peaks at 39.5 GiB -- a 2.8x
+# spread, and 22x across the full space. With static tenancy the count has to fit
+# the WORST cell, so two tenants would OOM the moment two corner trials met on
+# one GPU. That failure mode already cost the 3M study 102 trials, and
+# `batch_ladder` cannot catch it (asynchronous OOM, synchronous-only ladder).
+#
+# 8 = one per GPU on one node. To use two nodes, submit the SAME study file as a
+# SECOND 8-GPU job: `study_id` is a hash of this file, so both attach to one
+# journal and coordinate through it. Launch the second only after the first logs
+# `enqueued 24 anchor(s)` -- two supervisors racing `enqueue_anchors` would
+# double-enqueue the reference group, and duplicated replicates under
+# `deterministic: true` drive sigma toward zero and make every effect look
+# "resolved".
+#
+# A memory-admission queue (see scripts/gpu_capacity.py) would allow 3 cheap
+# trials per GPU while keeping corner trials alone. That is worth ~14% and is not
+# built yet, so this study does not depend on it.
+launcher: local
+concurrent_trials: 8
+seed: 2026
+direction: minimize
+
+# ------------------------------------------------------------------- anchors
+# The gap the 3M study shipped with. `analysis.noise_floor` needs two COMPLETED
+# trials sharing a `reference_group`; the 3M study had none, so it reported
+# nothing and every effect it printed was uncalibrated. Five replicates cost ~2%
+# of this budget and are what make "resolved" a statement rather than a hope.
+design_file: configs/search/10m-joint-anchors.yaml
+
+# ----------------------------------------------------------- the search space
+# 13 axes here + 4 macro axes in the script = 17 declared dimensions, of which
+# five are pinned singletons, so 12 are live. Declared explicitly rather than
+# inherited: `restrict_space` is replacement-not-intersection, so an axis this
+# file does not mention keeps the REPO's declaration, and a study's space is part
+# of its claim.
+search_axes:
+  # ---- SKA architecture -------------------------------------------------
+  # EXTENDED past 32. Rank 32 was the maximum offered at 3M and it won -- mean
+  # 4.2402 against 4.3673/4.4175/4.3893 for 8/16/24 inside the good-LR band, and
+  # best-in-cell 4.1730 against 4.2285-4.2515. A win at the boundary is a lower
+  # bound, so 48 is added. 64 was enumerated and dropped: it pushes the richest
+  # corner to 11.28M, outside the band.
+  ska_rank:
+    kind: categorical
+    choices: [8, 16, 24, 32, 48]
+  # Unchanged from 3M. 10.9% variance in the good-LR band, and 6 remains legal:
+  # the shallowest geometry here is depth 18, whose usable window is 16 slots, so
+  # nothing clamps. `--dry_run` checks that exhaustively.
+  n_ska_layers:
+    kind: categorical
+    choices: [2, 3, 4, 6]
+  # 24.7% variance in the good-LR band and `linear` won 12/12 of the 3M top
+  # trials, but it is kept as a searched axis rather than pinned: that is one of
+  # the two orderings this study exists to confirm at a new scale, and pinning
+  # the thing you are trying to replicate would beg the question.
+  beta_policy:
+    kind: categorical
+    choices: [head_scalar, learned, linear, one]
+  # Second-highest LOCAL importance at 3M (0.155, behind only learning_rate) and
+  # still unresolved: the top 12 trials spanned 0.0059-0.185, so the axis is
+  # weakly identified rather than settled. Same one-decade log range.
+  ska_layerscale_init:
+    kind: float
+    low: 0.005
+    high: 0.3
+    log: true
+  # LEFT SEARCHED, though it is the least important axis in the whole 3M study
+  # (0.4% variance share) and pinning it was the intent. It cannot be pinned in a
+  # study that also has anchors, and the reason is worth recording because it
+  # looks like an oversight otherwise:
+  #
+  #   * `fixed_params` rewrites an axis to a one-choice CATEGORICAL, but
+  #     `anchors.resolve_design` reads low/high off `ska_ridge` -- `ridge_factor`
+  #     CLAMPS into bounds rather than snapping to a choice, and it does so even
+  #     at the default factor of 1.0. `check_space_is_resolvable` refuses the
+  #     kind mismatch at --dry_run.
+  #   * A degenerate float (low == high) satisfies the anchor resolver and is a
+  #     legal optuna FloatDistribution, but `StudySpec._validate_one_declaration`
+  #     refuses it and points back at `fixed_params`.
+  #
+  # The two rules conflict for any FLOAT axis in an anchored study, so the axis
+  # stays a range. One extra live dimension at 0.4% variance is the cheapest of
+  # the three options; TPE will spend little on it.
+  ska_ridge:
+    kind: float
+    low: 0.003
+    high: 0.03
+    log: true
+
+  # ---- optimizer --------------------------------------------------------
+  # WIDENED IN BOTH DIRECTIONS, and this is where the trial budget should go.
+  # learning_rate was 68.6% of global PedANOVA importance at 3M and 70.9% of the
+  # variance during random search -- it buries every other axis until it is
+  # right. The 3M optimum drew 5.406e-3 against a 5.5e-3 ceiling, so it is a
+  # lower bound; and optimal LR usually FALLS as models grow, so the range has to
+  # span both sides of the 3M answer rather than re-centre on it.
+  learning_rate:
+    kind: float
+    low: 0.001
+    high: 0.008
+    log: true
+  weight_decay:
+    kind: categorical
+    choices: [0.0, 0.05, 0.1, 0.15]
+  warmup_ratio:
+    kind: categorical
+    choices: [0.01, 0.02, 0.04, 0.06]
+
+# --------------------------------------------------------------- pinned axes
+# A pinned axis becomes a one-choice categorical rather than disappearing, and
+# that is deliberate (see StudySpec.fixed_params): `params_to_overrides` still
+# receives every parameter it needs, the value is recorded in trials.csv, and
+# `anchors.resolve_design` snaps to it so an anchor cannot disagree with the
+# study. `tpe_multivariate` is constructed with group=False precisely so
+# `sample_relative` does not drop these.
+#
+# Each value below is the 3M answer, and each axis was under 2% variance share
+# inside the 3M good-LR band -- re-searching them would spend a confirmatory
+# budget on questions already answered to within the noise.
+fixed_params:
+  # 20.8% variance and K=1 won decisively at 3M (4.251 vs 4.419 for K=2), and it
+  # is also the cheaper operator. The one axis here pinned to a WINNER rather
+  # than to a neutral value.
+  ska_power_K: 1
+  # 1.6% variance; `late` had the best mean (4.2559).
+  placement: late
+  # 0.5% variance -- indistinguishable from noise at 3M. Pinned to the neutral
+  # value rather than to the nominal winner (0.9), because a 0.5% effect is not
+  # a result to carry forward.
+  gamma_value: 1.0
+  # 1.3% variance. Neutral value; the base spec's own ska_norm_clip_c of 4.0 is
+  # reproduced at multiplier 4/sqrt(rank), which varies with the searched rank,
+  # so a fixed multiplier of 1.0 is the interpretable choice.
+  norm_clip_multiplier: 1.0
+  grad_clip: 1.0
+
+# ------------------------------------------------------------------- backend
+# The exact inverse-Cholesky route for every trial, as at 3M. NOT `exact_auto`:
+# the fused kernel needs rank exactly 24 and value width exactly 64, and this
+# space samples five ranks and four head counts, so most of it would fall off a
+# performance cliff CORRELATED WITH TWO SEARCHED VARIABLES.
+backend_policy: exact_invchol
+seq_len: 2048
+
+run_root: /scratch/m000151-pm06/cqiu/study-10m-joint-v1
+# HELD OUT, and disjoint from the training shard. The default would be the base
+# spec's own training data, which would make this a training-loss ranking.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# 8 hours. MEASURED: a base trial is 668,467,200 / 162,584 = 1.14h, but the
+# expensive corner is 668,467,200 / 32,902 = 5.6h. A 6h timeout left only 7%
+# margin over the slowest legal cell, so this is
+# generous by design -- but finite, because `wait_for_objective` now CANCELS on
+# timeout, and an uncancelled trainer holding tens of GiB is precisely what
+# produced the 3M study's OOM cascades.
+trial_timeout_seconds: 28800
+
+# Left on, but it is NOT the safety net. It only fires on a synchronous submit()
+# raise, and a training OOM arrives asynchronously: 1,963 of 1,963 trials at 3M
+# ran at the initial microbatch and never descended a rung. The real protection
+# is `runtime.per_device_batch_size` set low up front in the base spec.
+batch_ladder: true
+
+# EMPTY, and the script REFUSES a non-empty value: a parameter penalty would be
+# computed against a per-trial baseline that IS the trial, so it is identically
+# zero. Parameter count and throughput are recorded per trial and traded off
+# post hoc.
+objective: {}
