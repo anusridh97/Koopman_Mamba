@@ -1,4 +1,4 @@
-# Anchors for `configs/search/50m-joint-v1-PROVISIONAL.yaml`.
+# Anchors for `configs/search/50m-joint-v1.yaml`.
 #
 # 24 anchors against a 48-trial budget -- half the study, and that split is the
 # right one at this size rather than a compromise. Twelve live dimensions over 48
@@ -44,20 +44,32 @@
 # its name claims -- with nothing in the output saying so.
 #
 # This bit me while writing these: the base spec first carried `lr: 0.001`, which
-# is the FLOOR of the study's learning_rate range, so `lr_factor` 0.4 and 0.7 both
-# clamped to 0.001 and the two low-LR anchors would have resolved onto the same
-# point as each other AND as the floor. Fixed by setting the base LR to the
-# GEOMETRIC CENTRE of the range, sqrt(0.001*0.008) = 0.00283. Against that:
+# was the FLOOR of the then-placeholder learning_rate range, so `lr_factor` 0.4
+# and 0.7 both clamped to 0.001 and the two low-LR anchors would have resolved
+# onto the same point as each other AND as the floor. The fix is to keep the base
+# LR at the GEOMETRIC CENTRE of the study's range, and the two are COUPLED -- if
+# one moves, re-derive this table.
 #
-#     lr_factor 0.4  -> 0.00113   (floor 0.001)   reaches
-#     lr_factor 0.7  -> 0.00198                   reaches
-#     lr_factor 1.5  -> 0.00424                   reaches
-#     lr_factor 2.5  -> 0.00707   (ceil  0.008)   reaches
+# Re-derived now that both ranges are closed from the 10M contrast. The study
+# declares learning_rate in [0.0008, 0.009] and the base spec carries
+# sqrt(0.0008*0.009) = 0.00268:
+#
+#     lr_factor 0.3  -> 0.000804  (floor 0.0008)  reaches
+#     lr_factor 0.55 -> 0.001474                  reaches
+#     lr_factor 1.5  -> 0.004024                  reaches
+#     lr_factor 2.2  -> 0.005901                  reaches
+#     lr_factor 3.3  -> 0.008844  (ceil  0.009)   reaches
 #     layerscale 0.5 -> 0.005     (floor 0.005)   reaches exactly
 #     layerscale 20  -> 0.2       (ceil  0.3)     reaches
 #
-# !! When the study's `learning_rate` bounds are filled from the 10M anchor
-# contrast, RE-CENTRE the base LR and RE-CHECK this table. The two are coupled.
+# Five LR factors plus the reference at 1.0 give SIX log-spaced points across an
+# 11.25x range, spaced by ~1.8x below centre and ~1.5x above it. The asymmetry is
+# deliberate: the optimum sat at the top of the range at BOTH rungs below, so the
+# screen is denser where the answer is expected to be.
+#
+# !! Verify by RESOLVING every design, not by counting them. Clamping is silent
+# and invisible in the "24 resolve" line -- that is exactly what hid the base-LR
+# bug above.
 #
 # ## Why every design repeats `placement: late`
 #
@@ -91,28 +103,38 @@ designs:
     seed: 46
     reference_group: reference
 
-  # ------------------------------------------------- learning rate (4 points)
+  # ------------------------------------------------- learning rate (5 points)
   # The dominant axis: 68.6% of global PedANOVA importance at 3M and 70.9% of the
-  # variance during random search. It gets the most screen points because the
-  # study's own searched bounds are being set from a measurement one rung below,
-  # so this screen is the check that the range was centred correctly.
-  - name: lr-0.4x
+  # variance during random search; a 0.207 swing at 10M, larger than the entire
+  # gap between that study's best trial and its untuned reference. It gets the
+  # most screen points because the study's own bounds were set by 1/width scaling
+  # from one rung below rather than by a measurement AT this rung -- so this
+  # screen is the check that the range was centred correctly.
+  #
+  # Five rather than four, funded by deleting the `beta-one` anchor whose level
+  # the 10M contrast refuted. Worth the trade: LR has now been RIGHT-CENSORED at
+  # two consecutive rungs (3M at 5.406e-3 of 5.5e-3, 10M at >=0.008), and a third
+  # censored measurement would be a methodological failure rather than a result.
+  - name: lr-0.3x
     placement: late
-    lr_factor: 0.4
-  - name: lr-0.7x
+    lr_factor: 0.3
+  - name: lr-0.55x
     placement: late
-    lr_factor: 0.7
+    lr_factor: 0.55
   - name: lr-1.5x
     placement: late
     lr_factor: 1.5
-  - name: lr-2.5x
+  - name: lr-2.2x
     placement: late
-    lr_factor: 2.5
+    lr_factor: 2.2
+  - name: lr-3.3x
+    placement: late
+    lr_factor: 3.3
 
   # ------------------------------------------------------- ska_rank (3 points)
-  # Floor, the 3M winner, and the level above it. If the study's `ska_rank`
-  # choices change when they are filled from the 10M contrast, these three names
-  # must be revisited so they still span floor / previous-winner / above.
+  # Floor, the 3M winner, and the study's ceiling. Unchanged after the fill: the
+  # choices stayed [8, 16, 24, 32, 48] because 56 and 64 fall OUT of the parameter
+  # band at d_model 384, so these three still span floor / previous-winner / top.
   - name: rank-8
     placement: late
     rank: 8
@@ -125,10 +147,14 @@ designs:
 
   # -------------------------------------------------- n_ska_layers (2 points)
   # layer_factor multiplies the base's 4 SKA layers. 10.9% variance at 3M, where
-  # the ordering was 6 > 4 ~ 3 > 2.
-  - name: ska-layers-2
+  # the ordering was 6 > 3 > 4 > 2; the 10M anchors reproduced 6 > 4 > 2 exactly.
+  #
+  # The low point is 3, not 2: level 2 is no longer declared by the study (the
+  # 10M `ska-layers-2` anchor refuted it at +0.02845), and a design naming an
+  # undeclared level is a hard error at --dry_run.
+  - name: ska-layers-3
     placement: late
-    layer_factor: 0.5
+    layer_factor: 0.75
   - name: ska-layers-6
     placement: late
     layer_factor: 1.5
@@ -146,32 +172,41 @@ designs:
     placement: late
     layerscale_factor: 20.0
 
-  # ------------------------------------------------------ beta_policy (3 pts)
-  # `learned` is the base, so the other three declared levels are screened. With
-  # `ska_rank` this is one of the two orderings the ladder exists to test:
-  # `linear` won 12/12 of the 3M top trials at 24.7% variance.
+  # ------------------------------------------------------ beta_policy (2 pts)
+  # `learned` is the base, so the other two declared levels are screened. With
+  # `ska_rank` this is one of the two orderings the ladder exists to test, and it
+  # has now TRANSFERRED twice: the 10M anchors reproduced the 3M ordering exactly
+  # (linear, learned, head_scalar, one -- Spearman rho 1.00 over four levels).
+  # What collapsed is the magnitude, linear's lead over learned going 0.0202 at 3M
+  # to 0.00111 at 10M, which is why the axis is still measured rather than pinned.
+  #
+  # `beta-one` DELETED: the study no longer declares that level (+0.01798 at 10M,
+  # last of four at 3M). Its slot went to the fifth LR anchor.
   - name: beta-head-scalar
     placement: late
     beta_policy: head_scalar
   - name: beta-linear
     placement: late
     beta_policy: linear
-  - name: beta-one
-    placement: late
-    beta_policy: one
 
   # ----------------------------------------------------- weight_decay (2 pts)
-  - name: wd-0.0
+  # 0.0 is no longer declared (+0.02368 at 10M), so the low point is 0.05. 0.15
+  # was flat against the 0.1 reference at 10M (+0.00086), which is what makes the
+  # top of the range safe to keep rather than a level to chase.
+  - name: wd-0.05
     placement: late
-    weight_decay: 0.0
+    weight_decay: 0.05
   - name: wd-0.15
     placement: late
     weight_decay: 0.15
 
   # ---------------------------------------------------- warmup_ratio (2 pts)
-  - name: warmup-0.01
-    placement: late
-    warmup_ratio: 0.01
+  # Both points sit ABOVE the base's 0.02, because warmup was the third axis to
+  # win at the ceiling of its 10M choices (0.06, -0.01053, resolved). 0.01 is no
+  # longer declared (+0.01946), so screening it is neither possible nor useful.
   - name: warmup-0.06
     placement: late
     warmup_ratio: 0.06
+  - name: warmup-0.10
+    placement: late
+    warmup_ratio: 0.10

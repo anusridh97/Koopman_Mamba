@@ -125,27 +125,59 @@ model:
   rescale_prenorm_residual: true
   max_seq_len: 2048
 
-# A 3,362M-token trial needs a shard it does not have to loop 34 times. The 3M
-# and 10M studies used `fineweb_small_train` (100M tokens); at this budget that
-# would be 34 epochs, and repetition changes the regime -- the model starts
-# memorising, which confounds architecture with data reuse.
+# GATE CLOSED -- shard BUILT for this rung. 10,401,294,869 tokens of
+# FineWeb-Edu sample-10BT, Llama-2 tokenizer, documents 97,159..9,396,575.
 #
-# !! PRE-LAUNCH GATE !!  This path is a PLACEHOLDER. A >=3.4B-token FineWeb-Edu
-# shard must exist and be named here before launch, and it must be DISJOINT
-# from the eval shard. Ati's branch references /anvil/.../fineweb_3b (3.0B) for
-# exactly this reason at exactly this scale; the Marlowe equivalent has to be
-# located or built. Verified by `experimentation.run.data_verify.verify_data`,
-# which checks tokenizer, mix and n_tokens against the shard's meta.json and
-# refuses to launch on a mismatch.
+# A 3,362M-token trial needs a shard it does not have to loop. The 3M and 10M
+# studies used `fineweb_small_train` (100M tokens); at this budget that would be
+# 34 epochs, and repetition changes the regime -- the model starts memorising,
+# which confounds architecture with data reuse. Against this shard a trial reads
+# 3.362 of 10.401 G tokens = 0.32 epochs, so there is NO repetition at all, and
+# the 10 B confirmation runs land at 0.96 epochs.
+#
+# ## Why it starts at document 97,159, which is the load-bearing detail
+#
+# The study evaluates on `fineweb_small_val`, which is documents 93,773..97,158
+# of the same sample-10BT stream. Every rung of the ladder must score on the SAME
+# eval set or cross-rung losses are not comparable and the scaling fit means
+# nothing -- so the train shard begins past 97,158 rather than at 0.
+#
+# This is also why the pre-existing 1B shard could NOT be used:
+#
+#     fineweb_small_train    docs       0.. 83,773   disjoint (10,000-doc gap)
+#     fineweb_small_val      docs  93,773.. 97,158   <- eval
+#     fineweb_edu_1b_train   docs       0..844,727   CONTAINS the eval set
+#     this shard             docs  97,159..9,396,575 disjoint
+#
+# `fineweb_edu_1b_train` swallows `fineweb_small_val` outright. Training on it
+# while evaluating on `fineweb_small_val` is training on the eval set, and
+# `verify_data` does NOT catch that -- it compares tokenizer, mix and n_tokens,
+# never document ranges. The 3M and 10M results are clean; that gap is why.
+#
+# Built as 8 parallel parts and byte-concatenated (`train.bin` is a flat uint16
+# array with no header, `weights.bin` uint8), 48 min wall-clock against 18.6 h
+# single-process. `n_tokens` below is derived from the concatenated BYTE COUNT,
+# not by summing the parts' claims, because `verify_data` compares it exactly.
+# Provenance is in the shard's own meta.json under `merged_from`.
+#
+# Do NOT "get headroom" by switching to sample-100BT: FineWeb's samples do not
+# preserve document ORDER, so these skip_docs offsets would not transfer and the
+# disjointness guarantee against fineweb_small_val would be silently lost.
 data:
   kind: shard
-  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  shard_dir: /scratch/m000151-pm06/cqiu/tok10b/shard
   tokenizer: NousResearch/Llama-2-7b-hf
+  # One key, not the three the 3M/10M specs carry, and this must MATCH the
+  # shard's meta.json byte-for-byte because `verify_data` compares the dicts for
+  # equality (it caught exactly this on the first attempt). pretokenize writes
+  # all three keys only on the legacy `--mix f p s` path; the `--sources
+  # fineweb=1.0` path used to build this shard records just the named source.
+  # Semantically identical -- pg19/scrolls at 0.0 is the same as absent -- and
+  # `mix` is descriptive only: nothing reads it at training time, it is written
+  # by pretokenize and compared by verify_data, and that is all.
   mix:
     fineweb: 1.0
-    pg19: 0.0
-    scrolls: 0.0
-  n_tokens: 100000536
+  n_tokens: 10401294869
 
 optim:
   # The GEOMETRIC CENTRE of the study's searched `learning_rate` range, and that
@@ -156,17 +188,36 @@ optim:
   # and the LR main effect would be measured over half its intended span with
   # nothing in the output saying so.
   #
-  # sqrt(0.001 * 0.008) = 0.00283, so factors 0.4 .. 2.5 span 0.00113 .. 0.00707
-  # and every one lands inside the range.
+  # SET FROM THE 10M ANCHOR CONTRAST, which is now complete. Two facts drove it:
   #
-  # !! RE-CENTRE THIS when the study's learning_rate bounds are filled from the
-  # 10M anchor contrast. It is not an independent choice.
+  #   1. The 10M LR curve is monotone to the TOP of its range and still resolved
+  #      there: lr-1.5x -0.03045 and lr-2.5x (0.0075) -0.04556 against a
+  #      resolvable threshold of 0.00981. The 10M optimum is therefore >= 0.008,
+  #      RIGHT-CENSORED, exactly as 3M was at 5.406e-3 of a 5.5e-3 ceiling. Two
+  #      censored rungs cannot establish the LR-vs-scale trend.
+  #   2. So the centre comes from theory instead: for Adam in standard
+  #      parametrisation the optimal LR scales as ~1/width, and d_model 128 ->
+  #      384 is 3x, giving 0.008 / 3 ~= 0.0027. The 5x longer horizon (3,400 ->
+  #      17,100 steps) pushes the same direction, so the low half of the study's
+  #      range is doing real work rather than padding.
+  #
+  # sqrt(0.0008 * 0.009) = 0.002683, an 11.25x span. Against that base the
+  # anchor factors 0.3 / 0.55 / 1.5 / 2.2 / 3.3 land at 0.000804 / 0.001474 /
+  # 0.004024 / 0.005901 / 0.008844 -- six log-spaced points (with the reference
+  # at 1.0) reaching both ends, none clamped, deliberately denser ABOVE centre
+  # because that is where the optimum sat at both rungs below.
+  #
+  # !! RE-CENTRE THIS if the study's learning_rate bounds ever change. It is not
+  # an independent choice.
   #
   # For scale, the two known points either side of this rung differ 18x, because
   # scale and horizon move the optimum in the same direction:
   #     3M,  1,068 steps  -> 5.406e-3  (our measurement, at its ceiling)
   #     50M, 22,889 steps -> 3.0e-4    (Ati's golden config)
-  lr: 0.00283
+  # Ati's value sits BELOW this study's floor deliberately: scaled by width from
+  # the 10M measurement, 3e-4 lands in the region the `lr-0.4x` anchor showed to
+  # be catastrophic (+0.16177, 16x the resolvable threshold).
+  lr: 0.00268
   # 2% of max_steps, the reference protocol's ratio.
   warmup_steps: 342
   max_steps: 17100
@@ -181,14 +232,33 @@ runtime:
   # SKA's fp32 (B,T,H,r,r) stats, both linear in microbatch. Measured 22.27 GiB
   # at mb12 for the configs/50m.yaml geometry (rank 24, 6 heads, 4 SKA layers).
   #
-  # !! PRE-LAUNCH GATE !!  That measurement is NOT the expensive corner. This
-  # space reaches rank 48, 8 heads and 6 SKA layers, which is 8x the SKA term
-  # (6*8*48^2 = 110,592 against 4*6*24^2 = 13,824). Extrapolating the fitted
-  # model puts the corner near 47-49 GiB at mb12 -- fits, but the fit dropped a
-  # backbone term as negligible AT d_model 128 and that will not hold at 384.
-  # Measure the corner with `scripts/gpu_capacity.py` plus a real fwd+bwd before
-  # launch. At 10M this exact check caught a predicted 78.99 GiB against a 79 GiB
-  # card, confirmed by an actual OOM.
+  # GATE CLOSED -- MEASURED, and the estimator was wrong by 24%. One H100,
+  # microbatch 12, exact_invchol, real fwd+bwd+AdamW step, d_model 384:
+  #
+  #     cell                            mb   peak GiB      tok/s   h/trial
+  #     nska 4 heads 4 rank 24 (base)   12      21.73    121,899       7.7
+  #     nska 4 heads 4 rank 24 (base)    6      11.33    105,454
+  #     nska 6 heads 4 rank 48 (corner)  -          -     ~49,285      18.9  (predicted)
+  #     nska 6 heads 8 rank 48 (was)    12      51.90     28,740      32.5
+  #     nska 6 heads 8 rank 48 (was)     6      26.44     27,717
+  #
+  # `scripts/gpu_capacity.py` predicted 39.50 GiB for that last cell -- the
+  # IDENTICAL number it predicts for the 10M corner, because its fit dropped the
+  # backbone term as negligible at d_model 128 and so the model carries no width
+  # dependence at all. Measured 51.90. Do not use it above d_model 128 without
+  # refitting.
+  #
+  # The 32.5 h cell is why `ska_n_heads` is now capped at 4 in
+  # scripts/search_50m_joint.py: it exceeded the trial timeout, and
+  # `wait_for_objective` CANCELS on timeout. With heads <= 4 the worst cell is
+  # 18.9 h and the worst memory ~34 GiB, so mb12 stands with ~45 GiB spare.
+  #
+  # Note memory is essentially linear in microbatch with ~zero intercept
+  # (21.73/12 = 1.81, 11.33/6 = 1.89) exactly as the fitted model assumes -- it
+  # is the width term, not the microbatch scaling, that the model gets wrong.
+  # Note also the corner is COMPUTE-bound, not latency-bound: mb6 and mb12 give
+  # 27,717 and 28,740 tok/s, a 3.7% difference, so halving the microbatch there
+  # would buy memory almost for free if it were ever needed.
   #
   # 96 % 12 == 0, so accumulation is 8 and the effective batch is exact.
   # per_device_batch_size is not hashed into run_id, so it stays free to retune.
@@ -203,5 +273,11 @@ runtime:
   account: marlowe-m000151-pm06
   qos: medium
   workers: 4
+  # INERT for this study, and worth saying so because it reads like a 12h cap
+  # next to a corner trial estimated near 14h. `time_limit` is consumed only by
+  # SlurmLauncher.render_sbatch and the array template; this ladder runs
+  # `launcher: local`, which spawns trials as subprocesses. The caps that DO
+  # bind are the study's `trial_timeout_seconds` and the supervisor job's own
+  # --time. (At 10M this field said 03:00:00 while trials ran up to 11.5h.)
   time_limit: 12:00:00
   gpu_arch: '9.0'

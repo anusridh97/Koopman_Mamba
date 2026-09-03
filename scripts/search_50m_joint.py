@@ -227,12 +227,39 @@ MACRO_AXES = {
     # Mamba-2's SSM state width. A multiple of 8 because KoopmanLMConfig asserts
     # it; 8 is mamba_ssm's own small end and 32 is where this band runs out.
     "d_state": {"kind": "categorical", "choices": [8, 16, 24, 32]},
-    # SKA head geometry. head_dim = 384 // ska_n_heads, so this is {384, 192, 96, 48}
-    # value width. 1 is included because head_dim 64 IS the production geometry
-    # AGENTS.md records ("rank 24, value/head width 64"), and at d_model=64 that
-    # is one head -- excluding it would make the study unable to propose the
-    # configuration the repo currently recommends.
-    "ska_n_heads": {"kind": "categorical", "choices": [1, 2, 4, 8]},
+    # SKA head geometry. head_dim = 384 // ska_n_heads, so this is {384, 192, 96}
+    # value width.
+    #
+    # 8 is DROPPED, and unlike every other axis restriction in this study that is
+    # a COST decision rather than an evidence one. Measured on one H100 at
+    # microbatch 12, exact_invchol, d_model 384:
+    #
+    #     nska 4 heads 4 rank 24 (base)     21.73 GiB   121,899 tok/s    7.7 h/trial
+    #     nska 6 heads 8 rank 48 (corner)   51.90 GiB    28,740 tok/s   32.5 h/trial
+    #
+    # 32.5 h is ABOVE `trial_timeout_seconds`, and `wait_for_objective` CANCELS
+    # on timeout -- so those cells would not merely be slow, they would be
+    # destroyed after burning 24 h each. Capping heads at 4 makes the worst cell
+    # (nska 6, heads 4, rank 48) 18.9 h, and costs almost nothing in aggregate
+    # (332 -> 310 GPU-h) because TPE rarely reaches the corner anyway: at 10M it
+    # put 61 of 84 good-band trials at heads 1 and only 4 at heads 8.
+    #
+    # It is also the least-supported level in the space. `ska_n_heads` did not
+    # resolve at 10M -- levels 1 and 2 sat within 0.0025 against a 0.0127
+    # trial-vs-trial floor.
+    #
+    # NOTE the 3M-era rationale for keeping 1 ("head_dim 64 is the production
+    # geometry, and at d_model=64 that is one head") does NOT hold at this rung
+    # and was carried over without re-deriving: at d_model 384, heads 1 is
+    # head_dim 384. head_dim 64 would need heads 6, which no level offers. 1 is
+    # kept because TPE preferred it at 10M, not because it reproduces production.
+    #
+    # Capping heads at 4 also brings ska_rank 56 INTO the band (53,611,776 of a
+    # 54,500,000 ceiling, against 54,653,208 at heads 8). Declined here: its
+    # worst cell is 23.8 h, i.e. 99% of the timeout, and a rank-56 ANCHOR cannot
+    # exist without adding 56 to the sampled space too, since `resolve_design`
+    # snaps to the nearest declared choice. Recorded so the next rung can take it.
+    "ska_n_heads": {"kind": "categorical", "choices": [1, 2, 4]},
 }
 
 #: The approved total-parameter band, tied embedding counted once.

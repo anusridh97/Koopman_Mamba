@@ -1,0 +1,332 @@
+# The 50M joint architecture + optimizer search.
+#
+#     python scripts/search_50m_joint.py configs/search/50m-joint-v1.yaml --dry_run
+#
+# ############################################################################
+# ## BOTH OPEN FIELDS ARE NOW CLOSED FROM MEASUREMENT
+# ############################################################################
+#
+# This file was scaffolded with two fields deliberately blank, because they were
+# the only two the 3M study could not locate: both won at the CEILING of their 3M
+# range (`ska_rank` 32 of a maximum 32, `learning_rate` 5.406e-3 of a maximum
+# 5.5e-3), so each was a lower bound rather than a measurement, and they are the
+# two most influential axes in the study (68.6% and 35.4%).
+#
+# They are now set from the 10M study's 24 SCREEN ANCHORS, all COMPLETE, each a
+# one-factor move against a fixed backbone with a five-replicate noise floor
+# (sigma 0.00448, resolvable vs reference 0.00981):
+#
+#     ska_rank        8 +0.05954 | 24 ref | 32 -0.01239 | 48 -0.02731
+#                     -> still climbing at 48, but 56/64 are OUT of the parameter
+#                        band at d_model 384, so 48 is the ceiling the band allows
+#     learning_rate   0.4x +0.16177 | 0.7x +0.04331 | 1.5x -0.03045 | 2.5x -0.04556
+#                     -> monotone to the top, so RIGHT-CENSORED; range centred by
+#                        1/width scaling from 10M rather than by extrapolation
+#
+# Three further levels were removed, each refuted by a clean one-factor contrast
+# rather than by preference: `n_ska_layers: 2` (+0.02845), `weight_decay: 0.0`
+# (+0.02368), `beta_policy: one` (+0.01798). `warmup_ratio` gained 0.10 because
+# 0.06 won at the ceiling of its choices.
+#
+# The `-PROVISIONAL` suffix is GONE from `name`, so `scripts/search_50m_joint.py`
+# will now launch this study. Note `name` is hashed into `study_id`: the
+# provisional journal can never be resumed into this one, which is intended.
+#
+# ############################################################################
+#
+# ## What this study is
+#
+# Third rung of the ladder after 3M (2,007 trials, exploratory) and 10M (256,
+# confirmatory). At 48 trials this is a SCREEN: 12 live dimensions over 48 trials
+# is 4 trials per dimension, which cannot support a ranking of everything. What it
+# can do is test whether the handful of orderings that survived 3M and 10M survive
+# a further 5x, with a calibrated floor to say which differences are real.
+#
+# ## Scale and budget
+#
+# 50M TOTAL parameters, tied embedding counted once, band 45.5M-54.5M.
+#
+#     96 sequences x 2048 tokens x 17100 updates = 3,361,996,800 tokens
+#
+# 65.0 tokens per TOTAL parameter. 3M was 70/total and 10M 65.4/total, so all
+# three rungs share one protocol and the ladder is a comparison.
+#
+# This deliberately does NOT follow Ati's convention. His search configs override
+# `max_steps: 1500` at every scale -- 196.6M tokens per trial regardless of model
+# size, so 3.9 tok/param at 50M and 1.1 at 180M. That is 17x cheaper here and it
+# is a legitimate screening choice, but a ranking taken at 3.9 tok/param is taken
+# on a model far from converged, and the LR it selects is tuned for 1,500 steps
+# rather than for the run you intend. His GOLDEN runs are at 60-65 tok/param
+# (22,889 steps at 50M), which is the convention followed here.
+#
+# ## Cost, from measurement
+#
+# 111,254 tok/s at microbatch 12 on one H100 (`exact_invchol`, d_model 384 depth
+# 17). 3.362G tokens is 8.4 h per trial, so 48 trials is ~403 GPU-hours:
+#   8 GPUs   ~35 h with pruning
+#   16 GPUs  ~18 h with pruning
+name: 50m-joint-v1
+base: configs/runs/50m-joint-base.yaml
+
+n_trials: 48
+max_steps: 17100
+
+# ------------------------------------------------------------------ sampler
+sampler: tpe_multivariate
+# 24 -- EXACTLY the anchor count, and that equality is the whole point.
+#
+# optuna's TPESampler gates on `len(trials) < n_startup_trials` over the study's
+# COMPLETED trials, and anchors complete like anything else. With 24 anchors
+# popping before any sampled trial, ANY value at or below 24 means the startup
+# window is already satisfied when the first sampled trial is drawn -- so this
+# study has NO random phase, and the previous value of 16 delivered 0 random
+# trials while its comment claimed "a third of the budget". Setting it to 24
+# makes that deliberate instead of accidental.
+#
+# Choosing exploitation here is defensible on this study's actual deliverables.
+# 24 sampled trials over 17 dimensions cannot support a ranking of anything, so
+# the marginals are NOT what this rung produces -- the 24 one-factor anchors are,
+# each against a five-replicate floor. What the sampled trials are for is the
+# BEST CONFIG, which is the third point of the scaling fit, and TPE seeded on a
+# completed one-factor-at-a-time screen is a good instrument for "combine the
+# individually-winning levels".
+#
+# !! CONSEQUENCE, and it must be carried into the writeup: this study's
+# `main_effects.csv` and `importances.csv` are TPE-confounded with NO unbiased
+# sample to separate "this level is good" from "TPE co-selected it next to a good
+# LR". At 3M that confound put 715 of 1,041 completed trials on ska_rank=32 and
+# only a 256-trial random phase could untangle it. CITE THE ANCHORS FROM THIS
+# RUNG, NOT THE MARGINALS. The 3M (2,007 trials) and 10M (256) studies are where
+# marginals are readable.
+#
+# Note also the anchors give TPE zero coverage of the four MACRO axes: every
+# anchor rides the base backbone (expand 2, depth_tier full, d_state 24, heads
+# 4), because `Design` has no macro fields and `_enqueue_macro_anchors` merges
+# the base's. So TPE enters with one observed macro geometry and will explore
+# those four axes near-randomly regardless.
+sampler_startup_trials: 24
+# COMPLETE only, unlike the sampler's, which counts COMPLETE and PRUNED. The
+# DERIVED default at n_trials 48 would be min(6, max(3, 16)) = 6, and with 24
+# anchors that are pruning-exempt the pruner would be comparing against a
+# population of six. 12 keeps it meaningful without eating the budget.
+prune_startup_trials: 12
+# Step 6000 of 17100 -- 35%, matching 1200/3400 at 10M and 400/1068 at 3M. Late
+# enough that warmup (171-1026 steps at the searched ratios) is long past, which
+# matters because pruning inside the transient would rank how fast a config warms
+# up rather than how good it is, on a study that searches warmup_ratio.
+prune_after_step: 6000
+logging_steps: 25
+
+# ------------------------------------------------------------------- fleet
+# One trial per GPU, for the reason measured at 10M rather than by default:
+# ~200K tok/s is a per-H100 ceiling that does not move with tenancy (2 MPS
+# tenants at mb24 gave +14%, 6 at mb6 gave +8%, and 6 without MPS were WORSE
+# than one), while memory across this space is heterogeneous enough that static
+# tenancy has to fit the worst cell.
+#
+# Two nodes: submit the same file twice as two 8-GPU jobs. `study_id` hashes this
+# file, so both attach to one journal. Launch the second only after the first logs
+# `enqueued N anchor(s)` -- two supervisors racing `enqueue_anchors` double-
+# enqueue the reference group, and duplicated replicates under `deterministic:
+# true` drive sigma toward zero and make every effect look "resolved".
+launcher: local
+concurrent_trials: 8
+seed: 2026
+direction: minimize
+
+# ------------------------------------------------------------------- anchors
+# 24 anchors of a 48-trial budget is half, which is deliberate and is the right
+# split at this size. A 48-trial TPE study cannot rank 12 dimensions; what it can
+# do is measure a floor and a set of one-factor contrasts against a fixed
+# backbone, which is exactly what the anchors are. The 24 sampled trials then
+# explore around them.
+design_file: configs/search/50m-joint-anchors.yaml
+
+# ----------------------------------------------------------- the search space
+# 13 axes here + 4 macro axes in the script = 17 declared, five pinned
+# singletons, so 12 live. Declared explicitly rather than inherited:
+# `restrict_space` is replacement-not-intersection, so an axis this file does not
+# mention keeps the REPO's default declaration.
+search_axes:
+  # ---- SKA architecture -------------------------------------------------
+  #
+  # CLOSED from the 10M anchor contrast. Rank climbs monotonically and every step
+  # is resolved: 8 +0.05954, 24 (reference) 0.0, 32 -0.01239, 48 -0.02731 against
+  # a resolvable threshold of 0.00981. So rank had NOT turned over by 48 and the
+  # decision table above said to extend upward.
+  #
+  # !! IT CANNOT BE EXTENDED, and the earlier claim that "56, 64 are in band at
+  # d_model 384" was WRONG. Enumerating param_count_estimate over the WHOLE macro
+  # space -- expand x tier x d_state x heads x nska, argmax at expand 3 / full /
+  # depth 15 / d_state 32 / heads 8 / nska 6 -- against the 45.5M-54.5M band:
+  #
+  #       rank 32 -> 53,768,472   OK, 731,528 spare
+  #       rank 48 -> 54,358,296   OK, 141,704 spare
+  #       rank 56 -> 54,653,208   OUT by 153,208
+  #       rank 64 -> 54,948,120   OUT by 448,120
+  #
+  # (`--dry_run` reports the same 54,358,296 as the top of its envelope over 4,320
+  # size-bearing combinations, which is the independent check on this table. An
+  # earlier version of these figures held d_state at the base 24 and so understated
+  # every row; d_state is a MACRO axis and reaches 32.)
+  #
+  # 48 is the largest rank the band admits at this width. That is a GRANULARITY
+  # LIMIT, not a preference, and it means this study will most likely win at its
+  # rank ceiling for the third rung running -- state that as a limitation of the
+  # ladder rather than reporting 48 as an optimum.
+  #
+  # Dropping `ska_n_heads: 8` would buy room for 56, and is deliberately NOT done:
+  # heads was unresolved at 10M (levels 1 and 2 within 0.0025), and trading a live
+  # level for one more point on an axis that is already the study's most expensive
+  # cell is a bad exchange.
+  ska_rank:
+    kind: categorical
+    choices: [8, 16, 24, 32, 48]
+  # Level 2 DROPPED: the `ska-layers-2` anchor is +0.02845 against a 0.00981
+  # threshold, resolvedly worse at 10M, and the 3M marginal ordering agrees
+  # (6 > 3 > 4 > 2). Removing a level a clean one-factor contrast has refuted is
+  # not the same as pinning the axis -- 3, 4 and 6 all stay live.
+  #
+  # 6 stays legal: the shallowest geometry here is depth 14, whose usable SKA
+  # window is 12 slots, so nothing clamps -- `--dry_run` checks that exhaustively.
+  n_ska_layers:
+    kind: categorical
+    choices: [3, 4, 6]
+  # Still searched rather than pinned. The 10M anchors reproduced the 3M ordering
+  # EXACTLY -- linear, learned, head_scalar, one at both scales, Spearman rho 1.00
+  # over all four levels -- so the ordering transferred. What did NOT transfer is
+  # the magnitude: linear's lead over learned went 0.0202 at 3M to 0.00111 at 10M,
+  # i.e. under the noise floor. An ordering that survives but whose effect size
+  # collapses is a reason to keep measuring the axis, not to pin it.
+  #
+  # (Read that off the ANCHORS, not the sampled marginals. On TPE marginals this
+  # axis scores rho -0.60 between the rungs, because TPE never samples a bad level
+  # alongside bad settings -- the same artefact that makes sampled rank-8 look
+  # fine at 3.4775 while the clean rank-8 anchor is +0.0595 worse.)
+  #
+  # Level `one` DROPPED: +0.01798 at 10M, resolvedly worse, and last of four at 3M.
+  beta_policy:
+    kind: categorical
+    choices: [head_scalar, learned, linear]
+  # Second-highest LOCAL importance at 3M (0.155) and still unresolved there --
+  # the top 12 trials spanned 0.0059 to 0.185.
+  ska_layerscale_init:
+    kind: float
+    low: 0.005
+    high: 0.3
+    log: true
+  # Left searched, not pinned, for the mechanical reason documented at 10M:
+  # `fixed_params` rewrites an axis to a one-choice categorical, but
+  # `anchors.resolve_design` reads low/high off `ska_ridge` because `ridge_factor`
+  # clamps rather than snaps, even at factor 1.0 -- and a degenerate float
+  # (low == high) is refused by `StudySpec`. The two rules conflict for any FLOAT
+  # axis in an anchored study. It is the least important axis in the 3M study
+  # (0.4% variance), so the cost is one nearly-free live dimension.
+  ska_ridge:
+    kind: float
+    low: 0.003
+    high: 0.03
+    log: true
+
+  # ---- optimizer --------------------------------------------------------
+  #
+  # The two known points either side of this rung differ 18x, because scale and
+  # horizon move the optimum in the same direction:
+  #
+  #     3M,  1,068 steps  ->  5.406e-3   (our measurement, AT the ceiling)
+  #     50M, 22,889 steps ->  3.0e-4     (Ati's golden config)
+  #
+  # CLOSED. The 10M curve is monotone to the TOP of its range and still resolved
+  # there (lr-2.5x = 0.0075, -0.04556 against a 0.00981 threshold), so the 10M
+  # optimum is >= 0.008 -- RIGHT-CENSORED, as 3M was at 5.406e-3 of a 5.5e-3
+  # ceiling. Two censored rungs cannot establish the trend, so the centre comes
+  # from theory: optimal Adam LR scales as ~1/width, d_model 128 -> 384 is 3x,
+  # giving 0.008/3 ~= 0.0027, with the 5x longer horizon pushing the same way.
+  #
+  #     sqrt(0.0008 * 0.009) = 0.002683 = the base spec's lr, an 11.25x span.
+  #
+  # Kept WIDE on purpose: a narrow range around a mis-centred guess is worse than
+  # a wide one, because this axis buries every other axis until it is right (68.6%
+  # of global importance at 3M; a 0.207 swing at 10M, which is larger than the
+  # entire gap between the 10M best trial and its untuned reference).
+  learning_rate:
+    kind: float
+    low: 0.0008
+    high: 0.009
+    log: true
+  # 0.0 DROPPED: the `wd-0.0` anchor is +0.02368, resolvedly worse. 0.15 was flat
+  # against the 0.1 reference (+0.00086), so the top of the range is safe.
+  weight_decay:
+    kind: categorical
+    choices: [0.05, 0.1, 0.15]
+  # 0.01 DROPPED (+0.01946, resolvedly worse) and 0.10 ADDED, because 0.06 won at
+  # the CEILING of the 10M choices (-0.01053, resolved) -- a third censored axis,
+  # and the cheapest of the three to widen.
+  warmup_ratio:
+    kind: categorical
+    choices: [0.02, 0.04, 0.06, 0.10]
+
+# --------------------------------------------------------------- pinned axes
+# Each was under 2% variance share inside the 3M good-LR band. A pinned axis costs
+# ZERO TPE dimensions -- verified against the installed optuna 4.9.0 that
+# `single()` distributions are skipped in `sample_relative` and short-circuited in
+# `Trial._suggest` before `sample_independent` -- while still being recorded on
+# the trial and snapped to automatically by `anchors.resolve_design`.
+fixed_params:
+  # 20.8% variance and K=1 won decisively at 3M (4.251 vs 4.419), and it is the
+  # cheaper operator. The one axis here pinned to a WINNER rather than a neutral.
+  ska_power_K: 1
+  # 1.6% variance; `late` had the best mean (4.2559).
+  placement: late
+  # 0.5% variance -- indistinguishable from noise. Pinned to the neutral value
+  # rather than the nominal winner (0.9).
+  gamma_value: 1.0
+  # 1.3% variance. Neutral; the base spec's own ska_norm_clip_c of 4.0 is
+  # reproduced at multiplier 4/sqrt(rank), which varies with the searched rank.
+  norm_clip_multiplier: 1.0
+  grad_clip: 1.0
+
+# ------------------------------------------------------------------- backend
+# The exact inverse-Cholesky route for every trial, as at 3M and 10M, so the
+# ladder compares model SIZE and not SKA implementations. NOT `exact_auto`: the
+# fused kernel needs rank exactly 24 and value width exactly 64, and this space
+# samples several ranks and four head counts, so most of it would fall off a
+# performance cliff correlated with two searched variables.
+backend_policy: exact_invchol
+seq_len: 2048
+
+run_root: /scratch/m000151-pm06/cqiu/study-50m-joint-v1
+# HELD OUT and disjoint from the training shard. The default would be the base
+# spec's own training data, which would make this a training-loss ranking.
+eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+
+# 30 hours. GATE CLOSED -- set from measurement, not from a ratio.
+#
+# Measured on one H100 at microbatch 12, exact_invchol, d_model 384, fitting
+# seconds/token against the SKA term (n_ska * heads * rank^2) through two cells:
+#
+#     s/token = 5.786e-6 + 2.623e-10 * ska_term
+#     base   (nska 4 heads 4 rank 24)  121,899 tok/s ->  7.7 h/trial
+#     worst  (nska 6 heads 4 rank 48)   49,285 tok/s -> 18.9 h/trial
+#
+# The measured corner at heads 8 was 28,740 tok/s = 32.5 h, ABOVE any timeout we
+# would want, which is why `ska_n_heads` is capped at 4 (see MACRO_AXES).
+#
+# 30 h against an 18.9 h worst cell is a 59% margin, and the margin is the point
+# rather than slack: at 10M two trials came in ~8x below their cell's median
+# throughput from CONTENTION alone, not geometry. `wait_for_objective` CANCELS on
+# timeout, so a tight timeout destroys a trial that would have finished -- the
+# expensive direction of the error. The supervisor job's own --time (48 h) is the
+# outer bound and comfortably clears one worst-case trial.
+trial_timeout_seconds: 108000
+
+# On, but NOT the safety net: it fires only on a synchronous submit() raise, and
+# a training OOM is asynchronous -- 1,963 of 1,963 trials at 3M ran at the
+# initial microbatch and never descended a rung. The protection is
+# `runtime.per_device_batch_size` set low up front in the base spec.
+batch_ladder: true
+
+# EMPTY, and the script REFUSES a non-empty value: a parameter penalty would be
+# computed against a per-trial baseline that IS the trial, so it is identically
+# zero.
+objective: {}
