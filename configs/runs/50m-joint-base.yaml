@@ -1,0 +1,207 @@
+# Reference point for the 50M joint architecture + optimizer search.
+#
+# Third rung of the ladder, after `3m-joint-base.yaml` and `10m-joint-base.yaml`,
+# and built the same way: `scripts/search_50m_joint.py` overrides n_layers,
+# mamba_expand, d_state and ska_n_heads on every trial, so this is the RunSpec
+# each trial derives from rather than a claim that 384x18 wins.
+#
+# 51,698,320 parameters as written, inside the approved 45.5M-54.5M band.
+#
+# ## Why d_model 384
+#
+# Enumerated against `param_count_estimate` over the whole space. Four widths
+# reach a 50M total with the tied 32K embedding, and the choice is a real
+# trade-off rather than a default:
+#
+#     d_model  embedding  in-band depths (e1/e2/e3)  one layer is
+#       256       16%       49-59 / 39-47 / 32-39       1.5% of 50M
+#       320       20%       29-36 / 23-28 / 19-23       2.3%
+#       384       25%       20-24 / 16-19 / 13-15       3.3%   <- CHOSEN
+#       448       29%       13-16 / 11-13 /  9-10       4.5%
+#
+# Narrower widths give a finer depth grid and so a finer `depth_tier` step, which
+# is the axis that measures this study's own loss-per-parameter slope. But they
+# also give a WORSE within-tier match, and that matters more: within-tier spread
+# is what confounds `mamba_expand`, which carried 40.2% of the variance inside
+# the 3M good-LR band. Measured on the two serious candidates:
+#
+#     d_model 384, lean (22,17,14) full (23,18,15): spread 1.10%/0.94%, step +4.23%
+#     d_model 320, lean (32,25,21) full (33,26,22): spread 1.22%/1.81%, step +3.05%
+#
+# 384 buys a 0.94% iso-parameter contrast on the axis that matters at the cost of
+# a coarser capacity probe, uses 40% fewer sequential layers (a latency-bound
+# model at these sizes -- see the throughput note below), and is the geometry the
+# repo's own `configs/50m.yaml` already uses, so the throughput measurement
+# transfers directly.
+#
+# The coarse tier step is a GRANULARITY LIMIT, not a choice: one layer at
+# d_model 384 is 3.3% of a 50M model, so no depth table can put the two tiers
+# closer than ~4% while keeping all three expansions matched. `depth_tier` here
+# is therefore a coarser capacity probe than at 3M (~2%) or 10M (~2.6%). Read the
+# loss-per-parameter slope it measures accordingly.
+#
+# ## Token accounting, same convention as 3M and 10M
+#
+#   96 sequences/update * 2048 tokens * 17100 updates = 3,361,996,800 tokens
+#
+# 65.0 tokens per TOTAL parameter. 3M spent 70/total and 10M 65.4/total, so all
+# three rungs sit on one protocol and the ladder is a comparison rather than
+# three unrelated studies.
+#
+# This is DELIBERATELY not Ati's convention. His search configs override
+# `max_steps: 1500` at every scale, which is 196.6M tokens per trial regardless
+# of model size -- 3.9 tok/param at 50M and 1.1 at 180M. That is a screening
+# instrument, and it is much cheaper, but a ranking taken at 1.1 tok/param is
+# taken on a model still inside its warmup transient. His GOLDEN runs are at
+# 60-65 tok/param (22,889 steps at 50M), which is the convention followed here.
+#
+# ## Throughput, measured
+#
+# 111,254 tok/s at microbatch 12 on one H100, `exact_invchol` route, for
+# configs/50m.yaml (d_model 384, depth 17 -- one layer fewer than this base).
+# That is 8.4 h per trial, so 48 trials is ~403 GPU-hours: 35h on 8 GPUs or
+# 17.7h on 16 with pruning.
+name: 50m-joint-base
+model:
+  d_model: 384
+  n_layers: 18
+  vocab_size: 32000
+  d_state: 24
+  d_conv: 4
+  mamba_expand: 2
+  # PINNED at 16 as at 3M and 10M, so `mamba_expand` means "more SSM width"
+  # rather than "a different head shape". d_inner 384/768/1152 gives 24/48/72
+  # Mamba-2 heads.
+  mamba_headdim: 16
+
+  # Overridden per trial. head_dim = 384 // ska_n_heads, so {1,2,4,8} gives
+  # value widths {384, 192, 96, 48}.
+  ska_n_heads: 4
+  ska_rank: 24
+  ska_ridge: 0.01
+  ska_power_K: 1
+  ska_chunk_size: 64
+  # Depth 18, 4 layers, even -- resolved by make_layer_indices, the same
+  # function the search calls, so base and trial cannot disagree.
+  ska_layer_indices: [1, 6, 11, 16]
+  ska_mode: parallel
+
+  # The exact inverse-Cholesky route, re-pinned per trial by the StudySpec's
+  # backend_policy. NOTE this differs from the committed `configs/50m.yaml`,
+  # which ships `ska_prefix_scan: true` + `ska_backend: cuda_prefix` -- a route
+  # that JIT-compiles a C++ extension and needs ninja on PATH. Every study on
+  # this ladder pins exact_invchol instead, so the comparison is across model
+  # size and not across SKA implementations.
+  ska_prefix_scan: false
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+
+  ska_norm_clip: true
+  ska_norm_clip_c: 4.0
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.0
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+  ska_beta_policy: learned
+
+  compute_precision: bf16
+  ska_precision: fp32
+  tie_embeddings: true
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 1.0e-05
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 2048
+
+# A 3,362M-token trial needs a shard it does not have to loop 34 times. The 3M
+# and 10M studies used `fineweb_small_train` (100M tokens); at this budget that
+# would be 34 epochs, and repetition changes the regime -- the model starts
+# memorising, which confounds architecture with data reuse.
+#
+# !! PRE-LAUNCH GATE !!  This path is a PLACEHOLDER. A >=3.4B-token FineWeb-Edu
+# shard must exist and be named here before launch, and it must be DISJOINT
+# from the eval shard. Ati's branch references /anvil/.../fineweb_3b (3.0B) for
+# exactly this reason at exactly this scale; the Marlowe equivalent has to be
+# located or built. Verified by `experimentation.run.data_verify.verify_data`,
+# which checks tokenizer, mix and n_tokens against the shard's meta.json and
+# refuses to launch on a mismatch.
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix:
+    fineweb: 1.0
+    pg19: 0.0
+    scrolls: 0.0
+  n_tokens: 100000536
+
+optim:
+  # The GEOMETRIC CENTRE of the study's searched `learning_rate` range, and that
+  # coupling is load-bearing rather than cosmetic. The anchors' `lr_factor` is
+  # RELATIVE to this value and is silently CLAMPED into the study's bounds, so a
+  # base LR sitting at the floor of the range makes every factor below 1.0 clamp
+  # to the floor -- the low-LR screen anchors would all resolve to the same point
+  # and the LR main effect would be measured over half its intended span with
+  # nothing in the output saying so.
+  #
+  # sqrt(0.001 * 0.008) = 0.00283, so factors 0.4 .. 2.5 span 0.00113 .. 0.00707
+  # and every one lands inside the range.
+  #
+  # !! RE-CENTRE THIS when the study's learning_rate bounds are filled from the
+  # 10M anchor contrast. It is not an independent choice.
+  #
+  # For scale, the two known points either side of this rung differ 18x, because
+  # scale and horizon move the optimum in the same direction:
+  #     3M,  1,068 steps  -> 5.406e-3  (our measurement, at its ceiling)
+  #     50M, 22,889 steps -> 3.0e-4    (Ati's golden config)
+  lr: 0.00283
+  # 2% of max_steps, the reference protocol's ratio.
+  warmup_steps: 342
+  max_steps: 17100
+  schedule: cosine
+  effective_batch: 96
+  weight_decay: 0.1
+  grad_clip: 1.0
+
+runtime:
+  # 12, by the same argument that forced it at 10M. Memory here is dominated by
+  # the LM head (all-positions logits over a 32K vocab, fp32 cross-entropy) and
+  # SKA's fp32 (B,T,H,r,r) stats, both linear in microbatch. Measured 22.27 GiB
+  # at mb12 for the configs/50m.yaml geometry (rank 24, 6 heads, 4 SKA layers).
+  #
+  # !! PRE-LAUNCH GATE !!  That measurement is NOT the expensive corner. This
+  # space reaches rank 48, 8 heads and 6 SKA layers, which is 8x the SKA term
+  # (6*8*48^2 = 110,592 against 4*6*24^2 = 13,824). Extrapolating the fitted
+  # model puts the corner near 47-49 GiB at mb12 -- fits, but the fit dropped a
+  # backbone term as negligible AT d_model 128 and that will not hold at 384.
+  # Measure the corner with `scripts/gpu_capacity.py` plus a real fwd+bwd before
+  # launch. At 10M this exact check caught a predicted 78.99 GiB against a 79 GiB
+  # card, confirmed by an actual OOM.
+  #
+  # 96 % 12 == 0, so accumulation is 8 and the effective batch is exact.
+  # per_device_batch_size is not hashed into run_id, so it stays free to retune.
+  per_device_batch_size: 12
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: 12:00:00
+  gpu_arch: '9.0'
