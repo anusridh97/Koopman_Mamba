@@ -482,11 +482,35 @@ def _fanout(args, spec, *, gpus, log_dir):
     if log_dir is not None:
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
+    # GPUs per worker, so a trial can run DDP across several cards. Every rung
+    # below this one assigned exactly ONE gpu per worker
+    # (`gpus[index % len(gpus)]`), which silently capped a trial at one card no
+    # matter what `runtime.gpus` said -- LocalLauncher.build_command only builds
+    # `torchrun --nproc_per_node` when `runtime.ddp and runtime.gpus > 1`, and
+    # torchrun cannot use a device the worker cannot see.
+    #
+    # This rung needs more than one. 10B tokens at the expensive corner is 81.2 h
+    # on a single H100 (measured), `batch` caps at 2-00:00:00, and `hero` -- the
+    # only partition long enough -- declares AllowQos=large which this account
+    # does not hold. Multi-GPU is also not a workaround for that cap but a
+    # PREREQUISITE for the production ladder: 3B at 65 tok/param is ~2,236
+    # GPU-h, which is 93 days on one card and 3.9 on 24.
+    #
+    # Integer division, and the remainder is left IDLE on purpose. Handing the
+    # spare cards to some workers and not others would make trials
+    # systematically unequal in wall-clock, and `analysis.throughput_pareto`
+    # would read that as a property of the sampled geometry.
+    per_worker = max(1, len(gpus) // spec.concurrent_trials) if gpus else 0
+    if gpus and per_worker * spec.concurrent_trials != len(gpus):
+        print(f"[180m-joint] WARNING {len(gpus)} GPUs / "
+              f"{spec.concurrent_trials} workers leaves "
+              f"{len(gpus) - per_worker * spec.concurrent_trials} idle")
     for index in range(spec.concurrent_trials):
         env = {**os.environ, WORKER_ENV: str(index),
                OPTUNA_WORKER_ENV: str(index)}
         if gpus:
-            env["CUDA_VISIBLE_DEVICES"] = gpus[index % len(gpus)]
+            mine = gpus[index * per_worker:(index + 1) * per_worker]
+            env["CUDA_VISIBLE_DEVICES"] = ",".join(mine)
         cmd = [sys.executable, str(Path(__file__).resolve()), args.study]
         if args.allow_dirty:
             cmd.append("--allow-dirty")
