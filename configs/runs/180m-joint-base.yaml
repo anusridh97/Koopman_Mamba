@@ -26,39 +26,52 @@
 # At 640 the tied 32K embedding is 11.2% of the total, against 24% at 50M and
 # 40% at 10M -- most of the budget is finally in the backbone.
 #
-# ## Token accounting -- OFF the ray, and forced there by a QOS quota
+# ## Token accounting -- 10B, reached by running each trial on FOUR GPUs
 #
-#   96 sequences/update * 2048 tokens * 26300 updates = 5,170,790,400 tokens
+#   96 sequences/update * 2048 tokens * 50862 updates = 9,999,986,688 tokens
 #
-# 28.3 tokens per TOTAL parameter, against 70 / 65.4 / 65.0 at 3M / 10M / 50M,
-# and against the 10B (54.7 tok/param) this rung was designed for. The reason is
-# administrative, not scientific, and should not be dressed up as if it were:
+# 54.7 tokens per TOTAL parameter, against 70 / 65.4 / 65.0 at 3M / 10M / 50M.
+# 10B is both the Scaling_Echo_3B Phase 2c floor and the Echo paper's own 180M
+# budget, so this rung is directly comparable to published numbers. It is 0.96
+# epochs of the 10.40B shard.
 #
-#   THE `hero` PARTITION IS UNAVAILABLE TO THIS ACCOUNT. It is the only
-#   partition whose walltime (30 days) accommodates a 10B-token trial here, and
-#   it declares AllowQos=large. This association holds only `medium` and
-#   `normal`, so BOTH `--qos=medium` and `--qos=large` are rejected with
-#   "Invalid qos specification" (verified with `sbatch --test-only`). `batch`
-#   caps at 2-00:00:00, and at 10B the rank-48 anchor is 63.8 h and the worst
-#   cell 81.2 h -- both would be killed by walltime.
+# ## Why ddp/gpus, and why it is not a workaround
 #
-# 26,300 steps is the largest horizon whose WORST cell (d_state 32, nska 6,
-# heads 4, rank 48, measured 34,213 tok/s) finishes in 42 h, leaving 6 h of the
-# 48 h cap for startup, checkpointing and the final eval.
+# 10B at the expensive corner is 81.2 h on ONE H100 (measured). `batch` caps at
+# 2-00:00:00 and `hero` -- the only partition long enough -- declares
+# AllowQos=large, which this account does not hold. So a single-GPU trial cannot
+# reach this horizon at all.
 #
-# !! TO RESTORE 10B once AllowQos=large (or hero access) is granted for
-# marlowe-m000151-pm06: set max_steps 26300 -> 50862, warmup_steps 526 -> 1017,
-# the study's trial_timeout_seconds 158400 -> 396000, and the sbatch files'
-# partition to hero with --time=5-00:00:00. Nothing else changes.
+# But multi-GPU is a PREREQUISITE for the production ladder regardless, not a
+# dodge around a scheduler. At 65 tok/param:
 #
-# For an L(N,D) = E + A*N^-alpha + B*D^-beta fit this D is simply DATA, and a
-# point well off the ray is genuinely USEFUL there -- on a single ray only a
-# composite exponent is identifiable. What it costs is best-to-best
-# comparability with the rungs below, which all sit at 65-70 tok/param, and
-# the 10B floor the Scaling_Echo_3B plan asks for in Phase 2c.
+#     180M    11.9B tokens      45 GPU-h    1.9 days on one card
+#     440M    28.6B            153          6.4 days
+#     1B      65.0B            481         20   days
+#     3B     195.0B           2236         93   days   <- 3.9 days on 24
 #
-# The shard is not the binding constraint at this horizon: 5.17B of 10.40B is
-# 0.50 epochs.
+# Everything past this rung is unreachable single-GPU, so 180M is the cheapest
+# place to build and validate the path.
+#
+# MEASURED DDP scaling on the expensive corner, effective batch held at 96:
+#
+#     world  accum  peak GiB     tok/s   h for 10B   efficiency
+#       1      8      58.66     34,229      81.2        --
+#       2      4      59.35     68,227      40.7      99.7%
+#       4      2      59.35    135,953      20.4      99.3%
+#       8      1      58.66    265,277      10.5      96.9%
+#
+# 4 is chosen over 8 for WALL-CLOCK, not per-trial speed. 8 GPUs/trial makes a
+# trial 10.5 h but leaves only one concurrent trial per node, so 24 trials is 8
+# sequential waves. 4 GPUs/trial gives 2 concurrent trials per node -- 6 across
+# three nodes, 4 waves -- and a 20.4 h worst trial that clears the 48 h job cap
+# with 57% margin.
+#
+# !! NOTE FOR 3B: this is DDP, so every rank holds a FULL model copy and peak
+# memory per card is flat across world size (58.66 -> 59.35 GiB above). That is
+# fine at 180M. At 3B, weights + fp32 master + Adam m/v is ~39 GiB per rank
+# BEFORE activations, so the production ladder will need sharding (FSDP/ZeRO),
+# not DDP. Do not read this table as evidence that 3B scales the same way.
 #
 # ## Throughput and memory, MEASURED on this base geometry
 #
@@ -233,8 +246,8 @@ optim:
   # be catastrophic (+0.16177, 16x the resolvable threshold).
   lr: 0.00212
   # 2% of max_steps, the reference protocol's ratio.
-  warmup_steps: 526
-  max_steps: 26300
+  warmup_steps: 1017
+  max_steps: 50862
   schedule: cosine
   effective_batch: 96
   weight_decay: 0.1
@@ -280,8 +293,10 @@ runtime:
   seed: 42
   deterministic: true
   precision: bf16
-  ddp: false
-  gpus: 1
+  # 4-GPU DDP per trial; see the token-accounting note above. RuntimeSpec is
+  # NOT hashed into run_id, so this does not change any run's identity.
+  ddp: true
+  gpus: 4
   nodes: 1
   partition: batch
   account: marlowe-m000151-pm06

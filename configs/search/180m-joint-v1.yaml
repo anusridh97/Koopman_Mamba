@@ -41,7 +41,7 @@ name: 180m-joint-v1
 base: configs/runs/180m-joint-base.yaml
 
 n_trials: 24
-max_steps: 26300
+max_steps: 50862
 
 # ------------------------------------------------------------------ sampler
 sampler: random
@@ -71,7 +71,7 @@ prune_startup_trials: 6
 # enough that warmup (171-1026 steps at the searched ratios) is long past, which
 # matters because pruning inside the transient would rank how fast a config warms
 # up rather than how good it is, on a study that searches warmup_ratio.
-prune_after_step: 9205
+prune_after_step: 17800
 logging_steps: 25
 
 # ------------------------------------------------------------------- fleet
@@ -87,7 +87,15 @@ logging_steps: 25
 # enqueue the reference group, and duplicated replicates under `deterministic:
 # true` drive sigma toward zero and make every effect look "resolved".
 launcher: local
-concurrent_trials: 8
+# 2, NOT 8 -- each trial takes FOUR GPUs via DDP, so an 8-GPU node runs two
+# trials at once. The driver slices `visible_gpus()` as
+# `len(gpus) // concurrent_trials`, so this number and `runtime.gpus` must
+# multiply to the node's GPU count or cards sit idle (the driver warns).
+#
+# 4 GPUs/trial beats 8 on WALL-CLOCK even though 8 makes each trial faster:
+# 8 leaves one concurrent trial per node and turns 24 trials into 8 sequential
+# waves, where 4 gives 6 concurrent across three nodes and 4 waves.
+concurrent_trials: 2
 seed: 2026
 direction: minimize
 
@@ -270,38 +278,27 @@ run_root: /scratch/m000151-pm06/cqiu/study-180m-joint-v1
 # spec's own training data, which would make this a training-loss ranking.
 eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
 
-# 44 hours, and the ceiling is the PARTITION, not the physics.
+# 28 hours. Set from the MEASURED 4-GPU corner, with margin for the axis the
+# cost model cannot see.
 #
-# Measured, one H100, mb12, exact_invchol, d_model 640:
-#
+# Single-GPU, mb12, exact_invchol, d_model 640:
 #     base   (ds24 nska4 H4 rank24)   38.00 GiB   73,766 tok/s
-#     base   at mb6                   20.56 GiB   66,339 tok/s
-#     corner (ds32 nska6 H4 rank48)   58.66 GiB   34,213 tok/s
-#     corner at mb6                   30.91 GiB   32,523 tok/s
+#     corner (ds32 nska6 H4 rank48)   58.66 GiB   34,213 tok/s   -> 81.2 h at 10B
 #
-# The earlier 59.9 h estimate came from `configs/180m.yaml` (d_state 128 / heads
-# 10 / nska 6), which is NOT this base -- ours is 1.59x faster because
-# d_state 128 -> 24 removes a lot of Mamba-2 state work.
+# DDP on the corner, effective batch held at 96 (world / tok/s / h for 10B):
+#     1 -> 34,229 -> 81.2    2 -> 68,227 -> 40.7
+#     4 -> 135,953 -> 20.4   8 -> 265,277 -> 10.5
 #
-# At the 26,300-step horizon those give 19.5 h (base) and 42.0 h (worst cell).
-# 44 h is a 5% margin over the worst cell and sits under `batch`'s 48 h
-# walltime, which is the real constraint: `hero` (30-day cap) declares
-# AllowQos=large and this account holds only medium/normal, so a 10B-token
-# trial -- 81.2 h at the worst cell -- cannot be run at all until that is
-# granted.
+# 99.3% efficiency at world 4, so the corner is 20.4 h and 28 h is a 37% margin.
+# That margin is doing real work: the cost model interpolates s/token against
+# the SKA term only, and although d_state turned out to be nearly free at this
+# width (ds32/nska4/H4/rank24 measured 75,106 tok/s against the base's 73,766),
+# `mamba_expand` and `depth_tier` are still unmeasured and both move FLOPs.
 #
-# Memory: 58.66 GiB at the corner leaves ~20 GiB on a 79 GiB card, so mb12
-# stands. Peak is linear in microbatch with ~zero intercept (38.00/12 = 3.17,
-# 20.56/6 = 3.43), and the corner is COMPUTE-bound (mb6 within 5% of mb12), so
-# halving the microbatch would buy memory nearly free if it were needed.
-#
-# CAVEAT, and the margin here is thin: these h/trial figures interpolate
-# s/token against the SKA term (nska * heads * rank^2) through the two measured
-# cells, so they IGNORE `d_state` -- a macro axis reaching 32 whose effect is
-# large (128 -> 24 was that 1.59x). Cells at d_state 32 run slower than the
-# interpolation says, and a trial killed at 44 h is thrown away entirely
-# because `wait_for_objective` CANCELS on timeout.
-trial_timeout_seconds: 158400
+# The timeout must also stay comfortably under the JOB walltime (48 h on
+# `batch`): `wait_for_objective` CANCELS on timeout, and a trial killed by the
+# job ending is a trial thrown away.
+trial_timeout_seconds: 100800
 
 # On, but NOT the safety net: it fires only on a synchronous submit() raise, and
 # a training OOM is asynchronous -- 1,963 of 1,963 trials at 3M ran at the
