@@ -42,13 +42,21 @@
 #      composite exponent is identifiable, and separating alpha from beta is
 #      what the 440M/1B/3B extrapolation requires.
 #
-# ## Throughput and memory, measured on configs/180m.yaml
+# ## Throughput and memory, MEASURED on this base geometry
 #
-# 46,372 tok/s and 45.2 GiB at microbatch 12 on one H100, exact_invchol, for
-# d_model 640 / depth 25 / rank 24 / heads 10 / nska 6. That is 59.9 h per
-# 10B-token trial. See the PRE-LAUNCH GATE on the corner below: this space
-# reaches rank 48 with heads 4 and nska 6, a 1.6x SKA term, which extrapolates
-# to ~50 GiB but has not been measured.
+# 73,766 tok/s and 38.00 GiB at microbatch 12 on one H100, exact_invchol, for
+# d_model 640 / depth 27 / d_state 24 / rank 24 / heads 4 / nska 4. That is
+# 37.7 h per 10B-token trial.
+#
+# Do NOT use the `configs/180m.yaml` figures (46,372 tok/s, 45.2 GiB) for this
+# rung: that config is d_state 128 / heads 10 / nska 6, and the d_state
+# difference alone makes it 1.59x SLOWER than this base. Measuring the actual
+# base geometry moved the study's cost estimate from 2.5 days to 1.6.
+#
+# The expensive corner of this space (d_state 32, nska 6, heads 4, rank 48) was
+# measured too: 58.66 GiB and 34,213 tok/s = 81.2 h/trial. That fits mb12 with
+# ~20 GiB spare, and it is why the study runs on `hero` -- 81.2 h exceeds
+# `batch`'s 2-day walltime cap.
 name: 180m-joint-base
 model:
   d_model: 640
@@ -205,7 +213,7 @@ optim:
   # Ati's value sits BELOW this study's floor deliberately: scaled by width from
   # the 10M measurement, 3e-4 lands in the region the `lr-0.4x` anchor showed to
   # be catastrophic (+0.16177, 16x the resolvable threshold).
-  lr: 0.0016   # !! OPEN -- see the PRE-LAUNCH GATE below
+  lr: 0.00212
   # 2% of max_steps, the reference protocol's ratio.
   warmup_steps: 1017
   max_steps: 50862

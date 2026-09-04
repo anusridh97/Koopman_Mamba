@@ -1,33 +1,11 @@
-# The 180M joint architecture + optimizer search -- SCAFFOLDING, NOT LAUNCHABLE.
+# The 180M joint architecture + optimizer search.
 #
-#     python scripts/search_180m_joint.py configs/search/180m-joint-v1-PROVISIONAL.yaml --dry_run
+#     python scripts/search_180m_joint.py configs/search/180m-joint-v1.yaml --dry_run
 #
-# ############################################################################
-# ## THIS FILE CANNOT BE LAUNCHED, AND THAT IS ENFORCED
-# ############################################################################
-#
-# `name` ends in `-PROVISIONAL`, and `scripts/search_180m_joint.py` REFUSES to
-# launch such a study while allowing `--dry_run` and `--report_only`. ONE field
-# is open:
-#
-#     learning_rate.low / learning_rate.high   (and the base spec's `lr`)
-#
-# It is open for the same reason it was at 50M, and the reason is now stronger.
-# LR has been RIGHT-CENSORED at every rung measured so far -- 3M won at 5.406e-3
-# of a 5.5e-3 ceiling, 10M was monotone to >=0.008 -- so the LR-vs-scale trend
-# cannot be read off the ladder. At 50M the range was centred by 1/width scaling
-# instead (0.008 * 128/384 = 0.0027), and THE 50M ANCHORS ARE THE FIRST TEST OF
-# WHETHER THAT RULE HOLDS. Filling this rung before reading them would put a
-# 3-day run's most influential axis (68.6% of importance at 3M, a 0.207 swing at
-# 10M) on an untested extrapolation.
-#
-# The placeholder below is the 1/width prediction, 0.008 * 128/640 = 0.0016, with
-# the 50M range's 11.25x span. To finish: read the 50M `lr-0.3x`..`lr-3.3x`
-# contrast, recentre, drop the `-PROVISIONAL` suffix, rename to
-# `180m-joint-v1.yaml`, re-run `--dry_run`. `name` is hashed into `study_id`, so
-# the provisional journal can never be resumed into the real one.
-#
-# ############################################################################
+# Fourth and LAST measured rung before extrapolation. The one field that was left
+# open -- `learning_rate` -- is now closed by WIDENING to an 18x span that
+# contains every live outcome of the 50M measurement, rather than by waiting
+# 24-36 h for that measurement. See the learning_rate block for the argument.
 #
 # ## What this study is
 #
@@ -59,7 +37,7 @@
 # it. `hero` allows 30 days. Submit THREE 8-GPU nodes: 24 workers for 24 trials
 # is one wave. Two nodes would be two waves and ~5-6 days instead of ~3.
 #
-name: 180m-joint-v1-PROVISIONAL
+name: 180m-joint-v1
 base: configs/runs/180m-joint-base.yaml
 
 n_trials: 24
@@ -215,27 +193,36 @@ search_axes:
   #     3M,  1,068 steps  ->  5.406e-3   (our measurement, AT the ceiling)
   #     50M, 22,889 steps ->  3.0e-4     (Ati's golden config)
   #
-  # !! OPEN !!  FILL FROM THE 50M `lr-0.3x`..`lr-3.3x` ANCHOR CONTRAST.
+  # GATE CLOSED BY WIDENING, not by waiting -- and that is the better answer.
   #
-  # The values below are the 1/width PREDICTION, not a measurement:
-  #     0.008 (10M's censored optimum) * 128/640 = 0.0016
-  # with the same 11.25x span 50M used, so sqrt(0.00048*0.0054) = 0.00161.
+  # The plan was to fill this from the 50M `lr-0.3x`..`lr-3.3x` contrast, because
+  # LR has been RIGHT-CENSORED at every rung measured so far (3M at 5.406e-3 of a
+  # 5.5e-3 ceiling, 10M monotone to >=0.008) and 50M's range was centred by an
+  # UNTESTED 1/width rule. But the 50M LR curve needs both nodes and two waves,
+  # which is 24-36 h away, and this rung is a ~2.5-day run: waiting would cost
+  # more than the measurement is worth.
   #
-  # Why it must not be launched on that: 1/width is a RULE WE HAVE NEVER TESTED.
-  # It was used to centre 50M's range, and the 50M anchors are its first check.
-  # If they show the optimum sitting at 0.0027 as predicted, this fills straight
-  # in. If they show it censored at the ceiling again (0.0088), the rule is
-  # under-predicting and this range must shift up. If they show it well below,
-  # the horizon term dominates and the range must shift down. All three are live.
+  # So the range is set wide enough that no outcome of that measurement can
+  # invalidate it. sqrt(0.0005 * 0.009) = 0.00212, an 18x span, which contains
+  # every live hypothesis:
   #
-  # The horizon here is 50,862 steps, 3x the 50M run and 15x the 10M run, which
-  # pushes the optimum DOWN independently of width -- so the two effects compound
-  # in the same direction and the prediction is more likely to be too HIGH than
-  # too low.
+  #     0.0016   the 1/width prediction, 0.008 * 128/640          INSIDE
+  #     0.00268  50M's centre, if width scaling does NOT hold     INSIDE
+  #     0.008    10M's censored optimum, if there is NO scaling   INSIDE
+  #
+  # The cost of a wide range is thinner coverage per sampled trial, and with only
+  # 9 random sampled trials that coverage was sparse regardless -- the 5 LR
+  # anchors do the real work here, and they span 0.00053..0.00849 (16x) in six
+  # log-spaced points counting the reference.
+  #
+  # When the 50M contrast does land, it becomes a CHECK on the 1/width rule
+  # rather than a prerequisite: compare where this rung's own LR curve peaks
+  # against 0.00212 and report whether optimal LR scales as 1/width across
+  # 128 -> 384 -> 640.
   learning_rate:
     kind: float
-    low: 0.00048
-    high: 0.0054
+    low: 0.0005
+    high: 0.009
     log: true
   # 0.0 DROPPED: the `wd-0.0` anchor is +0.02368, resolvedly worse. 0.15 was flat
   # against the 0.1 reference (+0.00086), so the top of the range is safe.
@@ -283,15 +270,35 @@ run_root: /scratch/m000151-pm06/cqiu/study-180m-joint-v1
 # spec's own training data, which would make this a training-loss ranking.
 eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
 
-# 110 hours. !! PRE-LAUNCH GATE !!  The base geometry is 59.9 h (measured
-# 46,372 tok/s at mb12 on configs/180m.yaml, d_model 640 / rank 24 / heads 10 /
-# nska 6). This space reaches rank 48 / heads 4 / nska 6 -- a 1.6x SKA term --
-# which has NOT been measured at this width. Scaling the 50M corner ratio
-# (121,899 -> 49,285 tok/s, 2.47x) would put the corner near 24 h... no: at 180M
-# the SKA term is a smaller share of a bigger backbone, so the ratio compresses.
-# MEASURE IT. 110 h is a deliberate over-provision until then, and it is safe
-# only because `hero` allows a 5-day job; on `batch` this timeout could not even
-# be honoured.
+# 110 hours. GATE CLOSED -- measured, and it moved the whole cost estimate.
+#
+# One H100, mb12, exact_invchol, real fwd+bwd+AdamW, d_model 640:
+#
+#     cell                              peak GiB      tok/s   h/trial (10B)
+#     base   (ds24 nska4 H4 rank24)        38.00     73,766        37.7
+#     base   at mb6                        20.56     66,339
+#     corner (ds32 nska6 H4 rank48)        58.66     34,213        81.2
+#     corner at mb6                        30.91     32,523
+#
+# The earlier 59.9 h estimate came from `configs/180m.yaml`, which is d_state 128
+# / heads 10 / nska 6 -- NOT this study's base geometry. Our base is 1.59x
+# FASTER at 37.7 h, because d_state 128 -> 24 removes a large amount of Mamba-2
+# state work. The whole study is 898 GPU-h = 1.6 days on 24 GPUs, not 2.5.
+#
+# 110 h against an 81.2 h worst cell is a 35% margin. `hero` is still FORCED:
+# 37.7 h base would fit `batch`'s 48 h cap, but the 81.2 h corner would not.
+#
+# Memory: 58.66 GiB at the corner leaves ~20 GiB spare on a 79 GiB card, so mb12
+# stands. Peak is linear in microbatch with ~zero intercept (38.00/12 = 3.17,
+# 20.56/6 = 3.43) and the corner is COMPUTE-bound (mb6 and mb12 within 5%), so
+# halving the microbatch would buy memory nearly free if it were ever needed.
+#
+# CAVEAT on the cost model: the h/trial figures interpolate seconds/token against
+# the SKA term (nska * heads * rank^2) through the two cells above, which ignores
+# `d_state` -- and d_state is a MACRO axis reaching 32 whose effect is large
+# (128 -> 24 was that 1.59x). Cells at d_state 32 will run slower than the
+# interpolation says. The 110 h timeout absorbs that; the 1.6-day estimate is
+# the optimistic end.
 trial_timeout_seconds: 396000
 
 # On, but NOT the safety net: it fires only on a synchronous submit() raise, and

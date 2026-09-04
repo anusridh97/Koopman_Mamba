@@ -1,6 +1,6 @@
-# Anchors for `configs/search/180m-joint-v1-PROVISIONAL.yaml`.
+# Anchors for `configs/search/180m-joint-v1.yaml`.
 #
-# 14 anchors against a 24-trial budget. At ~60 h per trial the anchors ARE the
+# 15 anchors against a 24-trial budget. At ~60 h per trial the anchors ARE the
 # deliverable of this rung: 10 sampled trials over 17 dimensions cannot rank
 # anything, whereas 14 one-factor contrasts against a measured floor can say
 # which of a handful of differences are real at 180M.
@@ -77,22 +77,41 @@ designs:
     seed: 46
     reference_group: reference
 
-  # ------------------------------------------------- learning rate (4 points)
-  # Four rather than 50M's five: the budget is 14 anchors, not 24, and LR still
-  # takes the largest share. Factors are relative to the base spec's `lr`, which
-  # is OPEN -- when it is recentred from the 50M contrast, RE-DERIVE this table.
-  - name: lr-0.35x
+  # ------------------------------------------------- learning rate (5 points)
+  # Five rather than four, taking a slot from the sampled budget (15 anchors + 9
+  # sampled), because the study's LR range is deliberately WIDE -- 18x, set to
+  # contain every live outcome of the 50M measurement rather than to bracket a
+  # prediction. A wide range needs more screen points, and LR has been the
+  # dominant axis at every rung (68.6% of importance at 3M, a 0.207 swing at 10M).
+  #
+  # Factors are relative to the base spec's lr of 0.00212 = sqrt(0.0005*0.009),
+  # and are weighted to the HIGH side because the optimum has sat at the ceiling
+  # of its range at both rungs measured so far:
+  #
+  #     0.25x -> 0.00053   (floor 0.0005)   reaches
+  #     0.55x -> 0.00117
+  #     1.00x -> 0.00212                    the reference
+  #     1.60x -> 0.00339
+  #     2.60x -> 0.00552
+  #     4.00x -> 0.00849   (ceil  0.009)    reaches
+  #
+  # Spacing 2.20x / 1.82x / 1.60x / 1.62x / 1.54x -- denser where the answer is
+  # expected to be.
+  - name: lr-0.25x
     placement: late
-    lr_factor: 0.35
-  - name: lr-0.6x
+    lr_factor: 0.25
+  - name: lr-0.55x
     placement: late
-    lr_factor: 0.6
-  - name: lr-1.7x
+    lr_factor: 0.55
+  - name: lr-1.6x
     placement: late
-    lr_factor: 1.7
-  - name: lr-2.9x
+    lr_factor: 1.6
+  - name: lr-2.6x
     placement: late
-    lr_factor: 2.9
+    lr_factor: 2.6
+  - name: lr-4.0x
+    placement: late
+    lr_factor: 4.0
 
   # ------------------------------------------------------- ska_rank (2 points)
   # Floor and ceiling only. Rank has been RESOLVEDLY CLIMBING at every rung
