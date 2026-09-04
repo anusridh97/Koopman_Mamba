@@ -26,21 +26,39 @@
 # At 640 the tied 32K embedding is 11.2% of the total, against 24% at 50M and
 # 40% at 10M -- most of the budget is finally in the backbone.
 #
-# ## Token accounting -- and this rung is DELIBERATELY OFF the 65 tok/param ray
+# ## Token accounting -- OFF the ray, and forced there by a QOS quota
 #
-#   96 sequences/update * 2048 tokens * 50862 updates = 9,999,986,688 tokens
+#   96 sequences/update * 2048 tokens * 26300 updates = 5,170,790,400 tokens
 #
-# 54.7 tokens per TOTAL parameter, against 70 / 65.4 / 65.0 at 3M / 10M / 50M.
-# Two reasons, and the second is the important one:
+# 28.3 tokens per TOTAL parameter, against 70 / 65.4 / 65.0 at 3M / 10M / 50M,
+# and against the 10B (54.7 tok/param) this rung was designed for. The reason is
+# administrative, not scientific, and should not be dressed up as if it were:
 #
-#   1. THE SHARD. 65 tok/param here is 11.46B tokens against a 10.40B shard =
-#      1.10 epochs. 10B is 0.96 epochs, so 10B is what one epoch allows.
-#   2. IT IS WANTED. 10B is the Scaling_Echo_3B floor for Phase 2c AND the Echo
-#      paper's own 180M budget (10B / 50,000 steps), so this rung is directly
-#      comparable to published numbers. And a point OFF the ray is exactly what
-#      an L(N,D) = E + A*N^-alpha + B*D^-beta fit needs: on a single ray only a
-#      composite exponent is identifiable, and separating alpha from beta is
-#      what the 440M/1B/3B extrapolation requires.
+#   THE `hero` PARTITION IS UNAVAILABLE TO THIS ACCOUNT. It is the only
+#   partition whose walltime (30 days) accommodates a 10B-token trial here, and
+#   it declares AllowQos=large. This association holds only `medium` and
+#   `normal`, so BOTH `--qos=medium` and `--qos=large` are rejected with
+#   "Invalid qos specification" (verified with `sbatch --test-only`). `batch`
+#   caps at 2-00:00:00, and at 10B the rank-48 anchor is 63.8 h and the worst
+#   cell 81.2 h -- both would be killed by walltime.
+#
+# 26,300 steps is the largest horizon whose WORST cell (d_state 32, nska 6,
+# heads 4, rank 48, measured 34,213 tok/s) finishes in 42 h, leaving 6 h of the
+# 48 h cap for startup, checkpointing and the final eval.
+#
+# !! TO RESTORE 10B once AllowQos=large (or hero access) is granted for
+# marlowe-m000151-pm06: set max_steps 26300 -> 50862, warmup_steps 526 -> 1017,
+# the study's trial_timeout_seconds 158400 -> 396000, and the sbatch files'
+# partition to hero with --time=5-00:00:00. Nothing else changes.
+#
+# For an L(N,D) = E + A*N^-alpha + B*D^-beta fit this D is simply DATA, and a
+# point well off the ray is genuinely USEFUL there -- on a single ray only a
+# composite exponent is identifiable. What it costs is best-to-best
+# comparability with the rungs below, which all sit at 65-70 tok/param, and
+# the 10B floor the Scaling_Echo_3B plan asks for in Phase 2c.
+#
+# The shard is not the binding constraint at this horizon: 5.17B of 10.40B is
+# 0.50 epochs.
 #
 # ## Throughput and memory, MEASURED on this base geometry
 #
@@ -215,8 +233,8 @@ optim:
   # be catastrophic (+0.16177, 16x the resolvable threshold).
   lr: 0.00212
   # 2% of max_steps, the reference protocol's ratio.
-  warmup_steps: 1017
-  max_steps: 50862
+  warmup_steps: 526
+  max_steps: 26300
   schedule: cosine
   effective_batch: 96
   weight_decay: 0.1

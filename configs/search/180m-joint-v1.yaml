@@ -41,7 +41,7 @@ name: 180m-joint-v1
 base: configs/runs/180m-joint-base.yaml
 
 n_trials: 24
-max_steps: 50862
+max_steps: 26300
 
 # ------------------------------------------------------------------ sampler
 sampler: random
@@ -71,7 +71,7 @@ prune_startup_trials: 6
 # enough that warmup (171-1026 steps at the searched ratios) is long past, which
 # matters because pruning inside the transient would rank how fast a config warms
 # up rather than how good it is, on a study that searches warmup_ratio.
-prune_after_step: 17800
+prune_after_step: 9205
 logging_steps: 25
 
 # ------------------------------------------------------------------- fleet
@@ -270,36 +270,38 @@ run_root: /scratch/m000151-pm06/cqiu/study-180m-joint-v1
 # spec's own training data, which would make this a training-loss ranking.
 eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
 
-# 110 hours. GATE CLOSED -- measured, and it moved the whole cost estimate.
+# 44 hours, and the ceiling is the PARTITION, not the physics.
 #
-# One H100, mb12, exact_invchol, real fwd+bwd+AdamW, d_model 640:
+# Measured, one H100, mb12, exact_invchol, d_model 640:
 #
-#     cell                              peak GiB      tok/s   h/trial (10B)
-#     base   (ds24 nska4 H4 rank24)        38.00     73,766        37.7
-#     base   at mb6                        20.56     66,339
-#     corner (ds32 nska6 H4 rank48)        58.66     34,213        81.2
-#     corner at mb6                        30.91     32,523
+#     base   (ds24 nska4 H4 rank24)   38.00 GiB   73,766 tok/s
+#     base   at mb6                   20.56 GiB   66,339 tok/s
+#     corner (ds32 nska6 H4 rank48)   58.66 GiB   34,213 tok/s
+#     corner at mb6                   30.91 GiB   32,523 tok/s
 #
-# The earlier 59.9 h estimate came from `configs/180m.yaml`, which is d_state 128
-# / heads 10 / nska 6 -- NOT this study's base geometry. Our base is 1.59x
-# FASTER at 37.7 h, because d_state 128 -> 24 removes a large amount of Mamba-2
-# state work. The whole study is 898 GPU-h = 1.6 days on 24 GPUs, not 2.5.
+# The earlier 59.9 h estimate came from `configs/180m.yaml` (d_state 128 / heads
+# 10 / nska 6), which is NOT this base -- ours is 1.59x faster because
+# d_state 128 -> 24 removes a lot of Mamba-2 state work.
 #
-# 110 h against an 81.2 h worst cell is a 35% margin. `hero` is still FORCED:
-# 37.7 h base would fit `batch`'s 48 h cap, but the 81.2 h corner would not.
+# At the 26,300-step horizon those give 19.5 h (base) and 42.0 h (worst cell).
+# 44 h is a 5% margin over the worst cell and sits under `batch`'s 48 h
+# walltime, which is the real constraint: `hero` (30-day cap) declares
+# AllowQos=large and this account holds only medium/normal, so a 10B-token
+# trial -- 81.2 h at the worst cell -- cannot be run at all until that is
+# granted.
 #
-# Memory: 58.66 GiB at the corner leaves ~20 GiB spare on a 79 GiB card, so mb12
+# Memory: 58.66 GiB at the corner leaves ~20 GiB on a 79 GiB card, so mb12
 # stands. Peak is linear in microbatch with ~zero intercept (38.00/12 = 3.17,
-# 20.56/6 = 3.43) and the corner is COMPUTE-bound (mb6 and mb12 within 5%), so
-# halving the microbatch would buy memory nearly free if it were ever needed.
+# 20.56/6 = 3.43), and the corner is COMPUTE-bound (mb6 within 5% of mb12), so
+# halving the microbatch would buy memory nearly free if it were needed.
 #
-# CAVEAT on the cost model: the h/trial figures interpolate seconds/token against
-# the SKA term (nska * heads * rank^2) through the two cells above, which ignores
-# `d_state` -- and d_state is a MACRO axis reaching 32 whose effect is large
-# (128 -> 24 was that 1.59x). Cells at d_state 32 will run slower than the
-# interpolation says. The 110 h timeout absorbs that; the 1.6-day estimate is
-# the optimistic end.
-trial_timeout_seconds: 396000
+# CAVEAT, and the margin here is thin: these h/trial figures interpolate
+# s/token against the SKA term (nska * heads * rank^2) through the two measured
+# cells, so they IGNORE `d_state` -- a macro axis reaching 32 whose effect is
+# large (128 -> 24 was that 1.59x). Cells at d_state 32 run slower than the
+# interpolation says, and a trial killed at 44 h is thrown away entirely
+# because `wait_for_objective` CANCELS on timeout.
+trial_timeout_seconds: 158400
 
 # On, but NOT the safety net: it fires only on a synchronous submit() raise, and
 # a training OOM is asynchronous -- 1,963 of 1,963 trials at 3M ran at the
