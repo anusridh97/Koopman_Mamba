@@ -1,0 +1,130 @@
+# Anchors for `configs/search/180m-joint-v1-PROVISIONAL.yaml`.
+#
+# 14 anchors against a 24-trial budget. At ~60 h per trial the anchors ARE the
+# deliverable of this rung: 10 sampled trials over 17 dimensions cannot rank
+# anything, whereas 14 one-factor contrasts against a measured floor can say
+# which of a handful of differences are real at 180M.
+#
+# ## 1. The noise floor (`reference-k1` .. `reference-k5`)
+#
+# Five evaluations of ONE configuration differing only in `runtime.seed`. Five
+# and not two: relative uncertainty on sigma is ~1/sqrt(2(n-1)), so 71% at n=2,
+# 41% at n=4, 35% at n=5. Five costs 300 GPU-h here, which is a fifth of the
+# whole study -- and it is still the right call, because every magnitude this
+# rung reports is stated against it. Measured sigma was 0.00142 at 3M and
+# 0.00448 at 10M; it has GROWN with scale, so assuming the 10M value would
+# understate the floor.
+#
+# `reference-k1` sets NO `seed:` key -- it inherits the base spec's own seed
+# (42). Writing `seed: 42` explicitly is how you collide with a sibling, which
+# `check_replicates_resolve` catches at --dry_run.
+#
+# ## 2. A one-factor screen, allocated by what actually resolved below
+#
+# Every factor defaults to 1.0 / `baseline`, so a design that sets nothing IS
+# the base config and each entry reads as its diff. Anchors are pruning-exempt
+# because they ARE the reference population a median pruner compares against.
+#
+# The allocation is evidence-driven rather than uniform. `ska_layerscale_init`
+# gets NO anchor: it was inert across its whole range at 10M (all three anchors
+# within 0.005 of reference, threshold 0.0098), so a contrast here would spend
+# 60 GPU-h to re-confirm a null. `beta_policy` likewise gets none: its ordering
+# transferred exactly from 3M to 10M (rho 1.00) but every live level was flat,
+# and the one resolvedly-bad level is already undeclared.
+#
+# ## The clamping check -- RE-DO IT WHEN THE LR RANGE IS FILLED
+#
+# Factors are relative and silently CLAMPED into the study's declared space, so
+# a factor chosen without checking the bounds quietly becomes a smaller move
+# than its name claims, with nothing in the output saying so. The base LR here
+# is OPEN, so this table CANNOT be finalised yet. Against the placeholder base
+# of 0.0016 in [0.00048, 0.0054]:
+#
+#     lr_factor 0.35 -> 0.00056                  reaches
+#     lr_factor 0.6  -> 0.00096                  reaches
+#     lr_factor 1.7  -> 0.00272                  reaches
+#     lr_factor 2.9  -> 0.00464                  reaches
+#
+# !! Verify by RESOLVING every design and printing its value, not by counting
+# them. Clamping is invisible in the "N resolve" line -- that is exactly what
+# hid the base-LR-at-the-floor bug at 50M.
+#
+# ## Why every design repeats `placement: late`
+#
+# `placement` is one of three axes that REFUSE rather than snap (with `power_K`
+# and `beta_policy`), so `placement: baseline` against a study declaring only
+# ['late'] is a hard error at --dry_run.
+
+designs:
+  # ---------------------------------------------------------- the noise floor
+  - name: reference-k1
+    placement: late
+    reference_group: reference
+  - name: reference-k2
+    placement: late
+    seed: 43
+    reference_group: reference
+  - name: reference-k3
+    placement: late
+    seed: 44
+    reference_group: reference
+  - name: reference-k4
+    placement: late
+    seed: 45
+    reference_group: reference
+  - name: reference-k5
+    placement: late
+    seed: 46
+    reference_group: reference
+
+  # ------------------------------------------------- learning rate (4 points)
+  # Four rather than 50M's five: the budget is 14 anchors, not 24, and LR still
+  # takes the largest share. Factors are relative to the base spec's `lr`, which
+  # is OPEN -- when it is recentred from the 50M contrast, RE-DERIVE this table.
+  - name: lr-0.35x
+    placement: late
+    lr_factor: 0.35
+  - name: lr-0.6x
+    placement: late
+    lr_factor: 0.6
+  - name: lr-1.7x
+    placement: late
+    lr_factor: 1.7
+  - name: lr-2.9x
+    placement: late
+    lr_factor: 2.9
+
+  # ------------------------------------------------------- ska_rank (2 points)
+  # Floor and ceiling only. Rank has been RESOLVEDLY CLIMBING at every rung
+  # (10M: 8 +0.0595, 32 -0.0124, 48 -0.0273) and has never turned over, so the
+  # question here is not "which rank" but "is it STILL climbing at 180M" -- two
+  # points answer that and a third would not.
+  - name: rank-8
+    placement: late
+    rank: 8
+  - name: rank-48
+    placement: late
+    rank: 48
+
+  # -------------------------------------------------- n_ska_layers (1 point)
+  # 6 against the base's 4. At 10M this was flat (-0.0053, under the 0.0098
+  # threshold) while 2 was resolvedly worse; 2 is no longer declared, so the
+  # only open question is whether MORE than 4 helps at this width.
+  - name: ska-layers-6
+    placement: late
+    layer_factor: 1.5
+
+  # ---------------------------------------------------- warmup_ratio (1 point)
+  # 0.06 against the base's 0.02. Resolved better at 10M (-0.0105) AT THE
+  # CEILING of its choices, and the horizon here is 15x longer, so if warmup
+  # scales with horizon at all this is the direction it moves.
+  - name: warmup-0.06
+    placement: late
+    warmup_ratio: 0.06
+
+  # ----------------------------------------------------- weight_decay (1 pt)
+  # 0.15 against the base's 0.1. Flat at 10M (+0.0009); carried as the cheapest
+  # way to confirm it stays flat at 3.6x the width rather than assuming it.
+  - name: wd-0.15
+    placement: late
+    weight_decay: 0.15
