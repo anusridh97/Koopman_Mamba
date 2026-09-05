@@ -1,6 +1,7 @@
 """Launcher ABC + LocalLauncher (§3.4). DDP arithmetic as a pure, unit-tested
 function -- replacing pretrain.sh's untested shell division.
 """
+import os
 import sys
 
 import pytest
@@ -104,9 +105,36 @@ def test_local_launcher_build_command_multi_gpu_uses_torchrun(tmp_path):
 
     spec = _shard_spec(ddp=True, gpus=2)   # 96 = 16 * 2 * 3: divides evenly
     cmd = LocalLauncher().build_command(spec, tmp_path)
-    assert cmd[0] == "torchrun"
+    assert cmd[:3] == [sys.executable, "-m", "torch.distributed.run"]
     assert "--nproc_per_node=2" in cmd
     assert "--ddp" in cmd
+
+
+def test_the_ddp_launch_does_not_depend_on_the_PATH(tmp_path):
+    """A DDP command's argv[0] must be a real, absolute, executable file.
+
+    Regression. The DDP branch used to emit the bare string "torchrun", which
+    resolves through PATH at exec time. That console script is installed in the
+    venv's bin/, which is on PATH in an interactive login shell but NOT inside
+    a Slurm job step -- so the 180M study raised
+    `FileNotFoundError: [Errno 2] No such file or directory: 'torchrun'` and
+    lost 25 of 25 trials in 22 seconds.
+
+    Asserting the argv SHAPE is what let that through: a dry run printed a
+    perfectly well-formed `torchrun --standalone --nproc_per_node=4 ...` and the
+    command was still unrunnable. So assert the property that was actually
+    violated -- argv[0] exists and is executable -- rather than its spelling.
+    """
+    from experimentation.run.launchers import LocalLauncher
+
+    # 1, 2, 3, 6: _shard_spec has per_device_batch_size 16, and train_argv
+    # requires effective_batch 96 to be a multiple of 16 * world_size.
+    for gpus in (1, 2, 3, 6):
+        spec = _shard_spec(ddp=True, gpus=gpus) if gpus > 1 else _shard_spec()
+        argv0 = LocalLauncher().build_command(spec, tmp_path)[0]
+        assert os.path.isabs(argv0), f"gpus={gpus}: argv[0] {argv0!r} is not absolute"
+        assert os.path.exists(argv0), f"gpus={gpus}: argv[0] {argv0!r} does not exist"
+        assert os.access(argv0, os.X_OK), f"gpus={gpus}: argv[0] {argv0!r} is not executable"
 
 
 def test_local_launcher_submit_dry_run_does_not_call_subprocess(tmp_path, monkeypatch):

@@ -67,7 +67,11 @@ def test_render_sbatch_multi_gpu_uses_torchrun(tmp_path):
 
     spec = _shard_spec(ddp=True, gpus=2, nodes=1)   # 96 = 16 * 2 * 3: divides evenly
     text = SlurmLauncher().render_sbatch(spec, tmp_path)
-    assert "torchrun" in text
+    # `python -m torch.distributed.run`, which IS torchrun -- that console
+    # script's whole body is `from torch.distributed.run import main`. Spelled
+    # via the absolute interpreter because the bin/ script is not on PATH in a
+    # Slurm step; see test_the_ddp_launch_does_not_depend_on_the_PATH.
+    assert "-m torch.distributed.run" in text
     assert "--nproc_per_node=2" in text
 
 

@@ -244,7 +244,10 @@ optim:
   # Ati's value sits BELOW this study's floor deliberately: scaled by width from
   # the 10M measurement, 3e-4 lands in the region the `lr-0.4x` anchor showed to
   # be catastrophic (+0.16177, 16x the resolvable threshold).
-  lr: 0.00212
+  # sqrt(0.0012 * 0.018) = 0.004648, the geometric centre of the searched range.
+  # Centred deliberately: a base LR sitting ON a boundary silently collapses the
+  # relative anchor factors onto each other, which is the bug caught at 50M.
+  lr: 0.004648
   # 2% of max_steps, the reference protocol's ratio.
   warmup_steps: 1017
   max_steps: 50862

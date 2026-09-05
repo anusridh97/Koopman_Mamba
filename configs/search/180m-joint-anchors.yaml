@@ -37,13 +37,18 @@
 # Factors are relative and silently CLAMPED into the study's declared space, so
 # a factor chosen without checking the bounds quietly becomes a smaller move
 # than its name claims, with nothing in the output saying so. The base LR here
-# is OPEN, so this table CANNOT be finalised yet. Against the placeholder base
-# of 0.0016 in [0.00048, 0.0054]:
+# FINALISED from the completed 50M anchors. Base 0.004648 in [0.0012, 0.018]:
 #
-#     lr_factor 0.35 -> 0.00056                  reaches
-#     lr_factor 0.6  -> 0.00096                  reaches
-#     lr_factor 1.7  -> 0.00272                  reaches
-#     lr_factor 2.9  -> 0.00464                  reaches
+#     lr_factor 0.26 -> 0.001208    floor 0.0012, reaches, no clamp
+#     lr_factor 0.55 -> 0.002556    reaches
+#     lr_factor 1.0  -> 0.004648    the reference
+#     lr_factor 1.7  -> 0.007902    reaches
+#     lr_factor 2.6  -> 0.012085    ABOVE every ceiling tested so far
+#     lr_factor 3.85 -> 0.017895    ceiling 0.018, reaches, no clamp
+#
+# Six log-spaced points, neighbour ratio ~1.7x, spanning 14.8x. Two sit above
+# 9e-3 because the optimum was right-censored at 3M, 10M AND 50M -- see the long
+# note in 180m-joint-v1.yaml. Bracketing it is this rung's job.
 #
 # !! Verify by RESOLVING every design and printing its value, not by counting
 # them. Clamping is invisible in the "N resolve" line -- that is exactly what
@@ -95,23 +100,24 @@ designs:
   #     2.60x -> 0.00552
   #     4.00x -> 0.00849   (ceil  0.009)    reaches
   #
-  # Spacing 2.20x / 1.82x / 1.60x / 1.62x / 1.54x -- denser where the answer is
-  # expected to be.
-  - name: lr-0.25x
+  # Near-uniform ~1.7x spacing rather than densest-in-the-middle. At 50M the
+  # LR curve was still descending at the top anchor, so there is no interior
+  # region to be dense about yet -- the informative points are the two highest.
+  - name: lr-0.26x
     placement: late
-    lr_factor: 0.25
+    lr_factor: 0.26
   - name: lr-0.55x
     placement: late
     lr_factor: 0.55
-  - name: lr-1.6x
+  - name: lr-1.7x
     placement: late
-    lr_factor: 1.6
+    lr_factor: 1.7
   - name: lr-2.6x
     placement: late
     lr_factor: 2.6
-  - name: lr-4.0x
+  - name: lr-3.85x
     placement: late
-    lr_factor: 4.0
+    lr_factor: 3.85
 
   # ------------------------------------------------------- ska_rank (2 points)
   # Floor and ceiling only. Rank has been RESOLVEDLY CLIMBING at every rung

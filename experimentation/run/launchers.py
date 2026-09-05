@@ -196,7 +196,15 @@ class LocalLauncher(Launcher, _ScoresRuns):
         train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume,
                               **self._scoring_kwargs())
         if world_size > 1:
-            return ["torchrun", "--standalone", f"--nproc_per_node={world_size}",
+            # `sys.executable -m torch.distributed.run`, not the bare `torchrun`
+            # console script. The two are identical -- that script's whole body
+            # is `from torch.distributed.run import main; main()` -- but the
+            # binary lives in the venv's bin/ and is NOT on PATH inside a Slurm
+            # worker, so `torchrun` raised FileNotFoundError and failed 25 of 25
+            # trials in seconds. The single-GPU branch below already uses the
+            # absolute sys.executable; this makes the DDP branch agree.
+            return [sys.executable, "-m", "torch.distributed.run",
+                    "--standalone", f"--nproc_per_node={world_size}",
                      "-m", "experimentation.training.train", *train_args]
         return [sys.executable, "-m", "experimentation.training.train", *train_args]
 
@@ -374,7 +382,10 @@ class SlurmLauncher(Launcher, _ScoresRuns):
         train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume,
                               **self._scoring_kwargs())
         if world_size > 1:
-            return ["torchrun", f"--nnodes={spec.runtime.nodes}",
+            # Absolute interpreter, for the reason given in LocalLauncher above:
+            # `torchrun` is not on PATH in a Slurm step.
+            return [sys.executable, "-m", "torch.distributed.run",
+                    f"--nnodes={spec.runtime.nodes}",
                      f"--nproc_per_node={spec.runtime.gpus}",
                      "-m", "experimentation.training.train", *train_args]
         return [sys.executable, "-m", "experimentation.training.train", *train_args]

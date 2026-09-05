@@ -223,14 +223,40 @@ search_axes:
   # anchors do the real work here, and they span 0.00053..0.00849 (16x) in six
   # log-spaced points counting the reference.
   #
-  # When the 50M contrast does land, it becomes a CHECK on the 1/width rule
-  # rather than a prerequisite: compare where this rung's own LR curve peaks
-  # against 0.00212 and report whether optimal LR scales as 1/width across
-  # 128 -> 384 -> 640.
+  # THE 50M CONTRAST LANDED, AND IT REFUTES THE 1/width RULE THIS RANGE WAS
+  # BUILT ON. All 24 50M anchors are COMPLETE (sigma 0.00582, resolvable
+  # 0.01275) and the winner is `lr-3.3x` = 0.008844 -- the TOP of the 50M range,
+  # and the best trial in the whole study. 1/width predicted 0.0027 there. It
+  # undershot by 3.3x.
+  #
+  # Worse, the optimum has now been right-censored at every rung:
+  #
+  #     rung  d_model   ceiling    measured optimum      censored?
+  #      3M      64     5.5e-3        5.406e-3            98% of ceiling
+  #     10M     128     7.5e-3        7.52e-3             AT the ceiling
+  #     50M     384     9.0e-3        8.844e-3            98% of ceiling
+  #
+  # Three for three. So the honest statement is NOT "optimal LR rises with
+  # width" -- that apparent trend is an artefact of my raising the ceiling each
+  # rung. It is "we have never once bracketed the optimum," and every reported
+  # optimum is a LOWER BOUND.
+  #
+  # This rung's job is to end that. The range is set so that the LR curve must
+  # turn over INSIDE it: two anchor points sit above 9e-3, the highest value any
+  # rung has tested. If `lr-3.85x` comes back resolvedly WORSE, the optimum is
+  # bracketed for the first time and the 3M/10M/50M numbers can be reported as
+  # bounds against a known top. If it wins again, that is a real result too --
+  # it says this protocol is LR-limited, not architecture-limited, and that is
+  # the finding to publish rather than a fourth censored ceiling.
+  #
+  # 0.018 is chosen as the ceiling, not higher: it is 2x the highest optimum
+  # ever measured, and the 50,862-step horizon here is 3x the 50M horizon, which
+  # pushes optimal LR DOWN rather than up. Going further would spend anchors on
+  # divergence instead of on the turnover.
   learning_rate:
     kind: float
-    low: 0.0005
-    high: 0.009
+    low: 0.0012
+    high: 0.018
     log: true
   # 0.0 DROPPED: the `wd-0.0` anchor is +0.02368, resolvedly worse. 0.15 was flat
   # against the 0.1 reference (+0.00086), so the top of the range is safe.
