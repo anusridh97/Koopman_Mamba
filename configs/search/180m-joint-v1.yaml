@@ -87,15 +87,21 @@ logging_steps: 25
 # enqueue the reference group, and duplicated replicates under `deterministic:
 # true` drive sigma toward zero and make every effect look "resolved".
 launcher: local
-# 2, NOT 8 -- each trial takes FOUR GPUs via DDP, so an 8-GPU node runs two
-# trials at once. The driver slices `visible_gpus()` as
-# `len(gpus) // concurrent_trials`, so this number and `runtime.gpus` must
-# multiply to the node's GPU count or cards sit idle (the driver warns).
+# 1. Each JOB is a 4-GPU allocation running ONE trial via DDP, rather than a
+# whole 8-GPU node running two. Concurrency comes from submitting N jobs.
 #
-# 4 GPUs/trial beats 8 on WALL-CLOCK even though 8 makes each trial faster:
-# 8 leaves one concurrent trial per node and turns 24 trials into 8 sequential
-# waves, where 4 gives 6 concurrent across three nodes and 4 waves.
-concurrent_trials: 2
+# This is a scheduling decision backed by measurement. Whole-node (8-GPU)
+# requests queue badly on `batch`: `180mj-study-b/c` waited ~24 h for nodes
+# while zero nodes had 8 free GPUs, and an `--exclusive` pair never started at
+# all. 4-GPU requests fit the partially-allocated nodes that actually exist and
+# started in SECONDS. Sharing a node costs nothing measurable -- the same cell
+# ran 64.4K tok/s on a shared n28 and 64.1K on an exclusive n30.
+#
+# The driver slices `visible_gpus()` as `len(gpus) // concurrent_trials`, so
+# with 4 visible GPUs this gives one worker owning all four. Capacity can be
+# ADDED MID-FLIGHT by submitting more follower jobs; they clear the anchor
+# barrier and join the same journal.
+concurrent_trials: 1
 seed: 2026
 direction: minimize
 
@@ -304,27 +310,34 @@ run_root: /scratch/m000151-pm06/cqiu/study-180m-joint-v1
 # spec's own training data, which would make this a training-loss ranking.
 eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
 
-# 28 hours. Set from the MEASURED 4-GPU corner, with margin for the axis the
-# cost model cannot see.
+# 33.3 hours. Set from the corrected cost model -- and the correction matters,
+# because the number this replaces came from a probe that did not match the
+# thing it was budgeting.
 #
-# Single-GPU, mb12, exact_invchol, d_model 640:
-#     base   (ds24 nska4 H4 rank24)   38.00 GiB   73,766 tok/s
-#     corner (ds32 nska6 H4 rank48)   58.66 GiB   34,213 tok/s   -> 81.2 h at 10B
+# THE PROBE WAS 30% OPTIMISTIC. `packing/ddp_probe.py` measured a synthetic
+# loop (one fixed on-device tensor, no dataloader, no weighted CE, no
+# checkpointing) and reported the corner at 135,953 tok/s / 20.4 h for 10B at
+# world 4. Measured through the REAL trainer, the base cell does 10B in 12.3 h
+# at world 4, which puts the corner near 26.6 h -- 30% over the probe.
 #
-# DDP on the corner, effective batch held at 96 (world / tok/s / h for 10B):
-#     1 -> 34,229 -> 81.2    2 -> 68,227 -> 40.7
-#     4 -> 135,953 -> 20.4   8 -> 265,277 -> 10.5
+# MEASURED, real trainer, base cell (ds24 nska4 H4 rank24), 10B tokens:
 #
-# 99.3% efficiency at world 4, so the corner is 20.4 h and 28 h is a 37% margin.
-# That margin is doing real work: the cost model interpolates s/token against
-# the SKA term only, and although d_state turned out to be nearly free at this
-# width (ds32/nska4/H4/rank24 measured 75,106 tok/s against the base's 73,766),
-# `mamba_expand` and `depth_tier` are still unmeasured and both move FLOPs.
+#     world  reported tok/s  tokens/step/rank  s/step  aggregate   10B
+#       1        63.0K          196,608 (a8)    3.12     63.0K    44.1 h
+#       4        56.6K           49,152 (a2)    0.868   226.5K    12.3 h
 #
-# The timeout must also stay comfortably under the JOB walltime (48 h on
-# `batch`): `wait_for_objective` CANCELS on timeout, and a trial killed by the
-# job ending is a trial thrown away.
-trial_timeout_seconds: 100800
+# NOTE the trap in that table: `loop.py:214` does `tokens_seen += ids.numel()`
+# on the LOCAL microbatch and prints under `is_main`, so the trainer's tok/s is
+# PER-RANK. It barely moves between world 1 and world 4 while wall-clock for
+# the same 60 steps went 3:50 -> 1:18. Reading that figure as aggregate makes
+# multi-GPU look useless; it is a 3.59x speedup.
+#
+# So: worst ANCHOR (rank-48) ~20.8 h at world 4; worst SAMPLED cell (the full
+# corner, ds32 nska6 rank48) ~26.6 h. 33.3 h leaves 25% over the corner, and
+# stays under the 48 h `batch` cap so a trial is not killed by the job ending
+# (`wait_for_objective` CANCELS on timeout, and a walltime-killed trial is a
+# thrown-away trial).
+trial_timeout_seconds: 120000
 
 # On, but NOT the safety net: it fires only on a synchronous submit() raise, and
 # a training OOM is asynchronous -- 1,963 of 1,963 trials at 3M ran at the
