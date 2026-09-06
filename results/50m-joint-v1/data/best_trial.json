@@ -1,0 +1,27 @@
+{
+  "study_name": "50m-joint-v1",
+  "trial_number": 50,
+  "objective": 2.7586970031261444,
+  "params": {
+    "mamba_expand": 3,
+    "depth_tier": "full",
+    "d_state": 32,
+    "ska_n_heads": 4,
+    "ska_rank": 48,
+    "n_ska_layers": 4,
+    "placement": "late",
+    "ska_ridge": 0.00755455954163963,
+    "ska_layerscale_init": 0.010941294834499503,
+    "norm_clip_multiplier": 1.0,
+    "gamma_value": 1.0,
+    "ska_power_K": 1,
+    "beta_policy": "learned",
+    "learning_rate": 0.004830443538500505,
+    "weight_decay": 0.1,
+    "warmup_ratio": 0.02,
+    "grad_clip": 1.0
+  },
+  "run_id": "8e035888",
+  "run_dir": "/scratch/m000151-pm06/cqiu/study-50m-joint-v1/50m-joint-v1.38381e90/seed42.8e035888",
+  "anchor": null
+}

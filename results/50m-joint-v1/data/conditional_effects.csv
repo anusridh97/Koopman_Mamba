@@ -1,0 +1,15 @@
+left,right,interaction_magnitude,signed_magnitude,sign_change,sigmas,resolved,degenerate,thin_levels,conditionals
+learning_rate,ska_rank,0.04163350661595677,0.04163350661595677,False,5.059784458667871,True,False,['8'],8=None/None (n=1); 24=0.05997549494107579/-0.05997549494107579 (n=21); 32=0.01834198832511902/-0.01834198832511902 (n=2); 48=0.02026006579399109/-0.02026006579399109 (n=6)
+ska_rank,n_ska_layers,0.009843489841411035,0.004039216041564764,False,1.1962945465549044,False,False,['3'],3=None/None (n=1); 4=0.02107947202105276/-0.00719676613807696 (n=27); 6=0.011235982179641724/-0.011235982179641724 (n=2)
+ska_rank,ska_ridge,,,False,,,False,"['[0.01406, 0.02056]', '[0.02056, 0.02707]']","[0.007555, 0.01406]=0.014089556251253299/-0.00791642665863046 (n=28); [0.01406, 0.02056]=None/None (n=1); [0.02056, 0.02707]=None/None (n=1)"
+ska_rank,norm_clip_multiplier,,,False,,,True,[],1.0=0.020967911396707617/-0.007580503821372986 (n=30)
+ska_rank,ska_power_K,,,False,,,True,[],1=0.020967911396707617/-0.007580503821372986 (n=30)
+n_ska_layers,ska_layerscale_init,,,False,,,False,"['[0.01893, 0.07164]', '[0.07164, 0.2712]']","[0.005, 0.01893]=0.012371018528938293/-0.012371018528938293 (n=26); [0.01893, 0.07164]=None/None (n=1); [0.07164, 0.2712]=None/None (n=3)"
+n_ska_layers,placement,,,False,,,True,[],late=0.012371018528938293/-0.012371018528938293 (n=30)
+ska_ridge,ska_power_K,,,False,,,True,[],1=0.0269811259848729/-0.008916239653314673 (n=30)
+ska_layerscale_init,learning_rate,,,False,,,False,"['[0.000804, 0.001788]', '[0.003977, 0.008844]']","[0.000804, 0.001788]=None/None (n=2); [0.001788, 0.003977]=0.0006622562282965205/-0.0006622562282965205 (n=23); [0.003977, 0.008844]=None/None (n=5)"
+ska_power_K,gamma_value,,,False,,,True,['1.0'],1.0=None/None (n=30)
+ska_ridge,ska_layerscale_init,,,False,,,False,"['[0.01893, 0.07164]', '[0.07164, 0.2712]']","[0.005, 0.01893]=0.02721385285258293/-0.009148966521024704 (n=26); [0.01893, 0.07164]=None/None (n=1); [0.07164, 0.2712]=None/None (n=3)"
+gamma_value,norm_clip_multiplier,,,False,,,True,['1.0'],1.0=None/None (n=30)
+learning_rate,n_ska_layers,,,False,,,False,"['3', '6']",3=None/None (n=1); 4=0.06451318860054034/-0.06451318860054034 (n=27); 6=None/None (n=2)
+learning_rate,ska_power_K,,,False,,,True,[],1=0.06451318860054034/-0.06451318860054034 (n=30)
