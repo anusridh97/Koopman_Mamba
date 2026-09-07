@@ -4,13 +4,103 @@
 # Split by runtime because run/launchers.py:320-333 refuses a Slurm
 # array whose cells differ in gpus/nodes/time_limit.
 #
-# 24 cells, 445 GPU-h,
-# worst cell 48.9 GPU-h = 12.2 h on 4 GPU(s).
+# 36 cells, 632 GPU-h,
+# worst cell 49.8 GPU-h = 12.5 h on 4 GPU(s).
 
 name: scaling-law-v1-ska-g4
 base: configs/runs/scaling/ska-base.yaml
 cells:
-# d_model 448 x32 tok/param  N=62,933,284 (non-emb 48,597,284)  D=2,013,855,744  4.70 GPU-h
+# d_model 256 x64 tok/param  N=17,514,520 (non-emb 9,322,520)  D=1,120,862,208  4.57 GPU-h
+- model.d_model: 256
+  model.n_layers: 13
+  model.ska_layer_indices: [1, 4, 8, 11]
+  optim.lr: 0.002
+  optim.max_steps: 5701
+  optim.warmup_steps: 114
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 256 x64 tok/param  N=17,514,520 (non-emb 9,322,520)  D=1,120,862,208  4.57 GPU-h
+- model.d_model: 256
+  model.n_layers: 13
+  model.ska_layer_indices: [1, 4, 8, 11]
+  optim.lr: 0.0045
+  optim.max_steps: 5701
+  optim.warmup_steps: 114
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 256 x64 tok/param  N=17,514,520 (non-emb 9,322,520)  D=1,120,862,208  4.57 GPU-h
+- model.d_model: 256
+  model.n_layers: 13
+  model.ska_layer_indices: [1, 4, 8, 11]
+  optim.lr: 0.01
+  optim.max_steps: 5701
+  optim.warmup_steps: 114
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 320 x64 tok/param  N=28,401,912 (non-emb 18,161,912)  D=1,817,640,960  7.87 GPU-h
+- model.d_model: 320
+  model.n_layers: 16
+  model.ska_layer_indices: [1, 5, 10, 14]
+  optim.lr: 0.002
+  optim.max_steps: 9245
+  optim.warmup_steps: 185
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 320 x64 tok/param  N=28,401,912 (non-emb 18,161,912)  D=1,817,640,960  7.87 GPU-h
+- model.d_model: 320
+  model.n_layers: 16
+  model.ska_layer_indices: [1, 5, 10, 14]
+  optim.lr: 0.0045
+  optim.max_steps: 9245
+  optim.warmup_steps: 185
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 320 x64 tok/param  N=28,401,912 (non-emb 18,161,912)  D=1,817,640,960  7.87 GPU-h
+- model.d_model: 320
+  model.n_layers: 16
+  model.ska_layer_indices: [1, 5, 10, 14]
+  optim.lr: 0.01
+  optim.max_steps: 9245
+  optim.warmup_steps: 185
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 448 x16 tok/param  N=62,933,284 (non-emb 48,597,284)  D=1,007,026,176  4.80 GPU-h
+- model.d_model: 448
+  model.n_layers: 22
+  model.ska_layer_indices: [1, 7, 14, 20]
+  optim.lr: 0.002
+  optim.max_steps: 5122
+  optim.warmup_steps: 102
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 448 x16 tok/param  N=62,933,284 (non-emb 48,597,284)  D=1,007,026,176  4.80 GPU-h
+- model.d_model: 448
+  model.n_layers: 22
+  model.ska_layer_indices: [1, 7, 14, 20]
+  optim.lr: 0.0045
+  optim.max_steps: 5122
+  optim.warmup_steps: 102
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 448 x16 tok/param  N=62,933,284 (non-emb 48,597,284)  D=1,007,026,176  4.80 GPU-h
+- model.d_model: 448
+  model.n_layers: 22
+  model.ska_layer_indices: [1, 7, 14, 20]
+  optim.lr: 0.01
+  optim.max_steps: 5122
+  optim.warmup_steps: 102
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 448 x32 tok/param  N=62,933,284 (non-emb 48,597,284)  D=2,013,855,744  9.61 GPU-h
 - model.d_model: 448
   model.n_layers: 22
   model.ska_layer_indices: [1, 7, 14, 20]
@@ -20,7 +110,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 448 x32 tok/param  N=62,933,284 (non-emb 48,597,284)  D=2,013,855,744  4.70 GPU-h
+# d_model 448 x32 tok/param  N=62,933,284 (non-emb 48,597,284)  D=2,013,855,744  9.61 GPU-h
 - model.d_model: 448
   model.n_layers: 22
   model.ska_layer_indices: [1, 7, 14, 20]
@@ -30,7 +120,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 448 x32 tok/param  N=62,933,284 (non-emb 48,597,284)  D=2,013,855,744  4.70 GPU-h
+# d_model 448 x32 tok/param  N=62,933,284 (non-emb 48,597,284)  D=2,013,855,744  9.61 GPU-h
 - model.d_model: 448
   model.n_layers: 22
   model.ska_layer_indices: [1, 7, 14, 20]
@@ -40,7 +130,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 448 x64 tok/param  N=62,933,284 (non-emb 48,597,284)  D=4,027,711,488  9.39 GPU-h
+# d_model 448 x64 tok/param  N=62,933,284 (non-emb 48,597,284)  D=4,027,711,488  19.21 GPU-h
 - model.d_model: 448
   model.n_layers: 22
   model.ska_layer_indices: [1, 7, 14, 20]
@@ -50,7 +140,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 448 x64 tok/param  N=62,933,284 (non-emb 48,597,284)  D=4,027,711,488  9.39 GPU-h
+# d_model 448 x64 tok/param  N=62,933,284 (non-emb 48,597,284)  D=4,027,711,488  19.21 GPU-h
 - model.d_model: 448
   model.n_layers: 22
   model.ska_layer_indices: [1, 7, 14, 20]
@@ -60,7 +150,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 448 x64 tok/param  N=62,933,284 (non-emb 48,597,284)  D=4,027,711,488  9.39 GPU-h
+# d_model 448 x64 tok/param  N=62,933,284 (non-emb 48,597,284)  D=4,027,711,488  19.21 GPU-h
 - model.d_model: 448
   model.n_layers: 22
   model.ska_layer_indices: [1, 7, 14, 20]
@@ -70,7 +160,37 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x16 tok/param  N=124,272,646 (non-emb 105,840,646)  D=1,988,296,704  6.96 GPU-h
+# d_model 576 x8 tok/param  N=124,272,646 (non-emb 105,840,646)  D=994,246,656  5.16 GPU-h
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.002
+  optim.max_steps: 5057
+  optim.warmup_steps: 101
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 576 x8 tok/param  N=124,272,646 (non-emb 105,840,646)  D=994,246,656  5.16 GPU-h
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.0045
+  optim.max_steps: 5057
+  optim.warmup_steps: 101
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 576 x8 tok/param  N=124,272,646 (non-emb 105,840,646)  D=994,246,656  5.16 GPU-h
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.01
+  optim.max_steps: 5057
+  optim.warmup_steps: 101
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.time_limit: "1-00:00:00"
+# d_model 576 x16 tok/param  N=124,272,646 (non-emb 105,840,646)  D=1,988,296,704  10.31 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -80,7 +200,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x16 tok/param  N=124,272,646 (non-emb 105,840,646)  D=1,988,296,704  6.96 GPU-h
+# d_model 576 x16 tok/param  N=124,272,646 (non-emb 105,840,646)  D=1,988,296,704  10.31 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -90,7 +210,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x16 tok/param  N=124,272,646 (non-emb 105,840,646)  D=1,988,296,704  6.96 GPU-h
+# d_model 576 x16 tok/param  N=124,272,646 (non-emb 105,840,646)  D=1,988,296,704  10.31 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -100,7 +220,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x32 tok/param  N=124,272,646 (non-emb 105,840,646)  D=3,976,790,016  13.93 GPU-h
+# d_model 576 x32 tok/param  N=124,272,646 (non-emb 105,840,646)  D=3,976,790,016  20.62 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -110,7 +230,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x32 tok/param  N=124,272,646 (non-emb 105,840,646)  D=3,976,790,016  13.93 GPU-h
+# d_model 576 x32 tok/param  N=124,272,646 (non-emb 105,840,646)  D=3,976,790,016  20.62 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -120,7 +240,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x32 tok/param  N=124,272,646 (non-emb 105,840,646)  D=3,976,790,016  13.93 GPU-h
+# d_model 576 x32 tok/param  N=124,272,646 (non-emb 105,840,646)  D=3,976,790,016  20.62 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -130,7 +250,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x64 tok/param  N=124,272,646 (non-emb 105,840,646)  D=7,953,383,424  27.86 GPU-h
+# d_model 576 x64 tok/param  N=124,272,646 (non-emb 105,840,646)  D=7,953,383,424  41.24 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -140,7 +260,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x64 tok/param  N=124,272,646 (non-emb 105,840,646)  D=7,953,383,424  27.86 GPU-h
+# d_model 576 x64 tok/param  N=124,272,646 (non-emb 105,840,646)  D=7,953,383,424  41.24 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -150,7 +270,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 576 x64 tok/param  N=124,272,646 (non-emb 105,840,646)  D=7,953,383,424  27.86 GPU-h
+# d_model 576 x64 tok/param  N=124,272,646 (non-emb 105,840,646)  D=7,953,383,424  41.24 GPU-h
 - model.d_model: 576
   model.n_layers: 29
   model.ska_layer_indices: [1, 10, 18, 27]
@@ -160,7 +280,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x8 tok/param  N=272,692,352 (non-emb 248,116,352)  D=2,181,562,368  12.22 GPU-h
+# d_model 768 x8 tok/param  N=272,692,352 (non-emb 248,116,352)  D=2,181,562,368  12.45 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -170,7 +290,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x8 tok/param  N=272,692,352 (non-emb 248,116,352)  D=2,181,562,368  12.22 GPU-h
+# d_model 768 x8 tok/param  N=272,692,352 (non-emb 248,116,352)  D=2,181,562,368  12.45 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -180,7 +300,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x8 tok/param  N=272,692,352 (non-emb 248,116,352)  D=2,181,562,368  12.22 GPU-h
+# d_model 768 x8 tok/param  N=272,692,352 (non-emb 248,116,352)  D=2,181,562,368  12.45 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -190,7 +310,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x16 tok/param  N=272,692,352 (non-emb 248,116,352)  D=4,363,124,736  24.44 GPU-h
+# d_model 768 x16 tok/param  N=272,692,352 (non-emb 248,116,352)  D=4,363,124,736  24.91 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -200,7 +320,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x16 tok/param  N=272,692,352 (non-emb 248,116,352)  D=4,363,124,736  24.44 GPU-h
+# d_model 768 x16 tok/param  N=272,692,352 (non-emb 248,116,352)  D=4,363,124,736  24.91 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -210,7 +330,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x16 tok/param  N=272,692,352 (non-emb 248,116,352)  D=4,363,124,736  24.44 GPU-h
+# d_model 768 x16 tok/param  N=272,692,352 (non-emb 248,116,352)  D=4,363,124,736  24.91 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -220,7 +340,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x32 tok/param  N=272,692,352 (non-emb 248,116,352)  D=8,726,249,472  48.88 GPU-h
+# d_model 768 x32 tok/param  N=272,692,352 (non-emb 248,116,352)  D=8,726,249,472  49.81 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -230,7 +350,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x32 tok/param  N=272,692,352 (non-emb 248,116,352)  D=8,726,249,472  48.88 GPU-h
+# d_model 768 x32 tok/param  N=272,692,352 (non-emb 248,116,352)  D=8,726,249,472  49.81 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]
@@ -240,7 +360,7 @@ cells:
   runtime.gpus: 4
   runtime.ddp: true
   runtime.time_limit: "1-00:00:00"
-# d_model 768 x32 tok/param  N=272,692,352 (non-emb 248,116,352)  D=8,726,249,472  48.88 GPU-h
+# d_model 768 x32 tok/param  N=272,692,352 (non-emb 248,116,352)  D=8,726,249,472  49.81 GPU-h
 - model.d_model: 768
   model.n_layers: 38
   model.ska_layer_indices: [1, 13, 24, 36]

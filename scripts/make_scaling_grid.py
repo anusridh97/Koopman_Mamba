@@ -94,11 +94,21 @@ FAMILY = dict(vocab_size=32000, max_seq_len=2048, mamba_expand=2, d_state=24,
               ska_beta_policy="learned", ska_layerscale=True,
               ska_layerscale_init=0.01, ska_power_K=1)
 
-# Measured single-GPU throughput, real trainer (not the synthetic probe, which
-# was 30% optimistic): 50M -> 133,937 tok/s median over 24 study trials;
-# 180M -> 63,000 tok/s from job w1b at world 1.
-_N1, _T1 = 51_698_320, 133_937.0
-_N2, _T2 = 182_665_776, 63_000.0
+# Measured throughput AT THIS GRID'S OWN ARCHITECTURE (ska_rank 48).
+#
+# The first version fitted 50M -> 133,937 and 180M -> 63,000 tok/s, both from
+# rank-24-ish configs, giving tok/s ~ N^-0.598. Extrapolated down to N=17.5M
+# that predicted 255,736 tok/s; the pilot MEASURED 68,100 -- 2.9x slower, and
+# the pilot cell ran 35 min against a 12 min estimate.
+#
+# The reason is that rank 48's SKA term is 4x rank 24's
+# (nska*heads*rank^2 = 4*4*2304 = 36,864 against 9,216) and does NOT grow with
+# d_model, so at small widths it dominates and throughput is nearly FLAT in N.
+# Fitting on two points at rank 48 gives an exponent of -0.1224 rather than
+# -0.598. The lesson is the same one the 180M budget taught: calibrate on the
+# configuration you are actually going to run.
+_N1, _T1 = 17_514_520, 68_100.0      # pilot, d_model 256, 1 GPU, measured
+_N2, _T2 = 182_665_776, 51_107.0     # 180M `rank-48` anchor, per-rank at world 4
 _P = math.log(_T1 / _T2) / math.log(_N2 / _N1)
 _K = _T1 * _N1 ** _P
 
