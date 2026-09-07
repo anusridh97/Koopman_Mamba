@@ -1,0 +1,109 @@
+# Base spec for the SKA arm of the scaling-law grid.
+#
+# Every field here that the grid varies is OVERRIDDEN per cell by
+# scripts/make_scaling_grid.py -- specifically model.d_model, model.n_layers,
+# model.ska_layer_indices, optim.lr, optim.max_steps, optim.warmup_steps,
+# runtime.gpus, runtime.ddp and runtime.time_limit. The values below are the
+# d_model=256 cell at 8 tokens/param, so this file is launchable on its own as a
+# smoke test of the whole path.
+#
+# ## Why this is one base spec and not five
+#
+# `sweep/spec.py:154-175` (`_base_sections`) expands the base's `model` block to
+# a full field dict before applying overrides, "even when the base spec names a
+# bare registry model", so `model.<field>` overrides apply uniformly. That means
+# five sizes need one base, not five. Cell keys must be `section.field` --
+# `_parse_axis_key` (spec.py:120-130) requires the dot, so `model: 180m` is not
+# a legal cell key.
+#
+# ## The architecture family, held FIXED so only scale moves
+#
+# d_model / n_layers ~= 20 across every size. An earlier draft solved for round
+# parameter targets instead and produced aspect ratios of 4.4 / 5.8 / 6.1 /
+# 23.3 / 46.2, which would have conflated shape change with scale in the one
+# measurement that must not conflate them.
+#
+#   ska_rank 48        resolved better than 24 at BOTH 10M and 50M
+#   d_state 24         never resolved at any rung (50M variance share 0.123)
+#   ska_n_heads 4      never resolved (50M share 0.008)
+#   4 SKA layers       n_ska never resolved; `ska-layers-6` was flat at 180M
+#   beta_policy learned  the winner's choice at both 10M and 50M
+#   mamba_expand 2     resolved at 50M but only 0.020 spread; held for shape
+#   power_K 1          pinned across the whole ladder
+#
+# ## Backend
+#
+# exact_invchol, spelled out as the three flags rather than via a policy name,
+# matching every *-joint-base.yaml. NOTE this differs from the committed
+# configs/50m.yaml, which ships `ska_prefix_scan: true` + a `cuda_prefix`
+# route that needs ninja at run time.
+name: scaling-ska
+
+model:
+  d_model: 256
+  n_layers: 13
+  vocab_size: 32000
+  max_seq_len: 2048
+  mamba_expand: 2
+  d_state: 24
+  ska_layer_indices: [1, 4, 8, 11]
+  ska_rank: 48
+  ska_n_heads: 4
+  ska_beta_policy: learned
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_power_K: 1
+  ska_prefix_scan: false
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+
+data:
+  kind: shard
+  # The 10B shard. `data_verify.py:100-104` raises if n_tokens disagrees with
+  # the shard's meta.json, so this number is not a guess -- it is the file's.
+  #
+  # Disjoint from the eval set: tok10b's meta.json records
+  # `disjoint_from {"fineweb_small_val": [93773, 97158]}` and the shard begins
+  # at doc 97,159. So `evaluate --mode fineweb_ppl` scores held-out data.
+  shard_dir: /scratch/m000151-pm06/cqiu/tok10b/shard
+  tokenizer: NousResearch/Llama-2-7b-hf
+  mix: {fineweb: 1.0, pg19: 0.0, scrolls: 0.0}
+  n_tokens: 10401294869
+
+optim:
+  # Overridden per cell. 0.0045 is the middle of the LR triple
+  # {0.002, 0.0045, 0.010}, which spans every optimum measured across four
+  # rungs (3M 0.0054, 10M 0.0075, 50M >=0.0088 censored, 180M 0.00256). A
+  # derived rule was rejected: 1/width predicted 0.0027 at 50M against >=0.0088
+  # measured, and the assumption that the optimum keeps rising was refuted at
+  # 180M, where it fell to 0.00256.
+  lr: 0.0045
+  # 2% of max_steps, the repo convention (21/1068, 68/3400, 1017/50862).
+  # Computed per cell by the generator, because `warmup_ratio` does not exist in
+  # the run system -- OptimSpec carries only absolute warmup_steps, and the
+  # ratio conversion lives in the search at sweep/search/space.py:701.
+  warmup_steps: 14
+  max_steps: 713
+  schedule: cosine
+  effective_batch: 96
+  weight_decay: 0.1
+  grad_clip: 1.0
+
+runtime:
+  per_device_batch_size: 12
+  seed: 42
+  # Free: measured 59.7K tok/s with determinism on against 55.9K with it off on
+  # identical 4-GPU runs, so the reproducibility guarantee costs nothing.
+  deterministic: true
+  precision: bf16
+  ddp: false
+  gpus: 1
+  nodes: 1
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 4
+  time_limit: "12:00:00"
+  gpu_arch: "9.0"
