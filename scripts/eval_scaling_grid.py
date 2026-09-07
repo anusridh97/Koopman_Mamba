@@ -68,7 +68,12 @@ def submit(root: Path, account: str, dry: bool) -> int:
           f"{len(done)} already scored, {len(runs)} to score")
     if not runs:
         return 0
-    listing = root / "_eval_queue.txt"
+    # A UNIQUE listing per submission. A fixed path is a race: a second
+    # submission overwrites the file while the first array still has pending
+    # tasks, and those tasks then read the wrong rows -- scoring the wrong
+    # checkpoint, or the same one twice while others are silently skipped.
+    import time as _t
+    listing = root / f"_eval_queue.{int(_t.time())}.txt"
     listing.write_text("\n".join(str(r) for r in runs) + "\n")
     script = root / "_eval.sbatch"
     script.write_text(f"""#!/bin/bash
@@ -85,7 +90,9 @@ set -euo pipefail
 cd {REPO}
 export PYTHONPATH={REPO}:/scratch/m000151-pm06/cqiu/pylibs
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
-RUN=$(sed -n "${{SLURM_ARRAY_TASK_ID}}p" {listing})
+# The listing path arrives in the environment so each submission gets its own
+# immutable file; see the comment where it is written.
+RUN=$(sed -n "${{SLURM_ARRAY_TASK_ID}}p" "${{EVAL_QUEUE:?EVAL_QUEUE not set}}")
 echo "scoring $RUN"
 # --mode fineweb_ppl, NOT ppl: the whole disjoint val shard, no batch cap, and
 # no network. main() writes <run>/eval/final/fineweb_ppl.json by itself.
@@ -98,7 +105,8 @@ exec {VENV} -m experimentation.evaluation.evaluate \\
     if dry:
         print(f"(dry run) would submit array 1-{len(runs)} from {script}")
         return 0
-    out = subprocess.run(["sbatch", "--parsable", f"--account={account}", str(script)],
+    out = subprocess.run(["sbatch", "--parsable", f"--account={account}",
+                          f"--export=ALL,EVAL_QUEUE={listing}", str(script)],
                          capture_output=True, text=True, check=True)
     print(f"submitted eval array {out.stdout.strip()} for {len(runs)} run(s)")
     return 0
