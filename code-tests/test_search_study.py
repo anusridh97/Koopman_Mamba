@@ -306,3 +306,51 @@ def test_create_study_passes_the_study_size_through_to_the_pruner():
                              n_trials=60, logging_steps=10)
         assert study.pruner._n_startup_trials == 6
         assert study.pruner._interval_steps == 10
+
+
+def test_n_single_worker_jobs_get_n_distinct_sampler_seeds(monkeypatch):
+    """Regression: a fleet of separate JOBS, not one supervisor's fanout.
+
+    `worker_id` is the index within one supervisor's fanout, so every
+    independent single-worker job sees index 0. The 180M study ran 16 such jobs
+    and all 16 computed `seed + 0`, drew the identical random stream, and
+    produced 24 sampled trials that were 24 copies of ONE configuration --
+    colliding into two run directories written by 13 different job ids. TPE
+    would have partly masked it via `constant_liar`; `sampler: random` never
+    reads the journal, so nothing repelled the duplicates.
+
+    The offset is what separates the streams. Asserting distinctness rather than
+    a formula, because distinctness is the property that was violated.
+    """
+    from experimentation.sweep.search.study import (
+        SAMPLER_OFFSET_ENV, sampler_seed_for)
+
+    seeds = []
+    for job_ordinal in range(16):
+        monkeypatch.setenv(SAMPLER_OFFSET_ENV, str(job_ordinal * 1000))
+        seeds.append(sampler_seed_for(2026, 0))
+    assert len(set(seeds)) == 16, f"jobs collided on sampler seed: {seeds}"
+
+    # Offsets must be spaced wider than any job's worker count, or two jobs'
+    # worker ranges overlap and the collision comes back inside the fleet.
+    everything = set()
+    for job_ordinal in range(4):
+        monkeypatch.setenv(SAMPLER_OFFSET_ENV, str(job_ordinal * 1000))
+        for worker in range(8):
+            everything.add(sampler_seed_for(2026, worker))
+    assert len(everything) == 32
+
+
+def test_absent_offset_reproduces_the_old_seed_exactly(monkeypatch):
+    """The 3M/10M/50M studies must stay reproducible byte-for-byte."""
+    from experimentation.sweep.search.study import (
+        SAMPLER_OFFSET_ENV, sampler_seed_for)
+
+    monkeypatch.delenv(SAMPLER_OFFSET_ENV, raising=False)
+    assert sampler_seed_for(2026, None) == 2026
+    assert sampler_seed_for(2026, 0) == 2026
+    assert sampler_seed_for(2026, 3) == 2029
+
+    # A malformed marker must not stop a study launching; 0 is the safe answer.
+    monkeypatch.setenv(SAMPLER_OFFSET_ENV, "not-an-int")
+    assert sampler_seed_for(2026, 3) == 2029

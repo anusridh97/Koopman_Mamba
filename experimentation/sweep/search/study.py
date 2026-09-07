@@ -57,6 +57,8 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+import os
+
 import optuna
 
 from koopman_lm.config import KoopmanLMConfig
@@ -66,6 +68,7 @@ from experimentation.sweep.search.studyspec import (
 
 __all__ = ["SAMPLERS", "to_distribution", "to_distributions", "make_sampler",
            "make_pruner", "prune_startup_trials_for", "sampler_seed_for",
+           "SAMPLER_OFFSET_ENV",
            "make_storage", "create_study", "enqueue_anchors", "is_anchor",
            "ANCHOR_ATTR", "SEED_ATTR", "REFERENCE_GROUP_ATTR"]
 
@@ -79,6 +82,11 @@ ANCHOR_ATTR = "anchor_name"
 #: indistinguishable -- so a later change to the base spec's seed would silently
 #: be overridden by a stale value baked into the journal.
 #:
+#: A per-JOB offset added to the sampler seed, for fleets made of N separate
+#: single-worker jobs rather than one supervisor's N-way fanout. See
+#: `sampler_seed_for` for the failure this prevents.
+SAMPLER_OFFSET_ENV = "KOOPMAN_SEARCH_SAMPLER_OFFSET"
+
 #: Not to be confused with `sampler_seed`, which is per-worker and seeds the
 #: PROPOSAL stream. See `sampler_seed_for`.
 SEED_ATTR = "designated_seed"
@@ -130,7 +138,8 @@ def to_distributions(space: Mapping[str, Mapping[str, Any]]
     return {name: to_distribution(decl) for name, decl in space.items()}
 
 
-def sampler_seed_for(seed: int, worker_id: Optional[int]) -> int:
+def sampler_seed_for(seed: int, worker_id: Optional[int], *,
+                     offset: Optional[int] = None) -> int:
     """The SAMPLER's seed for one worker. Never the model's or the data's.
 
     The gap this closes. `_fanout` spawns N identical processes and each builds
@@ -150,8 +159,32 @@ def sampler_seed_for(seed: int, worker_id: Optional[int]) -> int:
     `run_id`s and are still the same experiment. Varying the model seed per
     worker would make every trial's result depend on which worker happened to
     pull it, which is the one thing a search must never do.
+
+    **`worker_id` is scoped to ONE supervisor's fanout, so it is not enough on
+    its own when the fleet is N separate JOBS.** The 180M study ran 16
+    independent single-worker Slurm jobs (`concurrent_trials: 1`, one 4-GPU job
+    per trial, chosen because whole-node requests queued for a day on that
+    cluster). Every one of those jobs was its own supervisor with a worker at
+    index 0, so all 16 computed `seed + 0` and drew the identical stream. With
+    `sampler: random` -- which, unlike TPE with `constant_liar`, never consults
+    the journal -- that produced 24 sampled trials that were 24 copies of ONE
+    configuration, colliding into two run directories written by 13 job ids.
+
+    `SAMPLER_OFFSET_ENV` closes that. Each job exports a distinct offset and the
+    streams separate again. Space the offsets by more than the per-job worker
+    count (the wrappers use multiples of 1000) so two jobs' worker ranges cannot
+    overlap. Absent the variable the offset is 0 and behaviour is byte-identical
+    to before, which is what keeps the 3M/10M/50M studies reproducible.
     """
-    return int(seed) + int(worker_id or 0)
+    if offset is None:
+        raw = os.environ.get(SAMPLER_OFFSET_ENV, "0")
+        try:
+            offset = int(raw)
+        except (TypeError, ValueError):
+            # Same posture as worker_index_from_env: a malformed marker must not
+            # stop a study from launching, and 0 reproduces the old behaviour.
+            offset = 0
+    return int(seed) + int(worker_id or 0) + int(offset)
 
 
 def make_sampler(*, seed: int, concurrent_trials: int = 1,
