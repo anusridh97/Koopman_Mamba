@@ -69,7 +69,12 @@ data:
   # at doc 97,159. So `evaluate --mode fineweb_ppl` scores held-out data.
   shard_dir: /scratch/m000151-pm06/cqiu/tok10b/shard
   tokenizer: NousResearch/Llama-2-7b-hf
-  mix: {fineweb: 1.0, pg19: 0.0, scrolls: 0.0}
+  # EXACTLY the shard's own meta.json, which reads {"fineweb": 1.0} with no
+  # zero entries. `data_verify.py:96` compares the dicts for equality, so the
+  # three-key form copied from 10m-joint-base.yaml (a different shard, whose
+  # meta does carry the zeros) is a hard launch failure. A --dry_run did not
+  # catch this; the pilot run did.
+  mix: {fineweb: 1.0}
   n_tokens: 10401294869
 
 optim:
