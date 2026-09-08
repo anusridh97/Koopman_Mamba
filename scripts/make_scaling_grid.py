@@ -81,6 +81,20 @@ WIDTHS = (256, 320, 448, 576, 768)
 #: Tokens per TOTAL parameter. Brackets Chinchilla's ~20 and our own ray's ~65.
 MULTIPLES = (8, 16, 32, 64)
 
+#: Microbatch per width. 12 everywhere except d_model 768, where all NINE cells
+#: OOM'd on an 80 GiB card at 12. Sized from the observed failure rather than
+#: from `gpu_capacity.training_peak_gib`, which predicted 21.1 GiB of
+#: activations there and was badly wrong -- its fitted model has NO d_model term
+#: (the backbone coefficient came out negative at d128 and was dropped), so it
+#: cannot see that a 38-layer d768 backbone holds far more activation than a
+#: 13-layer d256 one. Working backwards from "OOM at 80 GiB with pdbs 12" puts
+#: activations at >=6.4 GiB per microbatch unit, so 6 lands near 42 GiB with 2x
+#: headroom. `per_device_batch_size` is NOT hashed into run_id, so lowering it
+#: does not change any run's identity -- the same experiment, a different
+#: accumulation split (6 x 4 GPUs x accum 4 = 96, exact).
+PDBS_BY_WIDTH = {768: 6}
+DEFAULT_PDBS = 12
+
 #: The LR triple, applied to every cell. See the docstring for why this is not
 #: derived from a rule.
 LR_POINTS = (0.002, 0.0045, 0.010)
@@ -150,7 +164,8 @@ def build_cells():
                     ska_layer_indices=m["ska_layer_indices"],
                     total=m["total"], non_emb=m["non_emb"],
                     mult=mult, steps=steps, tokens=tokens, warmup=warmup,
-                    lr=lr, gpu_h=gpu_hours(m["total"], tokens)))
+                    lr=lr, gpu_h=gpu_hours(m["total"], tokens),
+                    pdbs=PDBS_BY_WIDTH.get(d_model, DEFAULT_PDBS)))
     return cells, dropped
 
 
@@ -199,6 +214,7 @@ def emit(cells, base: str, name: str, out_dir: Path) -> list[Path]:
                 f"  runtime.gpus: {gpus}",
                 f"  runtime.ddp: {str(gpus > 1).lower()}",
                 f"  runtime.time_limit: \"{tl}\"",
+                f"  runtime.per_device_batch_size: {c['pdbs']}",
             ]
         p = out_dir / f"{name}-g{gpus}.yaml"
         p.write_text("\n".join(lines) + "\n")

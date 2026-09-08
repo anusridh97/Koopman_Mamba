@@ -20,6 +20,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x8 tok/param  N=17,514,520 (non-emb 9,322,520)  D=140,181,504  0.57 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -30,6 +31,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x8 tok/param  N=17,514,520 (non-emb 9,322,520)  D=140,181,504  0.57 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -40,6 +42,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x16 tok/param  N=17,514,520 (non-emb 9,322,520)  D=280,166,400  1.14 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -50,6 +53,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x16 tok/param  N=17,514,520 (non-emb 9,322,520)  D=280,166,400  1.14 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -60,6 +64,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x16 tok/param  N=17,514,520 (non-emb 9,322,520)  D=280,166,400  1.14 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -70,6 +75,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x32 tok/param  N=17,514,520 (non-emb 9,322,520)  D=560,529,408  2.29 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -80,6 +86,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x32 tok/param  N=17,514,520 (non-emb 9,322,520)  D=560,529,408  2.29 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -90,6 +97,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 256 x32 tok/param  N=17,514,520 (non-emb 9,322,520)  D=560,529,408  2.29 GPU-h
 - model.d_model: 256
   model.n_layers: 13
@@ -100,6 +108,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x8 tok/param  N=28,401,912 (non-emb 18,161,912)  D=227,278,848  0.98 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -110,6 +119,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x8 tok/param  N=28,401,912 (non-emb 18,161,912)  D=227,278,848  0.98 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -120,6 +130,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x8 tok/param  N=28,401,912 (non-emb 18,161,912)  D=227,278,848  0.98 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -130,6 +141,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x16 tok/param  N=28,401,912 (non-emb 18,161,912)  D=454,361,088  1.97 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -140,6 +152,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x16 tok/param  N=28,401,912 (non-emb 18,161,912)  D=454,361,088  1.97 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -150,6 +163,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x16 tok/param  N=28,401,912 (non-emb 18,161,912)  D=454,361,088  1.97 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -160,6 +174,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x32 tok/param  N=28,401,912 (non-emb 18,161,912)  D=908,918,784  3.93 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -170,6 +185,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x32 tok/param  N=28,401,912 (non-emb 18,161,912)  D=908,918,784  3.93 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -180,6 +196,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 320 x32 tok/param  N=28,401,912 (non-emb 18,161,912)  D=908,918,784  3.93 GPU-h
 - model.d_model: 320
   model.n_layers: 16
@@ -190,6 +207,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 448 x8 tok/param  N=62,933,284 (non-emb 48,597,284)  D=503,513,088  2.40 GPU-h
 - model.d_model: 448
   model.n_layers: 22
@@ -200,6 +218,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 448 x8 tok/param  N=62,933,284 (non-emb 48,597,284)  D=503,513,088  2.40 GPU-h
 - model.d_model: 448
   model.n_layers: 22
@@ -210,6 +229,7 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
 # d_model 448 x8 tok/param  N=62,933,284 (non-emb 48,597,284)  D=503,513,088  2.40 GPU-h
 - model.d_model: 448
   model.n_layers: 22
@@ -220,3 +240,4 @@ cells:
   runtime.gpus: 1
   runtime.ddp: false
   runtime.time_limit: "12:00:00"
+  runtime.per_device_batch_size: 12
