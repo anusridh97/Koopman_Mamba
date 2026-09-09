@@ -1,7 +1,9 @@
-# scaling-v1-ska-preempt: 13 cells, 8 GPU(s), preempt/normal, limit 03:45:00.
-# Generated for the batch-partition outage; see PI-REPORT open items.
+# scaling-v1-ska-batch-mid: 13 cells, 8 GPU(s), preempt/normal, limit 03:45:00.
+# NOTE: preempt is unreachable for this account -- the partition sets
+# DenyQos=class,medium and `medium` is the only QOS marlowe-m000151-pm06 holds.
+# Parked on batch at 4 GPUs; starts by itself when batch is restored.
 
-name: scaling-v1-ska-preempt
+name: scaling-v1-ska-batch-mid
 base: configs/runs/scaling/ska-base.yaml
 cells:
 # d448 steps 20486 lr 0.002  19.2 GPU-h -> 2.4 h on 8
@@ -12,12 +14,12 @@ cells:
   optim.max_steps: 20486
   optim.warmup_steps: 410
   runtime.per_device_batch_size: 12
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d448 steps 20486 lr 0.0045  19.2 GPU-h -> 2.4 h on 8
 - model.d_model: 448
   model.n_layers: 22
@@ -26,12 +28,12 @@ cells:
   optim.max_steps: 20486
   optim.warmup_steps: 410
   runtime.per_device_batch_size: 12
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d448 steps 20486 lr 0.01  19.2 GPU-h -> 2.4 h on 8
 - model.d_model: 448
   model.n_layers: 22
@@ -40,12 +42,12 @@ cells:
   optim.max_steps: 20486
   optim.warmup_steps: 410
   runtime.per_device_batch_size: 12
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d576 steps 10113 lr 0.01  10.3 GPU-h -> 1.3 h on 8
 - model.d_model: 576
   model.n_layers: 29
@@ -54,12 +56,12 @@ cells:
   optim.max_steps: 10113
   optim.warmup_steps: 202
   runtime.per_device_batch_size: 12
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d576 steps 20227 lr 0.002  20.6 GPU-h -> 2.6 h on 8
 - model.d_model: 576
   model.n_layers: 29
@@ -68,12 +70,12 @@ cells:
   optim.max_steps: 20227
   optim.warmup_steps: 405
   runtime.per_device_batch_size: 12
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d576 steps 20227 lr 0.0045  20.6 GPU-h -> 2.6 h on 8
 - model.d_model: 576
   model.n_layers: 29
@@ -82,12 +84,12 @@ cells:
   optim.max_steps: 20227
   optim.warmup_steps: 405
   runtime.per_device_batch_size: 12
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d576 steps 20227 lr 0.01  20.6 GPU-h -> 2.6 h on 8
 - model.d_model: 576
   model.n_layers: 29
@@ -96,12 +98,12 @@ cells:
   optim.max_steps: 20227
   optim.warmup_steps: 405
   runtime.per_device_batch_size: 12
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d768 steps 11096 lr 0.002  12.5 GPU-h -> 1.6 h on 8
 - model.d_model: 768
   model.n_layers: 38
@@ -110,12 +112,12 @@ cells:
   optim.max_steps: 11096
   optim.warmup_steps: 222
   runtime.per_device_batch_size: 6
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d768 steps 11096 lr 0.0045  12.5 GPU-h -> 1.6 h on 8
 - model.d_model: 768
   model.n_layers: 38
@@ -124,12 +126,12 @@ cells:
   optim.max_steps: 11096
   optim.warmup_steps: 222
   runtime.per_device_batch_size: 6
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d768 steps 11096 lr 0.01  12.5 GPU-h -> 1.6 h on 8
 - model.d_model: 768
   model.n_layers: 38
@@ -138,12 +140,12 @@ cells:
   optim.max_steps: 11096
   optim.warmup_steps: 222
   runtime.per_device_batch_size: 6
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d768 steps 22192 lr 0.002  24.9 GPU-h -> 3.1 h on 8
 - model.d_model: 768
   model.n_layers: 38
@@ -152,12 +154,12 @@ cells:
   optim.max_steps: 22192
   optim.warmup_steps: 444
   runtime.per_device_batch_size: 6
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d768 steps 22192 lr 0.0045  24.9 GPU-h -> 3.1 h on 8
 - model.d_model: 768
   model.n_layers: 38
@@ -166,12 +168,12 @@ cells:
   optim.max_steps: 22192
   optim.warmup_steps: 444
   runtime.per_device_batch_size: 6
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
 # d768 steps 22192 lr 0.01  24.9 GPU-h -> 3.1 h on 8
 - model.d_model: 768
   model.n_layers: 38
@@ -180,9 +182,9 @@ cells:
   optim.max_steps: 22192
   optim.warmup_steps: 444
   runtime.per_device_batch_size: 6
-  runtime.gpus: 8
+  runtime.gpus: 4
   runtime.ddp: true
   runtime.nodes: 1
-  runtime.partition: preempt
-  runtime.qos: normal
-  runtime.time_limit: "03:45:00"
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
