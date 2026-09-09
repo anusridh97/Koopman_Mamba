@@ -1,0 +1,188 @@
+# scaling-v1-ska-preempt: 13 cells, 8 GPU(s), preempt/normal, limit 03:45:00.
+# Generated for the batch-partition outage; see PI-REPORT open items.
+
+name: scaling-v1-ska-preempt
+base: configs/runs/scaling/ska-base.yaml
+cells:
+# d448 steps 20486 lr 0.002  19.2 GPU-h -> 2.4 h on 8
+- model.d_model: 448
+  model.n_layers: 22
+  model.ska_layer_indices: [1, 7, 14, 20]
+  optim.lr: 0.002
+  optim.max_steps: 20486
+  optim.warmup_steps: 410
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d448 steps 20486 lr 0.0045  19.2 GPU-h -> 2.4 h on 8
+- model.d_model: 448
+  model.n_layers: 22
+  model.ska_layer_indices: [1, 7, 14, 20]
+  optim.lr: 0.0045
+  optim.max_steps: 20486
+  optim.warmup_steps: 410
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d448 steps 20486 lr 0.01  19.2 GPU-h -> 2.4 h on 8
+- model.d_model: 448
+  model.n_layers: 22
+  model.ska_layer_indices: [1, 7, 14, 20]
+  optim.lr: 0.01
+  optim.max_steps: 20486
+  optim.warmup_steps: 410
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d576 steps 10113 lr 0.01  10.3 GPU-h -> 1.3 h on 8
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.01
+  optim.max_steps: 10113
+  optim.warmup_steps: 202
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d576 steps 20227 lr 0.002  20.6 GPU-h -> 2.6 h on 8
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.002
+  optim.max_steps: 20227
+  optim.warmup_steps: 405
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d576 steps 20227 lr 0.0045  20.6 GPU-h -> 2.6 h on 8
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.0045
+  optim.max_steps: 20227
+  optim.warmup_steps: 405
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d576 steps 20227 lr 0.01  20.6 GPU-h -> 2.6 h on 8
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.01
+  optim.max_steps: 20227
+  optim.warmup_steps: 405
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d768 steps 11096 lr 0.002  12.5 GPU-h -> 1.6 h on 8
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.002
+  optim.max_steps: 11096
+  optim.warmup_steps: 222
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d768 steps 11096 lr 0.0045  12.5 GPU-h -> 1.6 h on 8
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.0045
+  optim.max_steps: 11096
+  optim.warmup_steps: 222
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d768 steps 11096 lr 0.01  12.5 GPU-h -> 1.6 h on 8
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.01
+  optim.max_steps: 11096
+  optim.warmup_steps: 222
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d768 steps 22192 lr 0.002  24.9 GPU-h -> 3.1 h on 8
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.002
+  optim.max_steps: 22192
+  optim.warmup_steps: 444
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d768 steps 22192 lr 0.0045  24.9 GPU-h -> 3.1 h on 8
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.0045
+  optim.max_steps: 22192
+  optim.warmup_steps: 444
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"
+# d768 steps 22192 lr 0.01  24.9 GPU-h -> 3.1 h on 8
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.01
+  optim.max_steps: 22192
+  optim.warmup_steps: 444
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 8
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: preempt
+  runtime.qos: normal
+  runtime.time_limit: "03:45:00"

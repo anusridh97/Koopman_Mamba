@@ -1,0 +1,90 @@
+# scaling-v1-ska-batch-big: 6 cells, 4 GPU(s), batch/medium, limit 1-00:00:00.
+# Generated for the batch-partition outage; see PI-REPORT open items.
+
+name: scaling-v1-ska-batch-big
+base: configs/runs/scaling/ska-base.yaml
+cells:
+# d576 steps 40453 lr 0.002  41.2 GPU-h -> 10.3 h on 4
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.002
+  optim.max_steps: 40453
+  optim.warmup_steps: 809
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
+# d576 steps 40453 lr 0.0045  41.2 GPU-h -> 10.3 h on 4
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.0045
+  optim.max_steps: 40453
+  optim.warmup_steps: 809
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
+# d576 steps 40453 lr 0.01  41.2 GPU-h -> 10.3 h on 4
+- model.d_model: 576
+  model.n_layers: 29
+  model.ska_layer_indices: [1, 10, 18, 27]
+  optim.lr: 0.01
+  optim.max_steps: 40453
+  optim.warmup_steps: 809
+  runtime.per_device_batch_size: 12
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
+# d768 steps 44384 lr 0.002  49.8 GPU-h -> 12.5 h on 4
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.002
+  optim.max_steps: 44384
+  optim.warmup_steps: 888
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
+# d768 steps 44384 lr 0.0045  49.8 GPU-h -> 12.5 h on 4
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.0045
+  optim.max_steps: 44384
+  optim.warmup_steps: 888
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
+# d768 steps 44384 lr 0.01  49.8 GPU-h -> 12.5 h on 4
+- model.d_model: 768
+  model.n_layers: 38
+  model.ska_layer_indices: [1, 13, 24, 36]
+  optim.lr: 0.01
+  optim.max_steps: 44384
+  optim.warmup_steps: 888
+  runtime.per_device_batch_size: 6
+  runtime.gpus: 4
+  runtime.ddp: true
+  runtime.nodes: 1
+  runtime.partition: batch
+  runtime.qos: medium
+  runtime.time_limit: "1-00:00:00"
