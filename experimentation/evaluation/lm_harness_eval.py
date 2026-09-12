@@ -55,6 +55,31 @@ MODEL_BUILDERS = {
 
 @register_model("koopman")
 class KoopmanEvalWrapper(HFLM):
+    # ---- attributes newer lm-eval reads that HFLM.__init__ would have set ----
+    #
+    # This wrapper deliberately SKIPS HFLM.__init__ (it would try to load a
+    # HuggingFace model) and hand-sets what lm-eval needs. That list was written
+    # against an older lm-eval; 0.4.13 reads ten more, and the first one it hits
+    # raises `AttributeError: 'KoopmanEvalWrapper' object has no attribute
+    # 'enable_thinking'` from inside loglikelihood() -- AFTER the model, the
+    # tokenizer and the task have all loaded successfully, so the failure looks
+    # like a model problem rather than a version skew.
+    #
+    # Declared at CLASS level, not in __init__, so that a future lm-eval reading
+    # yet another attribute fails loudly at that attribute rather than silently
+    # inheriting something wrong. The set was found by diffing every `self.<x>`
+    # in lm_eval/models/huggingface.py against dir(wrapper), not by chasing one
+    # traceback at a time.
+    accelerator = None
+    batch_schedule = 1.0
+    batch_sizes = {}
+    max_batch_size = 64
+    chat_template_args = {}
+    enable_thinking = False          # added in lm-eval 0.4.1x for reasoning models
+    think_end_token = None
+    _config = None
+    config = None
+
 
     AUTO_MODEL_CLASS = transformers.AutoModelForCausalLM
     MODEL_TYPE = "koopman"
@@ -71,6 +96,8 @@ class KoopmanEvalWrapper(HFLM):
         # Skip HFLM.__init__ (it tries to load a HF model), but we need
         # LM.__init__ for the base harness plumbing.
         LM.__init__(self)
+        # HFLM keeps a per-GPU copy; lm-eval's batch scheduler reads it.
+        self.batch_size_per_gpu = int(batch_size) if batch_size else 1
 
         # ------------------------------------------------------------------
         # Attributes that HFLM.__init__ normally sets and that lm-eval
