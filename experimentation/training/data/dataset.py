@@ -3,7 +3,7 @@ dataset_weighted.py -- MemmapPackedDataset with a parallel recall-weight stream.
 
 Drop-in replacement for train_fast.py's MemmapPackedDataset. Reads the
 dual-stream format written by the new pretokenize.py:
-  train.bin    uint16 tokens
+  train.bin    token ids, dtype per meta.json (uint16 or uint32)
   weights.bin  uint8  per-token recall weights (aligned 1:1 with tokens)
 
 __getitem__ returns input_ids, labels, AND loss_weights (the weight aligned to
@@ -32,7 +32,13 @@ class MemmapPackedDataset(Dataset):
         self.seed = seed
         self._epoch_offset = 0
 
-        self.data = np.memmap(bin_path, dtype=np.uint16, mode="r")
+        # Honour the dtype the shard RECORDS rather than assuming uint16.
+        # Llama-3.1's vocab is 128,256, which overflows uint16, so a 128k-vocab
+        # shard is written as uint32 and reading it as uint16 would silently
+        # reinterpret every pair of tokens as one wrong id -- no error, just
+        # garbage. Defaults to uint16 so every existing shard keeps working.
+        token_dtype = np.dtype(meta.get("dtype", "uint16"))
+        self.data = np.memmap(bin_path, dtype=token_dtype, mode="r")
         if os.path.exists(w_path):
             self.weights = np.memmap(w_path, dtype=np.uint8, mode="r")
             assert len(self.weights) == len(self.data), \

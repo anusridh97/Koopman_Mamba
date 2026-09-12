@@ -5,7 +5,7 @@ PARALLEL per-token recall-weight stream (dual-stream format).
 440M rewrite changes:
   * Tokenizer default -> Llama-2 (meta-llama/Llama-2-7b-hf, 32000 vocab; use
     NousResearch/Llama-2-7b-hf for an ungated mirror with the identical
-    tokenizer). uint16 packing still valid (vocab < 65536).
+    tokenizer). Token dtype follows the vocab: uint16 under 64k, else uint32.
   * SCROLLS examples are reformatted as context -> query -> answer; the ANSWER
     span (short answer for QA subtasks, the full summary for summarization
     subtasks) is up-weighted in the recall-weight stream. Everything else gets
@@ -22,7 +22,7 @@ Source mixes (two ways to specify):
       --sources fineweb=0.40 code=0.125 math=0.125 cosmopedia=0.20 scrolls=0.15
 
 Outputs (in --output_dir):
-  train.bin     uint16  flat token ids
+  train.bin     flat token ids, uint16 or uint32 (see meta.json dtype)
   weights.bin   uint8   per-token recall weight (1 normal, RECALL_W on answers)
   meta.json     {n_tokens, vocab_size, tokenizer, dtype, weight_dtype, mix, ...}
 
@@ -48,6 +48,22 @@ from experimentation.training.data.mix import (
 
 RECALL_W = 4          # up-weight factor for SCROLLS answer-span tokens
 WEIGHT_DTYPE = np.uint8
+
+
+def token_dtype_for(vocab_size: int) -> np.dtype:
+    """Smallest unsigned int that can hold every id of `vocab_size`.
+
+    uint16 for the 32k Llama-2 vocab (halves the shard), uint32 for Llama-3.1's
+    128,256 -- which overflows uint16, so the previous hard assert refused it
+    outright. The choice is RECORDED in meta.json and the reader honours it;
+    writing uint32 and reading uint16 would silently fuse every token pair into
+    one wrong id rather than erroring.
+    """
+    if vocab_size <= np.iinfo(np.uint16).max:
+        return np.dtype(np.uint16)
+    if vocab_size <= np.iinfo(np.uint32).max:
+        return np.dtype(np.uint32)
+    raise ValueError(f"vocab {vocab_size} exceeds uint32")
 
 
 def _scrolls_format(ex, subset):
@@ -114,7 +130,7 @@ def write_synthetic_corpus(output_dir, n_tokens=200_000, vocab_size=32000,
     token generation itself -- tokens are drawn from a synthetic RNG, not
     produced by `tokenizer`).
 
-    Produces train.bin (uint16), weights.bin (uint8), meta.json in the exact
+    Produces train.bin (uint16/uint32), weights.bin (uint8), meta.json in the exact
     format MemmapPackedDataset reads. Periodic spans get the recall weight so the
     weighted-CE path is exercised. Used by the end-to-end smoke test so a fresh
     clone can train without downloading FineWeb/PG-19/SCROLLS.
@@ -128,10 +144,10 @@ def write_synthetic_corpus(output_dir, n_tokens=200_000, vocab_size=32000,
     NousResearch/Llama-2-7b-hf (ungated, vocab 32000, matching the default
     vocab_size here).
     """
-    assert vocab_size <= 65535, "uint16 packing requires vocab < 65536"
+    token_dtype = token_dtype_for(vocab_size)
     os.makedirs(output_dir, exist_ok=True)
     rng = np.random.RandomState(seed)
-    tokens = rng.randint(0, vocab_size, size=n_tokens, dtype=np.uint16)
+    tokens = rng.randint(0, vocab_size, size=n_tokens).astype(token_dtype)
     weights = np.ones(n_tokens, dtype=WEIGHT_DTYPE)
     # mark every 500th block of 20 tokens as an "answer span" (recall pressure)
     for s in range(0, n_tokens - 20, 500):
@@ -140,7 +156,7 @@ def write_synthetic_corpus(output_dir, n_tokens=200_000, vocab_size=32000,
     weights.tofile(os.path.join(output_dir, "weights.bin"))
     with open(os.path.join(output_dir, "meta.json"), "w") as f:
         json.dump({"n_tokens": int(n_tokens), "vocab_size": int(vocab_size),
-                   "tokenizer": tokenizer, "dtype": "uint16",
+                   "tokenizer": tokenizer, "dtype": token_dtype.name,
                    "weight_dtype": "uint8", "mix": "synthetic",
                    "recall_weight": int(recall_weight)}, f)
     return output_dir
@@ -219,7 +235,7 @@ def main():
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     eos = tok.eos_token_id if tok.eos_token_id is not None else 0
-    assert len(tok) <= 65535, f"vocab {len(tok)} too big for uint16"
+    token_dtype = token_dtype_for(len(tok))
 
     # ---- resolve the source mix (general --sources overrides legacy --mix) ----
     if a.sources:
@@ -342,7 +358,7 @@ def main():
             # shuffle at document granularity is already done per-source; here we
             # write the shard as-is (flat-mixed). Packing windows are drawn
             # randomly by the dataset, so intra-shard order is not critical.
-            arr = np.asarray(shard_toks, dtype=np.uint16)
+            arr = np.asarray(shard_toks, dtype=token_dtype)
             warr = np.asarray(shard_w, dtype=WEIGHT_DTYPE)
             assert arr.shape == warr.shape
             arr.tofile(fbin); warr.tofile(fw_)
@@ -356,7 +372,8 @@ def main():
 
     meta = {
         "n_tokens": total, "vocab_size": len(tok), "tokenizer": a.tokenizer,
-        "dtype": "uint16", "weight_dtype": "uint8", "recall_weight": a.recall_weight,
+        "dtype": token_dtype.name, "weight_dtype": "uint8",
+        "recall_weight": a.recall_weight,
         "mix": mix, "sources": {k: specs[k]["path"] for k in specs},
         "scrolls_subsets": specs.get("scrolls", {}).get("subsets"),
         "skip_docs": a.skip_docs, "skip_source": a.skip_source,
