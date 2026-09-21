@@ -1,0 +1,175 @@
+================================================================================
+SKA/Koopman 1.7B  --  FineWeb-Edu 100B, Llama-3.1 tokenizer
+Completed 2026-09-20.  Run id f6bf6e86.
+================================================================================
+
+MODEL
+  total parameters          1,688,046,968
+    non-embedding           1,491,045,752
+    embedding (tied)          197,001,216
+  d_model                   1536
+  n_layers                  43
+  vocab_size                128,256  (Llama-3.1; the config as written said
+                                      32,000, and train.py sizes the embedding
+                                      from the tokenizer -- see NOTE 1)
+  max_seq_len               2048
+  d_state                   128
+  d_conv                    4
+  mamba_expand              2
+
+  ska_n_heads               8
+  ska_rank                  32
+  ska_ridge                 0.008
+  ska_power_K               1
+  ska_chunk_size            64
+  ska_layer_indices         [13, 16, 19, 22, 28, 31, 34, 37, 40]   (9 layers)
+  ska_mode                  parallel
+  ska_backend               pytorch
+  ska_inverse_cholesky      true
+  ska_exact_intrachunk      false
+  ska_prefix_scan           false
+  ska_norm_clip             true   (c = 5.656854249492381)
+  ska_eta_value             1.0    (not learnable)
+  ska_gamma_value           1.05   (not learnable)
+  ska_layerscale            true   (init 0.01)
+  ska_out_proj_std          0.02
+  ska_short_conv            false
+  ska_beta_policy           learned   (default; not specified in the config)
+
+  mlp_type                  swiglu
+  mlp_expand                2.667
+  norm_type                 rmsnorm  (eps 1e-5)
+  init_policy               mamba_safe  (initializer_range 0.02,
+                                         rescale_prenorm_residual true)
+  tie_embeddings            true
+  compute_precision         bf16
+  ska_precision             fp32
+
+  parameter breakdown       embedding      197,001,216  (11.7%)
+                            Mamba-2        629,696,816  (37.3%)
+                            SKA             49,683,528  ( 2.9%)
+                            SwiGLU FFN     811,663,872  (48.1%)
+                            final norm           1,536
+
+DATA
+  corpus                    FineWeb-Edu (HuggingFaceFW/fineweb-edu, sample-100BT)
+  tokenizer                 Llama-3.1, vocab 128,256, eos <|end_of_text|>=128001
+  train tokens              100,000,000,000  (uint32, 372.5 GiB)
+  tokens consumed           99,999,547,392  = EXACTLY ONE EPOCH, no repeats
+  held-out set              19,000,089 tokens / 18,022 documents, document-
+                            disjoint from train (docs 0-19,999 reserved)
+  objective                 plain next-token cross-entropy (no recall weighting)
+
+OPTIMIZATION
+  optimizer                 AdamW (fused), betas default, weight_decay 0.1
+  learning rate             1.7e-3, cosine to zero over 190,734 steps
+  warmup                    3,815 steps (2%)
+  grad clip                 1.0
+  effective batch           256 sequences = 524,288 tokens/step
+  max_steps                 190,734
+  precision                 bf16 autocast, fp32 master weights
+  seed                      42, deterministic mode on
+
+COMPUTE
+  hardware                  64x NVIDIA H100 80GB (8 nodes x 8), DDP
+  throughput                6.5K tokens/s/GPU  (~416K tokens/s aggregate)
+  wall clock                68 h across two chunks (48 h + 20 h, exact resume)
+  GPU-hours                 ~4,700
+  stability                 ZERO NaN across all 190,734 steps
+
+================================================================================
+RESULTS
+================================================================================
+
+  FineWeb-Edu held-out perplexity      9.693      (loss 2.2714, 19.0M tokens)
+  final training loss                  2.3298
+
+  Downstream (lm-evaluation-harness, zero-shot)
+    LAMBADA-OpenAI      acc       50.9%      perplexity  10.27
+    HellaSwag           acc_norm  64.2%      (acc 48.3%)
+    PIQA                acc       75.2%      (acc_norm 75.8%)
+    ARC-Easy            acc       76.1%      (acc_norm 72.5%)
+    ARC-Challenge       acc_norm  44.2%      (acc 42.0%)
+    WinoGrande          acc       61.6%
+    -------------------------------------------------------------
+    AVERAGE (6-task)              62.0%      LAMBADA acc, HellaSwag acc_norm,
+                                             PIQA acc, ARC-E acc, ARC-C
+                                             acc_norm, WinoGrande acc
+                                             (Mamba-paper convention)
+
+    BoolQ               acc       64.1%      (reported separately; not part of
+                                             the Mamba six-task average)
+
+  Loss trajectory
+    step      10    11.398   (ppl 89,123)
+    step  20,000     2.648   (ppl 14.1)
+    step  60,000     2.527   (ppl 12.5)
+    step 100,000     2.490   (ppl 12.1)
+    step 135,800     2.503   (ppl 12.2)
+    step 170,000     2.357   (ppl 10.6)
+    step 190,730     2.330   (ppl 10.3)
+
+================================================================================
+NOTES AND CAVEATS
+================================================================================
+
+NOTE 1 -- SIZE LABEL.  Report this as 1.7B, not 1.5B.  The non-embedding body is
+  exactly the specified architecture (1,491,045,752 params).  The config named
+  vocab_size 32,000, which would give 1,540,197,752 total; the only 100B shard
+  available is Llama-3.1, whose 4x larger vocabulary adds 147,849,216 embedding
+  parameters.  Non-embedding count is bit-identical either way.
+
+NOTE 2 -- COMPARISON TO MAMBA-3.  Mamba-3's "1.5B" row is d2048/L48, which at
+  vocab 128,256 is 1,470,627,840 total / 1,207,959,552 non-embedding.  We are
+  +15% on total and +23% on non-embedding parameters, so any favourable
+  comparison is partly a capacity effect and should be stated as such.
+
+NOTE 3 -- PERPLEXITY IS TOKENIZER-DEPENDENT.  The 9.693 figure is comparable
+  only to models using the same Llama-3.1 vocabulary, and is measured on our own
+  held-out split rather than anyone else's.  The downstream accuracies are the
+  tokenizer-independent numbers and are the safer basis for comparison.
+
+NOTE 4 -- TASK PROFILE IS THE FINEWEB-EDU SIGNATURE.  ARC-Easy at 76.1% is high
+  for this scale (Mamba-1.4B on 300B Pile tokens reports ~65%), while LAMBADA at
+  50.9% is lower than that same model (~65%).  This is the expected result of
+  training exclusively on an educational-filtered corpus: the distribution is
+  close to ARC-style science QA and largely excludes the narrative fiction that
+  LAMBADA tests.  Worth stating pre-emptively.
+
+NOTE 5 -- LEARNING RATE WAS NOT SEARCHED AT THIS SCALE.  1.7e-3 was chosen from
+  a least-squares fit through the three interior LR optima of our earlier sweeps
+  (d128 -> 0.00752, d384 -> 0.00483, d640 -> 0.00256; lr ~ 0.167*width^-0.627,
+  giving 0.00168 at d1536).  The curve was stable throughout and the cosine
+  anneal delivered the expected late gain (2.50 -> 2.33 over the final 20%), but
+  this is an extrapolated value, not a measured optimum.
+
+NOTE 6 -- NO MATCHED BASELINE.  Nothing here supports a claim that SKA beats
+  Mamba-2; that requires a control run on the identical protocol.  What our
+  earlier sweeps do establish is that the SKA path is load-bearing WITHIN this
+  architecture: ablating it at evaluation raised loss in 1,262 of 1,262
+  completed trials across four model scales.
+
+NOTE 7 -- WHICH METRIC.  Where a task defines both acc and acc_norm we print
+  both, and the average uses the Mamba-paper convention (acc_norm for HellaSwag
+  and ARC-Challenge, acc elsewhere).  WinoGrande, BoolQ and LAMBADA define only
+  acc in lm-evaluation-harness -- acc_norm length-normalises the candidate
+  log-likelihoods, which is meaningless when the candidates are equal-length by
+  construction (WinoGrande), "no"/"yes" (BoolQ), or a single continuation
+  (LAMBADA).  All six tasks ran to completion; nothing is omitted.
+
+NOTE 8 -- CODE PROVENANCE.  The run's own spec records
+  git_commit 42749a8e with `dirty: true`: the working tree carried uncommitted
+  changes at launch, so that commit alone does not reproduce this run.  The
+  changes in effect were the multi-node DDP fixes (srun + c10d rendezvous,
+  --cpus-per-task, SIGUSR1 forwarding, exact-resume, checkpoint pruning) and,
+  critically, a DistributedSampler fix: it had been given the LOCAL rank, so on
+  8 nodes every node would read the same eighth of the shard.  This run has the
+  fix and did train one true epoch.  The full resolved spec is committed
+  alongside this report as spec.yaml.
+
+ARTIFACTS
+  run spec     results/1p5b-100b/spec.yaml  (fully resolved, as launched)
+  checkpoint   .../mamba3/peer/ska-1p5b-peer.9d31b982/seed42.f6bf6e86/final/
+  perplexity   same dir, eval/final/fineweb_ppl.json
+  benchmarks   /scratch/m000151-pm06/cqiu/bench/mamba3-1p5b{,-lambada,-piqa}/
+  git commit   42749a8e5076b3a5db9a190daa6f9dd6ba91b6f1

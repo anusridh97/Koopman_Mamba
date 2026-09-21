@@ -1,0 +1,111 @@
+name: ska-1p5b-peer
+run_id: f6bf6e86
+group_id: 9d31b982
+model:
+  d_model: 1536
+  n_layers: 43
+  vocab_size: 32000
+  d_state: 128
+  d_conv: 4
+  mamba_expand: 2
+  mamba_headdim: null
+  ska_n_heads: 8
+  ska_rank: 32
+  ska_ridge: 0.008
+  ska_scale: 1.5
+  ska_power_K: 1
+  ska_chunk_size: 64
+  ska_backend: pytorch
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_gamma_value: 1.05
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+  ska_short_conv_kernel: 4
+  ska_short_conv_gate_init: 0.01
+  ska_exact_intrachunk: false
+  ska_inverse_cholesky: true
+  ska_prefix_scan: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+  ska_norm_clip: true
+  ska_norm_clip_c: 5.656854249492381
+  ska_beta_policy: learned
+  ska_chunk_strategy: standard
+  ska_overlap_fraction: 0.5
+  ska_decay_alpha: 0.95
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  mlp_spectral_norm: true
+  mlp_norm_preserving: false
+  mlp_gated: false
+  mlp_row_norm_lift: false
+  mlp_rotation_param: null
+  mlp_decay_depth_grade: false
+  mlp_pair_mixer: null
+  mlp_mixer_block: 64
+  norm_type: rmsnorm
+  norm_eps: 1.0e-05
+  ska_mode: parallel
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  ska_layer_indices:
+  - 13
+  - 16
+  - 19
+  - 22
+  - 28
+  - 31
+  - 34
+  - 37
+  - 40
+  compute_precision: bf16
+  ska_precision: fp32
+  mlp_precision: null
+  max_seq_len: 2048
+  tie_embeddings: true
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/cqiu/tok100b/shard
+  tokenizer: NousResearch/Meta-Llama-3.1-8B
+  mix:
+    fineweb: 1.0
+  n_tokens: 100000000000
+optim:
+  lr: 0.0017
+  warmup_steps: 3815
+  max_steps: 190734
+  schedule: cosine
+  effective_batch: 256
+  weight_decay: 0.1
+  grad_clip: 1.0
+  groups: []
+runtime:
+  seed: 42
+  deterministic: true
+  per_device_batch_size: 1
+  precision: bf16
+  ddp: true
+  gpus: 8
+  nodes: 8
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 8
+  time_limit: '24:00:00'
+  gpu_arch: '9.0'
+provenance:
+  git_commit: 42749a8e5076b3a5db9a190daa6f9dd6ba91b6f1
+  torch_version: 2.13.0+cu129
+  cuda_version: '12.9'
+  python_version: 3.10.12
+  materialized_at: '2026-09-19T07:51:55Z'
+code_id: 42749a8e5076b3a5db9a190daa6f9dd6ba91b6f1
+dirty: true
