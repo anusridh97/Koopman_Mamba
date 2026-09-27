@@ -54,9 +54,22 @@ TOK_PER_STEP = 96 * 2048
 
 
 def completed_runs(root: Path):
-    """Run dirs with a final checkpoint. `final/` is the completion marker --
-    train.py only writes it on a non-preempted finish (train.py:432-438)."""
-    return sorted(p.parent for p in root.glob("*/seed*/final/model.pt"))
+    """RUN dirs with a final checkpoint -- the directory holding spec.yaml,
+    final/ and eval/, not the final/ dir itself.
+
+    `final/` is the completion marker: train.py only writes it on a
+    non-preempted finish (train.py:432-438).
+
+    `.parent.parent`, because the glob's match is `<run>/final/model.pt`, so one
+    .parent lands on `final/`. Getting this wrong is not a near miss: the sbatch
+    appends `/final/model.pt` to each row, so every eval was handed
+    `<run>/final/final/model.pt` and all 39 died. `already_scored` and `spec_of`
+    silently looked in `<run>/final/` too.
+
+    The earlier --check-cmd did not catch it because it validated the FLAG NAME
+    and nothing else; a path is only proven by resolving it against the
+    filesystem, which is what check_cmd now does."""
+    return sorted(p.parent.parent for p in root.glob("*/seed*/final/model.pt"))
 
 
 def already_scored(run_dir: Path) -> bool:
@@ -68,7 +81,9 @@ def spec_of(run_dir: Path) -> dict:
     return yaml.safe_load((run_dir / "spec.yaml").read_text())
 
 
-def submit(root: Path, account: str, dry: bool) -> int:
+def submit(root: Path, account: str, dry: bool,
+           partition: str = "batch", qos: str = "medium",
+           time_limit: str = "02:00:00") -> int:
     runs = [r for r in completed_runs(root) if not already_scored(r)]
     done = [r for r in completed_runs(root) if already_scored(r)]
     print(f"{len(completed_runs(root))} completed run(s): "
@@ -88,17 +103,23 @@ def submit(root: Path, account: str, dry: bool) -> int:
     script = root / "_eval.sbatch"
     script.write_text(f"""#!/bin/bash
 #SBATCH --job-name=gridEval
-#SBATCH --partition=batch
-#SBATCH --qos=medium
+#SBATCH --partition={partition}
+#SBATCH --qos={qos}
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=02:00:00
+#SBATCH --time={time_limit}
 #SBATCH --array=1-{nchunks}
+#SBATCH --export=ALL
 #SBATCH --output={root}/_eval-%A_%a.out
 set -uo pipefail
 cd {REPO}
 export PYTHONPATH={REPO}:/scratch/m000151-pm06/cqiu/pylibs
+# HF_HOME must be explicit. AutoTokenizer.from_pretrained resolves the
+# tokenizer CLASS through AutoConfig, so it needs config.json -- which the
+# cache did not have, even though tokenizer.json/tokenizer.model were all
+# present. Offline therefore failed on a cache that looked populated.
+export HF_HOME=/scratch/m000151-pm06/cqiu/hf
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
 # BATCHED: each array task scores PER_TASK checkpoints sequentially rather than
 # one. QOS `medium` caps 32 JOBS per account and array tasks count individually,
@@ -106,10 +127,18 @@ export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
 # resource -- and lose, since the grid is fed first. An eval is a few GPU-minutes,
 # so batching turns 57 slots into a handful at no wall-clock cost.
 #
-# The listing path arrives in the environment so each submission gets its own
-# immutable file; a fixed path races against an earlier array still reading it.
-PER_TASK=${{PER_TASK:?PER_TASK not set}}
-QUEUE=${{EVAL_QUEUE:?EVAL_QUEUE not set}}
+# The listing path is BAKED IN, not read from the environment. It still has to
+# be unique per submission -- a fixed path races against an earlier array still
+# reading it -- but this script is regenerated per submission anyway, so the
+# unique path can simply be a literal.
+#
+# It was an --export variable, and that cost a whole array: on `preempt` a task
+# got preempted, and on requeue Slurm failed to re-fetch the user environment
+# and parked the job `user_env_retrieval_failed_requeued_held`, where it waits
+# forever. A literal cannot be lost on requeue. (The tokenisation waves died
+# the same way earlier today.)
+PER_TASK={per_task}
+QUEUE="{listing}"
 START=$(( (SLURM_ARRAY_TASK_ID - 1) * PER_TASK + 1 ))
 END=$(( START + PER_TASK - 1 ))
 rc=0
@@ -132,7 +161,6 @@ exit $rc
               f"({len(runs)} runs at {per_task}/task) from {script}")
         return 0
     out = subprocess.run(["sbatch", "--parsable", f"--account={account}",
-                          f"--export=ALL,EVAL_QUEUE={listing},PER_TASK={per_task}",
                           str(script)],
                          capture_output=True, text=True, check=True)
     print(f"submitted eval array {out.stdout.strip()}: {len(runs)} run(s) "
@@ -147,7 +175,12 @@ def table(root: Path, out: Path | None) -> int:
         if not ev.is_file():
             continue
         env = json.loads(ev.read_text())
+        # The envelope nests the task's numbers one level deeper:
+        # {"metrics": {"model_type": ..., "fineweb_ppl": {"loss","ppl","n_tokens"}}}
+        # -- evaluation/result.py keys them by TASK so one envelope can carry
+        # several. Reading env["metrics"]["loss"] raises KeyError.
         met = env.get("metrics", env)
+        met = met.get("fineweb_ppl", met)
         spec = spec_of(run)
         model, optim = spec.get("model", {}), spec.get("optim", {})
         d_model = int(model["d_model"])
@@ -172,6 +205,21 @@ def table(root: Path, out: Path | None) -> int:
             run_dir=str(run)))
     if not rows:
         print("no scored runs yet -- run with --submit first")
+        return 1
+    # A DIVERGED run scores NaN, and NaN compares false against everything, so
+    # min() can return it depending on iteration order -- silently making a
+    # blown-up run the "best" of its LR triple. Split them out and report the
+    # count instead. (1 of the first 8 scored was NaN: d448 at lr 0.0100, the
+    # top of the bracket, which is a real divergence and not an eval fault.)
+    nan_rows = [r for r in rows if r["loss"] != r["loss"]]
+    rows = [r for r in rows if r["loss"] == r["loss"]]
+    if nan_rows:
+        print(f"{len(nan_rows)} diverged run(s) with NaN loss, excluded from the "
+              f"per-cell minimum:")
+        for r in nan_rows:
+            print(f"    d_model={r['d_model']} steps={r['max_steps']} lr={r['lr']:g}")
+    if not rows:
+        print("every scored run is NaN")
         return 1
     rows.sort(key=lambda r: (r["n_total"], r["tokens"], r["lr"]))
     dest = out or (root / "grid_results.csv")
@@ -228,6 +276,29 @@ def check_cmd() -> int:
     return 0
 
 
+def check_paths(root: Path) -> int:
+    """Resolve the paths the sbatch will actually use, against the filesystem.
+
+    The flag check above is necessary and was not sufficient: the flag was right
+    while every path was one level deep, so all 39 evals were handed
+    `<run>/final/final/model.pt`."""
+    runs = completed_runs(root)
+    if not runs:
+        print(f"no completed runs under {root}")
+        return 1
+    bad = 0
+    for r in runs:
+        ckpt, spec = r / "final" / "model.pt", r / "spec.yaml"
+        for label, q in (("final/model.pt", ckpt), ("spec.yaml", spec)):
+            if not q.is_file():
+                print(f"  MISSING {label}: {q}")
+                bad += 1
+    print(f"{len(runs)} run(s); {bad} missing path(s)")
+    print(f"  example checkpoint: {runs[0] / 'final' / 'model.pt'}")
+    print(f"  example eval dest : {runs[0] / 'eval' / 'final' / 'fineweb_ppl.json'}")
+    return 1 if bad else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check-cmd", action="store_true",
@@ -238,13 +309,24 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--account", default="marlowe-m000151-pm06")
     ap.add_argument("--dry_run", action="store_true")
+    # `batch` is not always up, and these are GPU-MINUTES each -- routing them
+    # to preempt costs nothing and does not consume the medium QOS's 32-job
+    # per-ACCOUNT cap, which is shared with the rest of the group.
+    ap.add_argument("--partition", default="batch")
+    ap.add_argument("--qos", default="medium")
+    ap.add_argument("--time_limit", default="02:00:00")
     args = ap.parse_args(argv)
     if args.check_cmd:
-        return check_cmd()
+        rc = check_cmd()
+        if args.run_root and args.run_root.is_dir():
+            rc |= check_paths(args.run_root)
+        return rc
     if not args.run_root.is_dir():
         raise SystemExit(f"{args.run_root} is not a directory")
     if args.submit:
-        return submit(args.run_root, args.account, args.dry_run)
+        return submit(args.run_root, args.account, args.dry_run,
+                      partition=args.partition, qos=args.qos,
+                      time_limit=args.time_limit)
     if args.table:
         return table(args.run_root, args.out)
     print("pass --submit to score completed runs, or --table to collect them")
