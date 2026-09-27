@@ -1,0 +1,126 @@
+# 1.5B-class SKA run, config supplied verbatim by the user (split with a peer on
+# another cluster). Every model field below is theirs; nothing is inherited from
+# our *-joint-base lineage, deliberately, so the two clusters run the same
+# architecture.
+#
+# vocab_size: the user's config says 32000, which gives 1,540,197,752 params.
+# The only 100B shard is Llama-3.1 at 128,256, and train.py:182 sets
+# vocab_size = len(tokenizer), so the spec value is OVERRIDDEN at build time and
+# the realised model is 1,688,046,968 params (embedding 49M -> 197M). Forcing
+# 32000 on this data would index out of range. 32000 is kept here only so the
+# file matches what the peer was given; the effective value is 128,256.
+name: ska-1p5b-peer
+
+model:
+  d_model: 1536
+  n_layers: 43
+  vocab_size: 32000
+  d_state: 128
+  d_conv: 4
+  mamba_expand: 2
+
+  ska_n_heads: 8
+  ska_rank: 32
+  ska_ridge: 0.008
+  ska_power_K: 1
+  ska_chunk_size: 64
+  ska_layer_indices: [13, 16, 19, 22, 28, 31, 34, 37, 40]
+  ska_mode: parallel
+  ska_backend: pytorch
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+  ska_norm_clip: true
+  ska_norm_clip_c: 5.656854249492381
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.05
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 0.00001
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 2048
+  tie_embeddings: true
+
+  compute_precision: bf16
+  ska_precision: fp32
+  mlp_precision: null
+
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/cqiu/tok100b/shard
+  tokenizer: NousResearch/Meta-Llama-3.1-8B
+  mix: {fineweb: 1.0}
+  n_tokens: 100000000000
+
+optim:
+  # NOT specified by the user. Taken from the three INTERIOR LR optima of our own
+  # sweeps (d128->0.00752, d384->0.00483, d640->0.00256), least-squares
+  # lr = 0.167*width^-0.627, which gives 0.00168 at d_model 1536. Two known
+  # biases, in opposite directions and neither calibrated: that trend was
+  # measured at effective_batch 96 (this is 256, which pushes the optimum UP)
+  # and at ~65 tokens/parameter (this is ~59, comparable). Flagging rather than
+  # hiding: a 3x LR error costs 0.03-0.06 loss, more than the entire tuning gain
+  # measured at 50M or 180M.
+  lr: 0.0017
+  warmup_steps: 3815
+  max_steps: 190734
+  schedule: cosine
+  # 256 sequences = 524,288 tokens/step, matching Mamba's 0.5M batch. Also
+  # required: ddp_grad_accum refuses an effective_batch that is not a multiple
+  # of per_device_batch_size * world_size.
+  effective_batch: 256
+  weight_decay: 0.1
+  grad_clip: 1.0
+
+runtime:
+  # 1 per device x 128 ranks = 128, x accum 2 = 256. pdbs 1 is the
+  # lowest-memory option and this geometry is UNMEASURED here: d_state 128 is
+  # 5.3x our swept value and there are 9 SKA layers rather than 4, so the
+  # per-token state is much larger than anything we have profiled.
+  per_device_batch_size: 1
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: true
+  gpus: 8
+  nodes: 8
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 8
+  # 8 nodes x 8 GPUs x 2880 min = 184,320 GPU-min, which is exactly what the
+  # budget allows (287,060 used of 600,000) and lands at 7,856 GPU-hours -- the
+  # lead's "8k of 10k" trigger, at which point he asks for more.
+  #
+  # 8 nodes rather than 16 even though 16 would finish the whole run a day
+  # sooner: Slurm projects 8 nodes at 2026-09-16T14:19 against 16 nodes at
+  # 2026-09-17T18:12, i.e. 28 hours earlier, and this architecture has never
+  # been run (d_state 128, 9 SKA layers, ska_backend pytorch -- all unprofiled).
+  # 28 extra hours to discover an OOM or a bad LR is worth more than a day of
+  # end-to-end wall clock, especially as projections have slipped twice today.
+  #
+  # KEEP 64 GPUs on any continuation: resume is invalid across a world-size
+  # change (samples_consumed indexes a global permutation; DistributedSampler
+  # partitions by num_replicas).
+  # FINAL CHUNK, 24h not 48h. At step 135,800/190,734 only 54,934 steps remain
+  # (28.8B tokens, 19.2h at the measured 416K tok/s aggregate). A 48h job
+  # reserves 184,320 GPU-min against 128,915 left in the account budget and is
+  # refused with AssocGrpGRESMinutes; 24h reserves 92,160, fits, and still
+  # covers the 19.2h needed with margin.
+  time_limit: "24:00:00"
+  gpu_arch: "9.0"

@@ -1,0 +1,116 @@
+# 440M SKA + SwiGLU matched to state-spaces/mamba3-mimo-444m, and sharing the
+# architecture of ska-1p5b-matched so the two form a scaling ladder rather than
+# two unrelated points.
+#
+# NOT configs/runs/mamba3/mamba3-440m.yaml: that one is the old ladder lineage
+# (4 SKA layers, ska_rank 48, d_state 24, ska_backend auto). Running it beside
+# the 1.5B would vary architecture AND scale at the same time.
+#
+# Verified by real construction (KoopmanLM on the meta device):
+#   total          444,535,352   -> +0.06% vs their 444,252,901
+#   embedding      121,073,664   (tied, counted once)
+#   non-embedding  323,461,688
+#
+# mamba_headdim 32 is REQUIRED and is the only edit to the supplied geometry:
+# mamba_expand 2 x d_model 944 = d_inner 1888, and 1888 % 64 = 32, so the
+# default headdim 64 makes KoopmanLM refuse to construct. headdim 32 gives 59
+# heads and builds. (headdim 16 also builds, 118 heads, but lands at +0.37%
+# against headdim 32's +0.06%.)
+name: ska-440m-matched
+
+model:
+  d_model: 944
+  n_layers: 24
+  vocab_size: 128256
+  d_state: 128
+  d_conv: 4
+  mamba_expand: 2
+  mamba_headdim: 32
+
+  ska_n_heads: 8
+  ska_rank: 32
+  ska_ridge: 0.008
+  ska_power_K: 1
+  ska_chunk_size: 64
+  ska_layer_indices: [7, 9, 12, 15, 17, 20]
+  ska_mode: parallel
+  ska_backend: pytorch
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+  ska_norm_clip: true
+  ska_norm_clip_c: 5.656854249492381
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.05
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 0.00001
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 2048
+  tie_embeddings: true
+
+  compute_precision: bf16
+  ska_precision: fp32
+  mlp_precision: null
+
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/cqiu/tok100b/shard
+  tokenizer: NousResearch/Meta-Llama-3.1-8B
+  mix: {fineweb: 1.0}
+  n_tokens: 100000000000
+
+optim:
+  # Same LR as the 1.5B, deliberately. The ladder's value is that only scale
+  # changes between the two rungs; re-tuning the LR here would confound that.
+  # Our own sweeps found the optimum RISES as width falls, so 0.0017 at 440M is
+  # if anything conservative rather than unstable.
+  lr: 0.0017
+  warmup_steps: 3815
+  max_steps: 190734
+  schedule: cosine
+  effective_batch: 256
+  weight_decay: 0.1
+  grad_clip: 1.0
+
+runtime:
+  # 4 is the CEILING at this world size, and it is also the fastest option
+  # that fits: effective_batch is fixed at 256 by the protocol, 4 x 64 ranks
+  # = 256 gives grad_accum 1, and pdbs 8 would resolve to grad_accum 0.5 which
+  # ddp_grad_accum rejects.
+  #
+  # MEASURED by scripts/probe_pdbs.py (job 504136) on this geometry, around a
+  # real fwd+bwd+optimizer step, DDP fp32 gradient bucket included:
+  #   pdbs 1 -> 13.3 GiB peak, +1.7 DDP = 15.0, 64.2 free, 13,281 tok/s/GPU
+  #   pdbs 2 -> 20.7 GiB peak, +1.7 DDP = 22.4, 56.8 free, 21,264 tok/s/GPU (1.60x)
+  #   pdbs 4 -> 35.6 GiB peak, +1.7 DDP = 37.2, 42.0 free, 24,738 tok/s/GPU (1.86x)
+  # 42 GiB free, so no OOM risk -- unlike the 1.5B, which OOM'd at pdbs 4.
+  per_device_batch_size: 4
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: true
+  gpus: 8
+  nodes: 8
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 8
+  # 64 GPUs here + 64 on the 1.5B = 128, exactly the medium-QOS MaxTRESPA
+  # ceiling, so the two can run concurrently without either being held.
+  time_limit: "24:00:00"

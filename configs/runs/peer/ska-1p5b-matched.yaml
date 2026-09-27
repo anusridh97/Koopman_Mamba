@@ -1,0 +1,142 @@
+# 1.5B SKA + SwiGLU matched to the RELEASED Mamba-3 MIMO 1.5B checkpoint.
+#
+# Why this run exists: ska-1p5b-peer trained to completion at 1,688,046,968
+# params, which is +12.76% on state-spaces/mamba3-mimo-1.5b's measured
+# 1,497,082,880 (and +20.8% on non-embedding, since their d_model 2048 buys a
+# larger embedding than our 1440). That overshoot makes the head-to-head
+# unpublishable as a matched comparison. This geometry is the fix.
+#
+# Verified by real construction (KoopmanLM on the meta device), not by the
+# analytic estimator:
+#   total          1,501,551,805   -> +0.30% vs 1,497,082,880
+#   embedding        184,688,640   (tied, counted once)
+#   non-embedding  1,316,863,165
+#
+# mamba_expand 2 x d_model 1440 = d_inner 2880, and 2880 % 64 == 0 (45 heads),
+# so the default mamba_headdim works. This is worth stating because the
+# previous candidate geometry (d_model 1520) gave d_inner 3040, 3040 % 64 == 32,
+# and KoopmanLM refuses to construct at all -- a failure that would have
+# surfaced ~30 seconds into a 3,874 GPU-hour job.
+#
+# vocab_size is 128256 here, the REAL value. The peer config said 32000 and
+# relied on train.py:182 overriding it from len(tokenizer); writing the
+# effective value means the spec and the realised model agree.
+name: ska-1p5b-matched
+
+model:
+  d_model: 1440
+  n_layers: 43
+  vocab_size: 128256
+  d_state: 128
+  d_conv: 4
+  mamba_expand: 2
+
+  ska_n_heads: 8
+  ska_rank: 32
+  ska_ridge: 0.008
+  ska_power_K: 1
+  ska_chunk_size: 64
+  ska_layer_indices: [13, 16, 19, 22, 25, 28, 31, 34, 37, 40]
+  ska_mode: parallel
+  ska_backend: pytorch
+  ska_inverse_cholesky: true
+  ska_exact_intrachunk: false
+  ska_prefix_scan: false
+  ska_prefix_scan_block_size: 32
+  ska_prefix_scan_jitter: 0.0
+  ska_norm_clip: true
+  ska_norm_clip_c: 5.656854249492381
+  ska_eta_learnable: false
+  ska_eta_value: 1.0
+  ska_eta_bounds: null
+  ska_gamma_learnable: false
+  ska_gamma_value: 1.05
+  ska_gamma_clamp: null
+  ska_gamma_bounds: null
+  ska_layerscale: true
+  ska_layerscale_init: 0.01
+  ska_out_proj_std: 0.02
+  ska_short_conv: false
+
+  mlp_type: swiglu
+  mlp_expand: 2.667
+  norm_type: rmsnorm
+  norm_eps: 0.00001
+  init_policy: mamba_safe
+  initializer_range: 0.02
+  rescale_prenorm_residual: true
+  max_seq_len: 2048
+  tie_embeddings: true
+
+  compute_precision: bf16
+  ska_precision: fp32
+  mlp_precision: null
+
+data:
+  kind: shard
+  shard_dir: /scratch/m000151-pm06/cqiu/tok100b/shard
+  tokenizer: NousResearch/Meta-Llama-3.1-8B
+  mix: {fineweb: 1.0}
+  n_tokens: 100000000000
+
+optim:
+  # Inherited from ska-1p5b-peer, NOT re-bracketed. It trained a 12.5% LARGER
+  # model to completion on this exact shard with zero NaN and 9.693 held-out
+  # ppl. At slightly smaller scale the optimum moves UP, not down, so reusing
+  # it errs on the safe side. A real 3-point bracket would cost ~890 GPU-h,
+  # which is 23% of the run -- not worth it against that evidence, but this is
+  # the single largest unvalidated choice in the file.
+  lr: 0.0017
+  warmup_steps: 3815
+  # 190,734 x 256 x 2048 = 99,999,547,392 of the shard's 100,000,000,000
+  # tokens: exactly one epoch, no repeats. max_steps IS hashed into run_id, so
+  # it has to be right on the first submission or the run identity changes.
+  max_steps: 190734
+  schedule: cosine
+  effective_batch: 256
+  weight_decay: 0.1
+  grad_clip: 1.0
+
+runtime:
+  # 2 per device x 64 ranks x accum 2 = 256. MEASURED by scripts/probe_pdbs.py
+  # (job 498705) on this run's own model_config.json, around a real
+  # fwd+bwd+optimizer step, with the DDP fp32 gradient bucket added in:
+  #
+  #   pdbs 1 -> 33.8 GiB peak, +5.6 DDP = 39.4, 39.8 free, 7,605 tok/s/GPU
+  #   pdbs 2 -> 47.7 GiB peak, +5.6 DDP = 53.3, 25.9 free, 9,475 tok/s/GPU (1.25x)
+  #   pdbs 4 -> OOM
+  #
+  # Chunk 1 ran at pdbs 1 and measured 5,902 tok/s/GPU in the real 64-GPU job
+  # (the single-GPU probe is an upper bound; DDP collectives cost the rest).
+  # 1.25x takes the remaining 61.5 h down to ~49 h. pdbs is NOT hashed into
+  # run_id, so this is a legal mid-run change: raised from 1 for chunk 2.
+  #
+  # Resume stays valid because samples_consumed advances by effective_batch
+  # (256) per optimizer step regardless of how it is split into micro-steps --
+  # pdbs 1 x accum 4 and pdbs 2 x accum 2 both consume 4 samples per rank per
+  # step. VERIFY on the first resumed step that the counter continues and the
+  # loss does not jump.
+  per_device_batch_size: 2
+  seed: 42
+  deterministic: true
+  precision: bf16
+  ddp: true
+  gpus: 8
+  nodes: 8
+  partition: batch
+  account: marlowe-m000151-pm06
+  qos: medium
+  workers: 8
+  # KEEP 64 GPUs on every continuation. Resume is invalid across a world-size
+  # change: samples_consumed is a scalar index into a global permutation and
+  # DistributedSampler partitions by num_replicas.
+  #
+  # 12h, not 48h, because of the budget -- NOT because the run needs it.
+  # A 48h chunk would reserve 8x8x2880 = 184,320 GPU-min and be refused with
+  # AssocGrpGRESMinutes. 12h reserves 46,080 against 48,816 left of the 600,000
+  # cap (headroom 2,736), and is the largest chunk that fits. An earlier
+  # submission used 11h only because 13 Mamba-3 RULER jobs were running
+  # concurrently; those have finished, so the full 12h is now available.
+  #
+  # RAISE TO 48:00:00 on continuations once the cap is lifted.
+  time_limit: "12:00:00"
