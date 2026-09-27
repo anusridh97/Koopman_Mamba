@@ -67,6 +67,43 @@ class PreemptionFlag:
         return self._flag
 
 
+#: How many step_<N>/ archival checkpoints a run retains. Retention used to be
+#: unbounded, which was harmless while save_steps was max_steps//3 (three dirs
+#: per run). Capping save_steps to a clock-like cadence makes a 100B-token run
+#: save ~95 times, and a 1.5B resume.pt is ~20 GB, so unbounded retention would
+#: be ~2 TB against 1.5 TB of free scratch.
+KEEP_CHECKPOINTS = 2
+
+
+def prune_step_checkpoints(output_dir, keep: int = KEEP_CHECKPOINTS) -> list:
+    """Delete all but the newest `keep` step_<N>/ dirs; return what was removed.
+
+    Module level rather than a closure because it calls rmtree, and a
+    destructive operation should be unit-testable without a GPU or a trainer.
+
+    Two kept, not one: the newest may be mid-write when a node dies, and
+    train.py hard-exits on resume if the step resume.pt names has no weights.
+
+    Ordering matters and is the caller's job -- this runs AFTER resume.pt is
+    rewritten. Pruning first could delete the checkpoint resume.pt is about to
+    name, leaving a run unable to resume from its own last save.
+
+    Only exact `step_<digits>` names are considered, so `final/`, `eval/` and
+    anything else in the run dir are never touched.
+    """
+    import re
+    import shutil
+    steps = []
+    for name in os.listdir(output_dir):
+        if re.fullmatch(r"step_\d+", name):
+            steps.append((int(name[5:]), name))
+    removed = []
+    for _, name in sorted(steps, reverse=True)[keep:]:
+        shutil.rmtree(os.path.join(output_dir, name), ignore_errors=True)
+        removed.append(name)
+    return removed
+
+
 def install_sigusr1_handler(flag: PreemptionFlag) -> None:
     """§5.4: SlurmLauncher's --signal=B:USR1@300 fires 300s before a
     preemption/timeout kill. The handler only flips a flag -- it does no I/O
@@ -181,9 +218,29 @@ def build_model(args, tokenizer):
 
 def train(args):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    # GLOBAL rank, which is a different number from local_rank the moment a run
+    # spans more than one node: torchrun numbers LOCAL_RANK within a node and
+    # RANK across the whole job. Every use below that identifies a REPLICA --
+    # who writes checkpoints, which data shard to read, which seed offset to
+    # take -- needs the global one. Only device placement
+    # (torch.cuda.set_device, DDP device_ids) wants local_rank.
+    #
+    # Passing local_rank to DistributedSampler was silently catastrophic on
+    # multiple nodes: with 8 nodes x 8 GPUs the ranks are {0..7} repeated eight
+    # times, so every node reads the SAME eighth of the shard, 7/8 of the data
+    # is never trained on, and each sample is seen 8 times in what is supposed
+    # to be a single epoch. It never showed up because every completed run so
+    # far was single-node, where the two numbers are equal -- which is also why
+    # nothing already measured is affected.
+    global_rank = int(os.environ.get("RANK", local_rank))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_ddp = args.ddp and world_size > 1
-    is_main = local_rank == 0
+    # Global, so exactly ONE process across the job writes resume.pt and
+    # step_<N>/. With local_rank this was true per NODE, so an 8-node 1.5B run
+    # would have had eight processes each writing a ~20 GB resume.pt on every
+    # save -- 160 GB of redundant I/O, and two writers racing os.replace on the
+    # same path.
+    is_main = global_rank == 0
 
     # §5.4: install the SIGUSR1 handler FIRST, before any of the setup below
     # (tokenizer load, model construction, torch.compile, DDP init, dataset
@@ -210,8 +267,10 @@ def train(args):
         device = torch.device(f"cuda:{local_rank}")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # deterministic seeding (per-rank offset so DDP replicas differ but are reproducible)
-    data_gen = seed_everything(args.seed + local_rank)
+    # deterministic seeding (per-rank offset so DDP replicas differ but are
+    # reproducible). GLOBAL rank: with local_rank, node 0 rank 0 and node 1
+    # rank 0 drew the identical stream.
+    data_gen = seed_everything(args.seed + global_rank)
     if args.deterministic:
         enable_determinism(warn_only=True)
         if is_main:
@@ -295,8 +354,11 @@ def train(args):
 
     sampler = None
     if is_ddp:
+        # rank=GLOBAL. DistributedSampler would default to dist.get_rank()
+        # (already global) if we passed nothing; passing local_rank actively
+        # overrode it with the wrong value.
         sampler = torch.utils.data.distributed.DistributedSampler(
-            train_ds, num_replicas=world_size, rank=local_rank, shuffle=True)
+            train_ds, num_replicas=world_size, rank=global_rank, shuffle=True)
 
     # §6/§7: both sections come off the materialized spec.yaml, which the run
     # layer has already written into run_dir by the time this process starts.
@@ -343,6 +405,19 @@ def train(args):
     # function -- see the comment there.)
     start_step, start_epoch, start_samples_consumed = 0, 0, 0
     start_epoch_start_step = 0
+    # Promote --resume_if_available to --resume once, here, so exactly one code
+    # path below reads resume state. Announced loudly because "did this job
+    # continue or restart?" is the first question to ask of a requeued run, and
+    # guessing it from a loss curve after the fact is how 33,000 wasted steps
+    # go unnoticed.
+    if args.resume_if_available and not args.resume:
+        _rp = os.path.join(args.output_dir, "resume.pt")
+        if os.path.exists(_rp):
+            args.resume = True
+            if is_main:
+                print(f"  --resume_if_available: found {_rp}, RESUMING", flush=True)
+        elif is_main:
+            print("  --resume_if_available: no resume.pt, starting FRESH", flush=True)
     if args.resume:
         resume_path = os.path.join(args.output_dir, "resume.pt")
         if not os.path.exists(resume_path):
@@ -399,6 +474,8 @@ def train(args):
                            # recompute after a mid-epoch restart.
                            extra={"log_window": dict(log_window or {}),
                                   "epoch_start_step": int(epoch_start_step)})
+        # Last, so a crash anywhere above leaves MORE history, not less.
+        prune_step_checkpoints(args.output_dir)
 
     model.train()
     # step/micro_step/running_loss/loss_count/tokens_seen are the LOOP's
@@ -420,7 +497,8 @@ def train(args):
         log_window=(resume_state.get("log_window") if args.resume else None),
         applier=applier, start_epoch_start_step=start_epoch_start_step,
         is_main=is_main, is_ddp=is_ddp, world_size=world_size,
-        local_rank=local_rank, sampler=sampler, monitor=monitor,
+        local_rank=local_rank, global_rank=global_rank,
+        sampler=sampler, monitor=monitor,
         grad_monitor=grad_monitor, preempt_flag=preempt_flag, t_start=t_start)
     step, tokens_seen = result.step, result.tokens_seen
     if result.preempted:
@@ -664,6 +742,14 @@ def parse_args(argv=None):
                    help="resume from <output_dir>/resume.pt + its matching "
                         "step_<N>/model.pt (optimizer, scheduler, RNG, and "
                         "dataloader position restored exactly; §5)")
+    p.add_argument("--resume_if_available", action="store_true", default=False,
+                   help="resume exactly as --resume when <output_dir>/resume.pt "
+                        "exists, and start fresh when it does not. This is the "
+                        "flag a REQUEUED job needs: Slurm re-runs the original "
+                        "sbatch verbatim, so a requeue-safe launch line cannot "
+                        "use --resume (which hard-exits on the first attempt, "
+                        "when no resume.pt exists yet) and cannot omit it "
+                        "(which silently restarts a multi-day run at step 0).")
     p.add_argument("--spec", type=str, default=None,
                    help="path to the materialized spec.yaml written by "
                         "experimentation.run. Supplies the two sections too "

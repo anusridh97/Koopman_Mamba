@@ -92,6 +92,9 @@ def run_training_loop(
     is_ddp: bool = False,
     world_size: int = 1,
     local_rank: int = 0,
+    #: GLOBAL rank. Defaults to None -> falls back to local_rank, so a
+    #: single-node caller behaves exactly as before (the two are equal there).
+    global_rank: Optional[int] = None,
     sampler: Any = None,
     monitor: Any = None,
     grad_monitor: Any = None,
@@ -168,7 +171,8 @@ def run_training_loop(
                 if is_ddp:
                     # The old sampler still points at the old dataset length.
                     sampler = torch.utils.data.distributed.DistributedSampler(
-                        train_ds, num_replicas=world_size, rank=local_rank,
+                        train_ds, num_replicas=world_size,
+                        rank=(local_rank if global_rank is None else global_rank),
                         shuffle=True)
                 if is_main:
                     print(f"  [schedule] epoch {epoch}: seq_len -> {want} "
@@ -332,10 +336,23 @@ def run_training_loop(
                 if is_main and step > 0 and step % args.save_steps == 0:
                     _save_all(step, epoch, samples_consumed, _window,
                               epoch_start_step)
-                if is_main and preempt_flag is not None and preempt_flag.is_set():
-                    _save_all(step, epoch, samples_consumed, _window,
-                              epoch_start_step)
-                    print(f"  SIGUSR1 received -- wrote resume.pt at step {step}, exiting cleanly")
+                if preempt_flag is not None and preempt_flag.is_set():
+                    # EVERY rank must leave the loop, not just the main one.
+                    # The agent delivers SIGUSR1 to all workers, so all of them
+                    # have the flag set -- but gating the `break` on is_main
+                    # left ranks 1..N-1 running into the next allreduce, where
+                    # they blocked forever waiting for a rank 0 that had already
+                    # stopped. torchrun then SIGKILLed them after its 30s
+                    # shutdown timeout and the job was recorded FAILED (15:0)
+                    # even though resume.pt had been written correctly.
+                    # Observed in the 2-node resume smoke at step 61.
+                    #
+                    # Only rank 0 writes; the rest just exit. No collective runs
+                    # inside _save_all, so the others leaving first is safe.
+                    if is_main:
+                        _save_all(step, epoch, samples_consumed, _window,
+                                  epoch_start_step)
+                        print(f"  SIGUSR1 received -- wrote resume.pt at step {step}, exiting cleanly")
                     preempted = True
                     break
         if preempted:

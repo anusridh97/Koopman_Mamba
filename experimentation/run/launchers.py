@@ -15,6 +15,7 @@ from __future__ import annotations
 import abc
 import os
 import signal
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,16 +34,27 @@ _SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --partition={partition}
 {qos_directive}
 #SBATCH --nodes={nodes}
-{gpu_directive}
+{ntasks_directive}{gpu_directive}
 #SBATCH --time={time_limit}
-#SBATCH --signal=B:USR1@300
-#SBATCH --requeue
+{signal_directive}#SBATCH --requeue
 #SBATCH --output={run_dir}/slurm-%j.out
 
 set -euo pipefail
 
 # Marlowe H100 nodes are compute capability 9.0 (sm_90) -- NOT B200/sm_100.
 export TORCH_CUDA_ARCH_LIST="{gpu_arch}"
+
+# Triton JIT cache MUST be node-local. Its default is $HOME/.triton/cache,
+# which is shared NFS here, so on a multi-node job every rank compiles the same
+# kernels into the same directory at once and they tear each other's files out
+# from under themselves: "FileNotFoundError: ..._layer_norm_bwd_kernel.ttir"
+# and "OSError: [Errno 116] Stale file handle: ..._chunk_state_fwd_kernel.cubin".
+# That killed ska-1p5b-matched (job 497324) 99 seconds in, after all 64 ranks
+# had built the model successfully. Earlier multi-node runs survived only
+# because their kernel variants were already warm in that cache; a new geometry
+# forces a fresh compile and loses the race. $HOME is also small here.
+export TRITON_CACHE_DIR="${{TMPDIR:-/tmp}}/triton-cache-${{SLURM_JOB_ID:-local}}"
+mkdir -p "$TRITON_CACHE_DIR"
 
 cd {repo_root}
 {launch_line}
@@ -61,10 +73,9 @@ _ARRAY_SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --partition={partition}
 {qos_directive}
 #SBATCH --nodes={nodes}
-{gpu_directive}
+{ntasks_directive}{gpu_directive}
 #SBATCH --time={time_limit}
-#SBATCH --signal=B:USR1@300
-#SBATCH --requeue
+{signal_directive}#SBATCH --requeue
 #SBATCH --array=0-{max_index}{concurrency_suffix}
 #SBATCH --output={sweep_dir}/slurm-%A_%a.out
 
@@ -72,6 +83,18 @@ set -euo pipefail
 
 # Marlowe H100 nodes are compute capability 9.0 (sm_90) -- NOT B200/sm_100.
 export TORCH_CUDA_ARCH_LIST="{gpu_arch}"
+
+# Triton JIT cache MUST be node-local. Its default is $HOME/.triton/cache,
+# which is shared NFS here, so on a multi-node job every rank compiles the same
+# kernels into the same directory at once and they tear each other's files out
+# from under themselves: "FileNotFoundError: ..._layer_norm_bwd_kernel.ttir"
+# and "OSError: [Errno 116] Stale file handle: ..._chunk_state_fwd_kernel.cubin".
+# That killed ska-1p5b-matched (job 497324) 99 seconds in, after all 64 ranks
+# had built the model successfully. Earlier multi-node runs survived only
+# because their kernel variants were already warm in that cache; a new geometry
+# forces a fresh compile and loses the race. $HOME is also small here.
+export TRITON_CACHE_DIR="${{TMPDIR:-/tmp}}/triton-cache-${{SLURM_JOB_ID:-local}}"
+mkdir -p "$TRITON_CACHE_DIR"
 
 cd {repo_root}
 
@@ -105,6 +128,65 @@ def _slurm_resource_directives(runtime: RuntimeSpec) -> Tuple[str, str]:
            else f"#SBATCH --gpus-per-node={runtime.gpus}")
     qos = f"#SBATCH --qos={runtime.qos}" if runtime.qos else ""
     return gpu, qos
+
+
+#: CPUs a Marlowe H100 node has per GPU (112 cores / 8 GPUs). Used only to size
+#: --cpus-per-task for the multi-node path; single-node requests are left
+#: exactly as they were, since that is the topology every completed run used.
+_CPUS_PER_GPU = 14
+
+
+def _signal_directive(runtime: RuntimeSpec) -> str:
+    """Deliver SIGUSR1 to whatever process can actually act on it.
+
+    `B:` signals ONLY the batch shell. With srun, the trainer runs in a
+    separate job step that never sees it -- and bash's default action for
+    SIGUSR1 is to terminate, so the multi-node resume smoke died with
+    ExitCode 0:10 at 4:48 of a 10-minute limit and wrote no resume.pt at all.
+    Dropping `B:` sends the signal to the job STEPS, i.e. srun's tasks, which
+    are the python processes carrying install_sigusr1_handler.
+
+    Single-node keeps `B:`. There the trainer is a direct child of the batch
+    shell and that form is what every completed run used, including a verified
+    exact-resume comparison (job 440211); this is not the moment to re-derive
+    it from the man page.
+    """
+    return ("#SBATCH --signal=USR1@300\n" if runtime.nodes > 1
+            else "#SBATCH --signal=B:USR1@300\n")
+
+
+def _ntasks_directive(runtime: RuntimeSpec) -> str:
+    """One Slurm task per NODE when multi-node, plus the CPUs that task needs.
+
+    --ntasks-per-node=1 is what makes srun start exactly one torchrun agent per
+    node, so c10d sees the node count it was promised.
+
+    --cpus-per-task MUST accompany it. Slurm defaults cpus-per-task to 1, and
+    this partition sets DefMemPerCPU=13000, so a 2-node job was allocated
+    NumCPUs=2 and 13 GB of host RAM PER NODE -- for 8 GPU processes plus their
+    dataloader workers. Single-node runs never hit this because they leave
+    ntasks unset and are not squeezed into one task's cgroup; the grid's
+    4-GPU array sbatch carried no CPU request at all and ran fine.
+
+    Empty for single-node runs, which keep the proven --standalone path and
+    must not gain directives that have never been exercised there.
+    """
+    # CPUs are needed whenever a job holds MORE THAN ONE GPU, single-node
+    # included. Slurm defaults cpus-per-task to 1 and this partition sets
+    # DefMemPerCPU=13000, so a 1-node 4-GPU pilot was granted AllocCPUS=1 and
+    # 13 GB of HOST ram for four GPU processes plus their dataloader workers,
+    # memmapping a 400 GB shard -- and was oom_killed at MaxRSS 12.6 GB with
+    # zero CUDA OOMs. An earlier version of this function gated the CPU request
+    # on nodes>1 to "leave the proven single-node path untouched"; the proven
+    # path was small models on a 20 GB shard, which is not this.
+    directive = ""
+    if runtime.gpus > 1:
+        directive += f"#SBATCH --cpus-per-task={runtime.gpus * _CPUS_PER_GPU}\n"
+    # One TASK per node only when multi-node, so srun starts exactly one
+    # torchrun agent per node and c10d sees the node count it was promised.
+    if runtime.nodes > 1:
+        directive = "#SBATCH --ntasks-per-node=1\n" + directive
+    return directive
 
 
 def _submit_sbatch(path: Path) -> str:
@@ -351,6 +433,8 @@ def render_array_sbatch(sweep_name: str, cells: List[Tuple[RunSpec, "Path"]],
     return _ARRAY_SBATCH_TEMPLATE.format(
         gpu_directive=gpu_directive,
         qos_directive=qos_directive,
+        ntasks_directive=_ntasks_directive(runtime),
+        signal_directive=_signal_directive(runtime),
         job_name=sweep_name,
         account=runtime.account,
         partition=runtime.partition,
@@ -381,12 +465,66 @@ class SlurmLauncher(Launcher, _ScoresRuns):
         world_size = spec.runtime.gpus * spec.runtime.nodes
         train_args = build_train_argv(spec, run_dir, world_size=world_size, resume=resume,
                               **self._scoring_kwargs())
+        if spec.runtime.nodes > 1:
+            # MULTI-NODE. The previous form -- `torch.distributed.run
+            # --nnodes=N` with no srun and no rendezvous -- could never work,
+            # for two independent reasons. An sbatch body runs on the FIRST
+            # allocated node only, so exactly one agent was ever started while
+            # --nnodes=N told it to expect N; and the default rendezvous is
+            # static, needing --node_rank/--master_addr that nothing supplied.
+            # The job would sit at 0% until the wall clock killed it. srun
+            # starts one agent per node (hence --ntasks-per-node=1, added to
+            # the sbatch template below) and c10d gives them a real meeting
+            # point, elected on the first host of the allocation.
+            #
+            # The port is derived from the job id because c10d binds it on the
+            # rank-0 HOST: two of our jobs sharing that host would otherwise
+            # both try to listen on one fixed port and the loser would hang.
+            # ABSOLUTE srun, resolved now. srun lives in
+            # /cm/shared/apps/slurm/current/bin, and an sbatch body runs under
+            # `#!/bin/bash` WITHOUT sourcing /etc/profile.d -- the same reason
+            # the bare `torchrun` console script raised FileNotFoundError and
+            # failed 25 of 25 trials in 22 seconds while Slurm cheerfully
+            # reported COMPLETED 0:0. Do not trust PATH for an interpreter or a
+            # launcher; `which` runs on the login node, which shares
+            # /cm/shared with the compute nodes.
+            srun = shutil.which("srun") or "srun"
+            return [srun, f"--ntasks={spec.runtime.nodes}",
+                    "--ntasks-per-node=1", "--kill-on-bad-exit=1",
+                    sys.executable, "-m", "torch.distributed.run",
+                    f"--nnodes={spec.runtime.nodes}",
+                    f"--nproc_per_node={spec.runtime.gpus}",
+                    # Forward SIGUSR1 to the WORKERS. srun delivers the
+                    # signal to its task, which is the torchrun agent, not the
+                    # trainer -- and the agent's default handled set is
+                    # SIGTERM,SIGINT,SIGHUP,SIGQUIT, so USR1 killed the agent
+                    # outright (the resume smoke died ExitCode 10:0 at 6:59 of
+                    # a 12-minute limit with no resume.pt). Listing it makes
+                    # _terminate_process_handler raise SignalException carrying
+                    # sigval, which the agent passes to close(death_sig=...) --
+                    # i.e. the workers get SIGUSR1 and train.py's handler runs.
+                    #
+                    # BEST EFFORT, NOT A GUARANTEE: close() SIGKILLs after a
+                    # 30s timeout, and a 1.5B resume.pt is ~20 GB, which may not
+                    # finish inside that window. atomic_torch_save writes to a
+                    # temp file and renames, so a killed write leaves the
+                    # PREVIOUS resume.pt intact rather than a truncated one.
+                    # The thing we actually rely on is the periodic save every
+                    # `save_steps` (2,000 -> ~33 min at 440M, ~55 min at 1.5B).
+                    "--signals-to-handle=SIGTERM,SIGINT,SIGHUP,SIGQUIT,SIGUSR1",
+                    "--rdzv_backend=c10d",
+                    '--rdzv_id="$SLURM_JOB_ID"',
+                    '--rdzv_endpoint="$(scontrol show hostnames'
+                    ' "$SLURM_JOB_NODELIST" | head -n1)":'
+                    '"$((29500 + SLURM_JOB_ID % 20000))"',
+                    "-m", "experimentation.training.train", *train_args]
         if world_size > 1:
-            # Absolute interpreter, for the reason given in LocalLauncher above:
+            # Single node, several GPUs: --standalone, which is proven on this
+            # cluster and pins the rendezvous to localhost. Absolute
+            # interpreter, for the reason given in LocalLauncher above:
             # `torchrun` is not on PATH in a Slurm step.
             return [sys.executable, "-m", "torch.distributed.run",
-                    f"--nnodes={spec.runtime.nodes}",
-                     f"--nproc_per_node={spec.runtime.gpus}",
+                    "--standalone", f"--nproc_per_node={world_size}",
                      "-m", "experimentation.training.train", *train_args]
         return [sys.executable, "-m", "experimentation.training.train", *train_args]
 
@@ -397,6 +535,8 @@ class SlurmLauncher(Launcher, _ScoresRuns):
         return _SBATCH_TEMPLATE.format(
             gpu_directive=gpu_directive,
             qos_directive=qos_directive,
+            ntasks_directive=_ntasks_directive(spec.runtime),
+            signal_directive=_signal_directive(spec.runtime),
             job_name=spec.name,
             account=spec.runtime.account,
             partition=spec.runtime.partition,

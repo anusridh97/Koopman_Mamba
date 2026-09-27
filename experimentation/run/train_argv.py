@@ -121,7 +121,18 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
     # --resume untestable (resume.pt is written at the same cadence, §5.3).
     # Scale it off max_steps (three checkpoints over the run, at least one)
     # instead of leaving the CLI default in force unconditionally.
-    save_steps = max(1, spec.optim.max_steps // 3)
+    #
+    # CAPPED, because max_steps//3 is a fraction of the RUN while the thing that
+    # interrupts a run is a fraction of the CLOCK. A 100B-token run is ~190,735
+    # steps, so a third of it is one save per ~29 h -- longer than `batch`'s
+    # 2-day limit is generous and 7x longer than `preempt`'s 4-hour cap, so a
+    # requeue would throw away hours of work with a valid resume.pt on disk that
+    # simply predates it. 2,000 steps is ~16 min at 440M on 64 GPUs and ~55 min
+    # at 1.5B, i.e. a bounded loss under either partition's limit.
+    # train.py prunes to the newest 2 step_<N>/ dirs, so raising the cadence
+    # costs bounded disk rather than one directory per save.
+    SAVE_STEPS_CAP = 2000
+    save_steps = max(1, min(spec.optim.max_steps // 3, SAVE_STEPS_CAP))
     argv = [
         # §6/§7: schedules and optim.groups are too structured for flags, so the
         # trainer reads them off the materialized spec.yaml. __main__ writes it
@@ -209,4 +220,13 @@ def build_train_argv(spec: RunSpec, run_dir, *, world_size: int = 1,
         argv.append("--ddp")
     if resume:
         argv.append("--resume")
+    else:
+        # REQUEUE SAFETY. Slurm re-runs the original sbatch verbatim on a
+        # requeue (preemption, node failure, or a --dependency chain across
+        # `batch`'s 2-day limit), so whatever we emit HERE is what the second
+        # attempt runs. Emitting nothing restarts a multi-day run at step 0 in
+        # silence; emitting --resume makes the FIRST attempt hard-exit, since
+        # train.py raises SystemExit when no resume.pt exists. The
+        # if-available form is the only one that is correct on both attempts.
+        argv.append("--resume_if_available")
     return argv
