@@ -178,6 +178,22 @@ def main():
                    help="Llama-2 tokenizer (use NousResearch/Llama-2-7b-hf if gated)")
     p.add_argument("--fineweb", type=str, default="HuggingFaceFW/fineweb-edu")
     p.add_argument("--fineweb_subset", type=str, default="sample-10BT")
+    p.add_argument("--fineweb_files", type=str, default=None,
+                   help="comma-separated repo-relative parquet paths to read "
+                        "INSTEAD of the whole --fineweb_subset, e.g. "
+                        "'sample/100BT/000_00068.parquet,...'. Partitions the "
+                        "corpus by FILE so parallel jobs need no --skip_docs: "
+                        "skip() on a streaming dataset is a linear scan that "
+                        "downloads and discards everything before the offset, "
+                        "so N jobs at increasing offsets re-fetch the same "
+                        "prefix N times (measured: 22 concurrent jobs at "
+                        "offsets up to 94M docs hit HF read timeouts, and the "
+                        "largest offsets alone exceeded a 3h45 wall limit "
+                        "before emitting one token). Whole files are also an "
+                        "exact disjointness boundary, which a doc offset is "
+                        "not. Mutually exclusive with a --fineweb_subset "
+                        "config name, which load_dataset cannot take "
+                        "alongside data_files.")
     p.add_argument("--pg19", type=str, default="pg19")
     p.add_argument("--scrolls", type=str, default="tau/scrolls")
     p.add_argument("--scrolls_subsets", type=str, nargs="+",
@@ -258,16 +274,25 @@ def main():
     # reorders a rolling window, so it does not by itself make two differently-
     # seeded runs draw disjoint documents -- --skip_docs carves out a val shard
     # past everything a prior train run consumed, applied to --skip_source).
+    fineweb_files = ([f.strip() for f in a.fineweb_files.split(",") if f.strip()]
+                     if a.fineweb_files else None)
+
     def make_plain_stream(name, spec):
         kw = dict(split=spec["split"], streaming=True)
-        if spec.get("name"):
+        if name == "fineweb" and fineweb_files:
+            # data_files REPLACES the config name -- load_dataset rejects both
+            # together -- and makes .skip() unnecessary, so it is not applied
+            # below for this source.
+            kw["data_files"] = fineweb_files
+        elif spec.get("name"):
             kw["name"] = spec["name"]
         if spec.get("data_dir"):
             kw["data_dir"] = spec["data_dir"]
         if spec.get("trust_remote_code"):
             kw["trust_remote_code"] = True
         ds = load_dataset(spec["path"], **kw)
-        if name == a.skip_source and a.skip_docs:
+        if name == a.skip_source and a.skip_docs and not (
+                name == "fineweb" and fineweb_files):
             ds = ds.skip(a.skip_docs)
         buf = 10000 if name == "fineweb" else 1000
         return iter(ds.shuffle(seed=a.seed, buffer_size=buf))
@@ -377,6 +402,11 @@ def main():
         "mix": mix, "sources": {k: specs[k]["path"] for k in specs},
         "scrolls_subsets": specs.get("scrolls", {}).get("subsets"),
         "skip_docs": a.skip_docs, "skip_source": a.skip_source,
+        # Exactly which files this shard read, so two shards can be proven
+        # disjoint from their metadata instead of by trusting an offset
+        # arithmetic that was wrong once already (DOCS_PER_PART=1.7M against
+        # ~2.006M actually consumed overlapped every boundary by ~15%).
+        "fineweb_files": fineweb_files,
         "docs_consumed": docs_consumed,
         # back-compat: pretrain.sh reads fineweb_docs_consumed for val carving
         "fineweb_docs_consumed": docs_consumed.get("fineweb", 0),
