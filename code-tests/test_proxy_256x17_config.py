@@ -180,7 +180,7 @@ def test_the_data_matches_the_existing_shards_metadata(spec):
     shard. This is the CPU-side half."""
     data = spec.data
     assert data.kind == "shard"
-    assert data.shard_dir == "/scratch/m000151-pm06/jkli/fineweb_small_train"
+    assert data.shard_dir == "/scratch/m000151/cody1212/pm06-migration/fineweb_small_train"
     assert data.tokenizer == "NousResearch/Llama-2-7b-hf"
     assert data.n_tokens == 100000536
     assert data.mix == {"fineweb": 1.0, "pg19": 0.0, "scrolls": 0.0}

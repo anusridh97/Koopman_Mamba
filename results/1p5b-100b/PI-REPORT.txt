@@ -171,5 +171,5 @@ ARTIFACTS
   run spec     results/1p5b-100b/spec.yaml  (fully resolved, as launched)
   checkpoint   .../mamba3/peer/ska-1p5b-peer.9d31b982/seed42.f6bf6e86/final/
   perplexity   same dir, eval/final/fineweb_ppl.json
-  benchmarks   /scratch/m000151-pm06/cqiu/bench/mamba3-1p5b{,-lambada,-piqa}/
+  benchmarks   /scratch/m000151/cody1212/pm06-migration/bench/mamba3-1p5b{,-lambada,-piqa}/
   git commit   42749a8e5076b3a5db9a190daa6f9dd6ba91b6f1

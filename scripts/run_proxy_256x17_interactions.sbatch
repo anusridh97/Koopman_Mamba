@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=512G
 #SBATCH --time=12:00:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.err
 #
 # `koopman-tests`, which EXISTS, and not a tidier `koopman-studies`, which did
 # not. Slurm does not create the directory for --output/--error: slurmstepd fails

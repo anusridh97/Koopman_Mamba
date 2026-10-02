@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=01:30:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.err
 #
 # GPU verification for branch jack/search-and-provenance (29 commits).
 #
@@ -23,7 +23,7 @@
 #
 # Reuses the already-built CUDA venv rather than rebuilding (~25 min, and
 # rebuilding is how build 414632 and job 424523 died):
-#   /scratch/m000151-pm06/jkli/venvs/koopman-cuda
+#   /scratch/m000151/cody1212/venvs/koopman-cuda
 #   torch 2.13.0+cu129, mamba_ssm 2.3.2.post1
 # Module loads and env vars are copied from scripts/gpu_triage_verify.sbatch,
 # which is the last configuration known to have worked on this cluster.
@@ -133,7 +133,7 @@ echo "############################################################"
 echo "### STEP 3: a real short training run through the run system"
 echo "############################################################"
 # configs/runs/50m-first-real.yaml is the spec whose shard actually exists
-# (/scratch/m000151-pm06/jkli/fineweb_small_train, 100M tokens) and whose
+# (/scratch/m000151/cody1212/pm06-migration/fineweb_small_train, 100M tokens) and whose
 # max_steps is already only 300. --launcher local runs it in-process here.
 #
 # This is the step that exercises, together and for the first time on hardware:
@@ -212,7 +212,7 @@ print("model_type:", model_type, "cfg.compute_precision:",
       getattr(cfg, "compute_precision", "<missing>"))
 metrics = run_quick_eval(
     model, device,
-    data_dir="/scratch/m000151-pm06/jkli/fineweb_small_val",
+    data_dir="/scratch/m000151/cody1212/pm06-migration/fineweb_small_val",
     max_seq_len=1024, batch_size=4, max_batches=8, ska_ablation=True)
 print("metrics:", metrics)
 assert metrics["full"]["n_batches"] == 8, metrics["full"]

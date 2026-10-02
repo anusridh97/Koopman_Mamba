@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.err
 #
 # The SYNTHETIC-path golden, companion to capture_golden_curve.sbatch.
 #

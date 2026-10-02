@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=00:45:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/nvcc-fix/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/nvcc-fix/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/nvcc-fix/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/nvcc-fix/%x-%j.err
 #
 # Proves, on real H100 hardware, that the one-token nvcc flag bug in
 # koopman_lm/kernels/cuda_prefix_scan.py (`"--lineinfo"` -> nvcc fatal:
@@ -23,7 +23,7 @@
 # override to 'pytorch' -- that is the whole point of this job).
 #
 # Uses the ALREADY-BUILT CUDA venv (do not rebuild -- that took ~25 min):
-#   /scratch/m000151-pm06/jkli/venvs/koopman-cuda
+#   /scratch/m000151/cody1212/venvs/koopman-cuda
 #   torch 2.13.0+cu129, cuda 12.9, is_available True, mamba_ssm 2.3.2.post1,
 #   causal_conv1d ok.
 #

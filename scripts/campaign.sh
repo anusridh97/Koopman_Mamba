@@ -30,7 +30,7 @@
 # production width because resume is invalid across a world-size change.
 set -uo pipefail
 REPO=/users/cody1212/Koopman_Mamba
-V=/scratch/m000151-pm06/jkli/venvs/koopman-cuda/bin/python
+V=/scratch/m000151/cody1212/venvs/koopman-cuda/bin/python
 ACCT=${ACCT:-marlowe-m000151-pm06}
 # TWO ACCOUNTS, because QOS is per-association: marlowe-m000151-pm06 holds
 # `medium` (the only QOS `batch` allows) while marlowe-m000151 holds `normal`
@@ -39,9 +39,9 @@ ACCT=${ACCT:-marlowe-m000151-pm06}
 # preempt/normal job under the pm06 account fails with
 # `Invalid qos specification`.
 PREEMPT_ACCT=${PREEMPT_ACCT:-marlowe-m000151}
-RUN_ROOT=${RUN_ROOT:-/scratch/m000151-pm06/cqiu/mamba3/prod}
+RUN_ROOT=${RUN_ROOT:-/scratch/m000151/cody1212/pm06-migration/mamba3/prod}
 STATE=$RUN_ROOT/_campaign
-export PYTHONPATH=$REPO:/scratch/m000151-pm06/cqiu/pylibs
+export PYTHONPATH=$REPO:/scratch/m000151/cody1212/pm06-migration/pylibs
 
 MODE=${1:---status}
 mkdir -p "$STATE"

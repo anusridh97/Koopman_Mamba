@@ -61,9 +61,9 @@ def sweep_winner(run_root: Path, size: str) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run_root", type=Path,
-                    default=Path("/scratch/m000151-pm06/cqiu/mamba3/prod"))
+                    default=Path("/scratch/m000151/cody1212/pm06-migration/mamba3/prod"))
     ap.add_argument("--shard", type=Path,
-                    default=Path("/scratch/m000151-pm06/cqiu/tok100b/shard"))
+                    default=Path("/scratch/m000151/cody1212/pm06-migration/tok100b/shard"))
     ap.add_argument("--acct", default="marlowe-m000151-pm06")
     ap.add_argument("--straddle", type=float, default=1.33,
                     help="1.5B bracket = extrapolated lr / f and * f")
@@ -98,7 +98,7 @@ def main(argv=None) -> int:
         print("\n  (report only; pass --submit to launch stage 3)")
         return 0
 
-    V = "/scratch/m000151-pm06/jkli/venvs/koopman-cuda/bin/python"
+    V = "/scratch/m000151/cody1212/venvs/koopman-cuda/bin/python"
     pts = f"{lo:.6g},{hi:.6g}"
     # 1.5B bracket at PRODUCTION width (64 GPUs), because resume is invalid
     # across a world-size change and the winner must continue, not restart.

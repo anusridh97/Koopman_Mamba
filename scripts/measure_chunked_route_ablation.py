@@ -279,7 +279,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--run_root", required=True)
     ap.add_argument("--eval_data_dir",
-                    default="/scratch/m000151-pm06/jkli/fineweb_small_val")
+                    default="/scratch/m000151/cody1212/pm06-migration/fineweb_small_val")
     ap.add_argument("--json", default=None)
     ap.add_argument("--max_steps", type=int, default=1500)
     ap.add_argument("--seeds", default=",".join(str(s) for s in SEEDS))

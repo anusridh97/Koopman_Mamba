@@ -121,7 +121,7 @@ run_root: /scratch/m000151-pm06/jkli/study-4m-adaptive
 # HELD OUT, unlike the default. The default is the base spec's own training
 # shard, which is fine for a proxy but means the score you rank on is training
 # loss. A ranking you intend to act on should not be.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 # A trial that takes 8x its measured cost is stuck, not slow. 3.5 min expected,
 # so 30 min is generous; the 2 h default would waste an hour of a ~65 min budget

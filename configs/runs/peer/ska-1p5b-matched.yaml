@@ -74,7 +74,7 @@ model:
 
 data:
   kind: shard
-  shard_dir: /scratch/m000151-pm06/cqiu/tok100b/shard
+  shard_dir: /scratch/m000151/cody1212/pm06-migration/tok100b/shard
   tokenizer: NousResearch/Meta-Llama-3.1-8B
   mix: {fineweb: 1.0}
   n_tokens: 100000000000

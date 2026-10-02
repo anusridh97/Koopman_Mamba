@@ -313,7 +313,7 @@ run_root: /scratch/m000151-pm06/jkli/study-proxy-256x17-v1
 # HELD OUT. The default is the base spec's own training shard, which would make
 # the ranking a training-loss ranking. A ranking you intend to design a 50m
 # confirmation study from must not be one.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 # 40 minutes. A 600-step trial at this geometry is minutes, not tens of minutes,
 # so this is generous by roughly an order of magnitude -- and the 2-hour default

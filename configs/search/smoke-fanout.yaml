@@ -114,7 +114,7 @@ backend_policy: exact_invchol
 # HELD OUT. The 4m golden trains on fineweb_small_train; scoring there would
 # measure memorisation, and `train.py`'s `args.eval_data_dir or args.data_dir`
 # means omitting this silently produces a training-loss ranking.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 # 20 minutes. A 200-step 4m trial is about a minute, but two workers time-slice
 # one GPU here, so a trial takes longer than it would alone -- and the default

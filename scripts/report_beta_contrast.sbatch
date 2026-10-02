@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=14
 #SBATCH --mem=64G
 #SBATCH --time=00:20:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.err
 #
 # Run scripts/report_beta_contrast_on_mqar.py against an ALREADY-FINISHED MQAR
 # run root. Needed as its own job because the diagnostic builds the model, and

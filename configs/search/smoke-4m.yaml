@@ -62,4 +62,4 @@ run_root: /scratch/m000151-pm06/jkli/study-smoke
 design_file: configs/search/example_anchors.yaml
 # Held out from training, unlike the default. The shard the 4m golden trains on is
 # fineweb_small_train; scoring on it would measure memorisation as much as skill.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val

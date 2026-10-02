@@ -16,15 +16,15 @@
 # shallow killed the retry. Idempotent, so a requeue re-scores nothing.
 set -uo pipefail
 REPO=${REPO:-/users/cody1212/Koopman_Mamba}
-RUN_ROOT=${RUN_ROOT:-/scratch/m000151-pm06/cqiu/mamba3/prod}
-VAL=${VAL:-/scratch/m000151-pm06/cqiu/tok100b/val}
-V=/scratch/m000151-pm06/jkli/venvs/koopman-cuda/bin/python
+RUN_ROOT=${RUN_ROOT:-/scratch/m000151/cody1212/pm06-migration/mamba3/prod}
+VAL=${VAL:-/scratch/m000151/cody1212/pm06-migration/tok100b/val}
+V=/scratch/m000151/cody1212/venvs/koopman-cuda/bin/python
 cd "$REPO"
-export PYTHONPATH=$REPO:/scratch/m000151-pm06/cqiu/pylibs
+export PYTHONPATH=$REPO:/scratch/m000151/cody1212/pm06-migration/pylibs
 # HF_HOME explicit and config.json pre-cached: AutoTokenizer resolves its class
 # through AutoConfig, so offline failed on a cache holding tokenizer.json but
 # no config.json.
-export HF_HOME=/scratch/m000151-pm06/cqiu/hf HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
+export HF_HOME=/scratch/m000151/cody1212/pm06-migration/hf HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
 rc=0; n=0
 for rd in "$RUN_ROOT"/*/seed42.*; do
   [ -d "$rd" ] || continue

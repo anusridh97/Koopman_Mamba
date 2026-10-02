@@ -357,7 +357,7 @@ run_root: /scratch/m000151-pm06/jkli/study-beta-policy-1500
 # memorisation, and a write gate is precisely the mechanism that would exploit
 # it -- so for THIS study the held-out split is not hygiene, it is the
 # measurement.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 # 1500 steps took about 22 minutes serially in job 445994. 8 workers on one node
 # time-share host memory and PCIe, so allow generously; the default 2 hours would

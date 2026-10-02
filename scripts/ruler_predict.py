@@ -154,7 +154,7 @@ def main():
     ap.add_argument("--tokenizer", default="NousResearch/Meta-Llama-3.1-8B",
                     help="only used for --model mamba3; koopman uses the "
                          "tokenizer saved beside its checkpoint")
-    ap.add_argument("--ruler_root", default="/scratch/m000151-pm06/cqiu/ruler")
+    ap.add_argument("--ruler_root", default="/scratch/m000151/cody1212/pm06-migration/ruler")
     ap.add_argument("--data_dir", required=True, help=".../ruler-data/<len>")
     ap.add_argument("--task", required=True)
     ap.add_argument("--out_dir", required=True)

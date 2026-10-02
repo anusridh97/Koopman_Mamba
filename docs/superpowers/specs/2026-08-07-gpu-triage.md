@@ -6,7 +6,7 @@ tests. Restores `archive/reference/echo_jax.py`. Branched from
 `jack/nvcc-fix` (so the `--lineinfo` -> `-lineinfo` nvcc fix from job 415255
 is already present here).
 
-Reference log: `/scratch/m000151-pm06/jkli/logs/koopman-e2e/pytest-full-415208.log`.
+Reference log: `/scratch/m000151/cody1212/logs/koopman-e2e/pytest-full-415208.log`.
 
 Out of scope, per the task brief (already known, will clear on their own once
 job 415255's nvcc fix lands):
@@ -73,7 +73,7 @@ this.
   and (b) the removal history exactly as reconstructed above, with the
   explicit statement that no commit records a substantive reason.
 - Verified: `pytest code-tests/test_jax_reference.py` -> **5 passed** (run
-  from the login node using `/scratch/m000151-pm06/jkli/venvs/koopman-cuda`,
+  from the login node using `/scratch/m000151/cody1212/venvs/koopman-cuda`,
   no GPU needed for this suite). It needed `flax` in addition to the `jax`
   already in that venv; `pip install flax` (pure-Python, no CUDA compile) was
   added there rather than rebuilding the venv. On the CPU venv (no jax
@@ -247,7 +247,7 @@ touched here.
   code-tests/ -q`): **337 passed, 28 skipped, 0 failed** — unchanged after
   all edits in this branch.
 - `code-tests/test_jax_reference.py`: **5 passed**, run interactively from the
-  login node against `/scratch/m000151-pm06/jkli/venvs/koopman-cuda`
+  login node against `/scratch/m000151/cody1212/venvs/koopman-cuda`
   (`flax` added to that venv; no GPU needed for this suite).
 - `code-tests/test_prefix_scan.py::test_prefix_scan_model_recurrent_decode_matches_full_prefix`:
   **1 passed**, run interactively from the login node against the same venv
@@ -255,4 +255,4 @@ touched here.
 - `test_ns_equals_cholesky_bf16` and `test_table2_forward_and_shifted_loss_smoke`
   need real GPU compute and were verified via a Slurm job:
   `scripts/gpu_triage_verify.sbatch`, submitted as job **<see report>**, log
-  at `/scratch/m000151-pm06/jkli/logs/koopman-tests/koopman-gpu-triage-<jobid>.out`.
+  at `/scratch/m000151/cody1212/logs/koopman-tests/koopman-gpu-triage-<jobid>.out`.

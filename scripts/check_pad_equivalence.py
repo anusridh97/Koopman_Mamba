@@ -12,11 +12,11 @@ sys.path.insert(0, "/users/cody1212/Koopman_Mamba/scripts")
 sys.path.insert(0, "/users/cody1212/Koopman_Mamba")
 from ruler_predict import load_mamba3, greedy
 
-HUB = "/scratch/m000151-pm06/cqiu/hf/hub"
+HUB = "/scratch/m000151/cody1212/pm06-migration/hf/hub"
 M = {"siso1p5b": f"{HUB}/models--state-spaces--mamba3-siso-1.5b/snapshots/5cfc721542ec9ccee768088b2fd6b7e8101219d8",
      "mimo1p5b": f"{HUB}/models--state-spaces--mamba3-mimo-1.5b/snapshots/bc6b5d0f7994fe4cb3478242e92da8daf9ee29ec"}
 lines = [json.loads(l) for l in open(
-    "/scratch/m000151-pm06/cqiu/ruler-data/2048full/niah_single_2/validation.jsonl")][:2]
+    "/scratch/m000151/cody1212/pm06-migration/ruler-data/2048full/niah_single_2/validation.jsonl")][:2]
 ok = True
 for name, path in M.items():
     m, tok, kind = load_mamba3(path, "NousResearch/Meta-Llama-3.1-8B")

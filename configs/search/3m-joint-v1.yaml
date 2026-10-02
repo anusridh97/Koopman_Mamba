@@ -225,12 +225,12 @@ seq_len: 2048
 # hashed into study_id, so moving it does not fork the study -- but resubmitting
 # against a different root starts a second journal that knows nothing about the
 # GPU-hours already spent.
-run_root: /scratch/m000151-pm06/cqiu/study-3m-joint-v1
+run_root: /scratch/m000151/cody1212/pm06-migration/study-3m-joint-v1
 
 # HELD OUT, and required. The default is the base spec's own training shard,
 # which would make this a training-loss ranking -- and the whole point of the 3M
 # search is to hand a trustworthy ranking to the 10M/30M stage.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 # 45 minutes. A 1068-step trial at 3M is minutes, so this is generous by roughly
 # an order of magnitude -- and the 2-hour default would idle one of eight GPUs

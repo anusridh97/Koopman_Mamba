@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.err
 #
 # Verifies, on real H100 hardware, the fixes made in docs/superpowers/specs/
 # 2026-08-07-gpu-triage.md for three of the five independent (non-fused-
@@ -34,7 +34,7 @@
 # as a bonus signal but does not treat their outcome as this job's verdict.
 #
 # Uses the ALREADY-BUILT CUDA venv (do not rebuild -- ~25 min):
-#   /scratch/m000151-pm06/jkli/venvs/koopman-cuda
+#   /scratch/m000151/cody1212/venvs/koopman-cuda
 #   torch 2.13.0+cu129, is_available True, mamba_ssm 2.3.2.post1.
 # flax was pip-installed into this venv during triage (pure-python, no CUDA
 # compile) so archive/reference/echo_jax.py's jax/flax reference actually runs.

@@ -4,7 +4,7 @@
 # kernel). model: is configs/50m.yaml inlined with max_seq_len overridden
 # to 2048 (there is no field-level override of a registry model name yet,
 # see experimentation/run/resolve.py:_resolve_model). data.n_tokens is the
-# ACTUAL count /scratch/m000151-pm06/jkli/fineweb_small_train/meta.json recorded (pretokenize.py's
+# ACTUAL count /scratch/m000151/cody1212/pm06-migration/fineweb_small_train/meta.json recorded (pretokenize.py's
 # per-document overshoot makes the exact figure only knowable after
 # tokenizing -- see scripts/first_real_run.sbatch step 2). Generated and
 # committed by that script; not hand-authored.
@@ -56,7 +56,7 @@ model:
   max_seq_len: 2048
 data:
   kind: shard
-  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  shard_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_train
   tokenizer: NousResearch/Llama-2-7b-hf
   mix:
     fineweb: 1.0

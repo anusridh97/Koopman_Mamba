@@ -154,7 +154,7 @@ model:
 # retokenization.
 data:
   kind: shard
-  shard_dir: /scratch/m000151-pm06/jkli/fineweb_small_train
+  shard_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_train
   tokenizer: NousResearch/Llama-2-7b-hf
   mix:
     fineweb: 1.0

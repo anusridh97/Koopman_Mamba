@@ -295,10 +295,10 @@ fixed_params:
 backend_policy: exact_invchol
 seq_len: 2048
 
-run_root: /scratch/m000151-pm06/cqiu/study-50m-joint-v1
+run_root: /scratch/m000151/cody1212/pm06-migration/study-50m-joint-v1
 # HELD OUT and disjoint from the training shard. The default would be the base
 # spec's own training data, which would make this a training-loss ranking.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 # 30 hours. GATE CLOSED -- set from measurement, not from a ratio.
 #

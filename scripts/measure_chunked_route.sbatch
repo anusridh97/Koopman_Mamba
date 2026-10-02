@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=14
 #SBATCH --mem=112G
 #SBATCH --time=04:00:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/koopman-tests/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/koopman-tests/%x-%j.err
 #
 # The two things nobody has measured about the chunked SKA route.
 #

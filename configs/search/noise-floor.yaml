@@ -78,7 +78,7 @@ run_root: /scratch/m000151-pm06/jkli/study-noise-floor
 
 # Held out, as the interaction study is. A floor measured on training loss would
 # not describe the quantity the study ranks on.
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 trial_timeout_seconds: 1800
 

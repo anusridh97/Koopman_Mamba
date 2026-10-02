@@ -67,7 +67,7 @@ data:
   # Disjoint from the eval set: tok10b's meta.json records
   # `disjoint_from {"fineweb_small_val": [93773, 97158]}` and the shard begins
   # at doc 97,159. So `evaluate --mode fineweb_ppl` scores held-out data.
-  shard_dir: /scratch/m000151-pm06/cqiu/tok10b/shard
+  shard_dir: /scratch/m000151/cody1212/pm06-migration/tok10b/shard
   tokenizer: NousResearch/Llama-2-7b-hf
   # EXACTLY the shard's own meta.json, which reads {"fineweb": 1.0} with no
   # zero entries. `data_verify.py:96` compares the dicts for equality, so the

@@ -20,13 +20,13 @@
 #          and submit the evals.
 set -uo pipefail
 REPO=${REPO:-/users/cody1212/Koopman_Mamba}
-RUN_ROOT=${RUN_ROOT:-/scratch/m000151-pm06/cqiu/mamba3/prod}
+RUN_ROOT=${RUN_ROOT:-/scratch/m000151/cody1212/pm06-migration/mamba3/prod}
 ACCT=${ACCT:-marlowe-m000151-pm06}            # batch  + qos medium
 PREEMPT_ACCT=${PREEMPT_ACCT:-marlowe-m000151} # preempt + qos normal
-SHARD=${SHARD:-/scratch/m000151-pm06/cqiu/tok100b/shard}
+SHARD=${SHARD:-/scratch/m000151/cody1212/pm06-migration/tok100b/shard}
 STATE=$RUN_ROOT/_campaign
-V=/scratch/m000151-pm06/jkli/venvs/koopman-cuda/bin/python
-cd "$REPO"; export PYTHONPATH=$REPO:/scratch/m000151-pm06/cqiu/pylibs
+V=/scratch/m000151/cody1212/venvs/koopman-cuda/bin/python
+cd "$REPO"; export PYTHONPATH=$REPO:/scratch/m000151/cody1212/pm06-migration/pylibs
 mkdir -p "$STATE"
 STAGE=$(cat "$STATE/stage" 2>/dev/null || echo 2)
 

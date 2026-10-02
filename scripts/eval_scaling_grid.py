@@ -47,8 +47,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-VAL_SHARD = "/scratch/m000151-pm06/jkli/fineweb_small_val"
-VENV = "/scratch/m000151-pm06/jkli/venvs/koopman-cuda/bin/python"
+VAL_SHARD = "/scratch/m000151/cody1212/pm06-migration/fineweb_small_val"
+VENV = "/scratch/m000151/cody1212/venvs/koopman-cuda/bin/python"
 REPO = "/users/cody1212/Koopman_Mamba"
 TOK_PER_STEP = 96 * 2048
 
@@ -114,12 +114,12 @@ def submit(root: Path, account: str, dry: bool,
 #SBATCH --output={root}/_eval-%A_%a.out
 set -uo pipefail
 cd {REPO}
-export PYTHONPATH={REPO}:/scratch/m000151-pm06/cqiu/pylibs
+export PYTHONPATH={REPO}:/scratch/m000151/cody1212/pm06-migration/pylibs
 # HF_HOME must be explicit. AutoTokenizer.from_pretrained resolves the
 # tokenizer CLASS through AutoConfig, so it needs config.json -- which the
 # cache did not have, even though tokenizer.json/tokenizer.model were all
 # present. Offline therefore failed on a cache that looked populated.
-export HF_HOME=/scratch/m000151-pm06/cqiu/hf
+export HF_HOME=/scratch/m000151/cody1212/pm06-migration/hf
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1
 # BATCHED: each array task scores PER_TASK checkpoints sequentially rather than
 # one. QOS `medium` caps 32 JOBS per account and array tasks count individually,

@@ -192,7 +192,7 @@ model:
 # disjointness guarantee against fineweb_small_val would be silently lost.
 data:
   kind: shard
-  shard_dir: /scratch/m000151-pm06/cqiu/tok10b/shard
+  shard_dir: /scratch/m000151/cody1212/pm06-migration/tok10b/shard
   tokenizer: NousResearch/Llama-2-7b-hf
   # One key, not the three the 3M/10M specs carry, and this must MATCH the
   # shard's meta.json byte-for-byte because `verify_data` compares the dicts for

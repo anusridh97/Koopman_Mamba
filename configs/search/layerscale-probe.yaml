@@ -89,7 +89,7 @@ search_axes:
 
 run_root: /scratch/m000151-pm06/jkli/study-layerscale-probe
 
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val
 
 # 600 steps at roughly 0.5 s/step is ~5 min; 30 min is generous without letting a
 # hung trial eat the whole booking.

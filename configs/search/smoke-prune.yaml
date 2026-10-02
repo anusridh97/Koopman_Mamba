@@ -24,4 +24,4 @@ launcher: local
 # wrong answers that preceded it.
 backend_policy: exact_invchol
 run_root: /scratch/m000151-pm06/jkli/study-prune
-eval_data_dir: /scratch/m000151-pm06/jkli/fineweb_small_val
+eval_data_dir: /scratch/m000151/cody1212/pm06-migration/fineweb_small_val

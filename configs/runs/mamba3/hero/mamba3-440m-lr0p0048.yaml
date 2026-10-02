@@ -39,7 +39,7 @@ model:
 
 data:
   kind: shard
-  shard_dir: /scratch/m000151-pm06/cqiu/tok100b/shard
+  shard_dir: /scratch/m000151/cody1212/pm06-migration/tok100b/shard
   # Llama-3.1 via the ungated NousResearch mirror: vocab 128,256, eos
   # <|end_of_text|> = 128001 -- the same token the lead's gigatoken script picks.
   tokenizer: NousResearch/Meta-Llama-3.1-8B

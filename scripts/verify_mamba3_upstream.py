@@ -25,7 +25,7 @@ from experimentation.training.data.dataset import MemmapPackedDataset
 import mamba_ssm
 print("mamba_ssm from:", mamba_ssm.__file__, flush=True)
 tok = AutoTokenizer.from_pretrained("NousResearch/Meta-Llama-3.1-8B")
-SNAP = "/scratch/m000151-pm06/cqiu/hf/hub/models--state-spaces--mamba3-{}-1.5b/snapshots/{}"
+SNAP = "/scratch/m000151/cody1212/pm06-migration/hf/hub/models--state-spaces--mamba3-{}-1.5b/snapshots/{}"
 MODELS = {"siso": SNAP.format("siso", "5cfc721542ec9ccee768088b2fd6b7e8101219d8"),
           "mimo": SNAP.format("mimo", "bc6b5d0f7994fe4cb3478242e92da8daf9ee29ec")}
 
@@ -61,7 +61,7 @@ for name, path in MODELS.items():
     except Exception as e:
         print(f"  cached decode FAILED: {type(e).__name__}: {str(e)[:160]}", flush=True)
 
-    ds = MemmapPackedDataset("/scratch/m000151-pm06/cqiu/tok100b/val", 2048, seed=0)
+    ds = MemmapPackedDataset("/scratch/m000151/cody1212/pm06-migration/tok100b/val", 2048, seed=0)
     tl, tt = 0.0, 0
     with torch.no_grad():
         for b in DataLoader(ds, batch_size=8, shuffle=False):
@@ -74,7 +74,7 @@ for name, path in MODELS.items():
     print(f"  PPL on our shard: {results[name]['ppl']:.4f} (loss {tl/tt:.4f}, {tt:,} tokens)", flush=True)
     del m; torch.cuda.empty_cache()
 
-json.dump(results, open("/scratch/m000151-pm06/cqiu/ruler-out/ppl-mamba3-upstream.json", "w"), indent=2)
+json.dump(results, open("/scratch/m000151/cody1212/pm06-migration/ruler-out/ppl-mamba3-upstream.json", "w"), indent=2)
 print("\n=== ordering check ===")
 print(f"  SISO {results['siso']['ppl']:.4f}   MIMO {results['mimo']['ppl']:.4f}   "
       f"paper: SISO 10.35, MIMO 10.24 (MIMO better)")

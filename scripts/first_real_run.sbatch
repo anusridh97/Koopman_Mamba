@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=01:45:00
-#SBATCH --output=/scratch/m000151-pm06/jkli/logs/first-run/%x-%j.out
-#SBATCH --error=/scratch/m000151-pm06/jkli/logs/first-run/%x-%j.err
+#SBATCH --output=/scratch/m000151/cody1212/logs/first-run/%x-%j.out
+#SBATCH --error=/scratch/m000151/cody1212/logs/first-run/%x-%j.err
 #
 # The repo's first genuinely real training run through experimentation/run/ (the
 # new run system: RunSpec -> resolve -> materialize -> Launcher), on real
@@ -37,7 +37,7 @@
 #      experimentation.run.eval_result yet -- see FINDINGS at the end of the log)
 #
 # Uses the ALREADY-BUILT CUDA venv (do not rebuild -- ~25 min):
-#   /scratch/m000151-pm06/jkli/venvs/koopman-cuda
+#   /scratch/m000151/cody1212/venvs/koopman-cuda
 #
 # NOTE on SIGUSR1: job 415208 (an earlier E2E smoke through this same run
 # system) died with an uncaught SIGUSR1 partway through, and a different
