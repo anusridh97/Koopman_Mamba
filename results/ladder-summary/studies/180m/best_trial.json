@@ -1,0 +1,27 @@
+{
+  "study_name": "180m-joint-v1",
+  "trial_number": 6,
+  "objective": 2.4021846055984497,
+  "params": {
+    "mamba_expand": 2,
+    "depth_tier": "full",
+    "d_state": 24,
+    "ska_n_heads": 4,
+    "ska_rank": 24,
+    "n_ska_layers": 4,
+    "placement": "late",
+    "ska_ridge": 0.01,
+    "ska_layerscale_init": 0.01,
+    "norm_clip_multiplier": 1.0,
+    "gamma_value": 1.0,
+    "ska_power_K": 1,
+    "beta_policy": "learned",
+    "learning_rate": 0.0025564000000000003,
+    "weight_decay": 0.1,
+    "warmup_ratio": 0.02,
+    "grad_clip": 1.0
+  },
+  "run_id": "0438a32c",
+  "run_dir": "/scratch/m000151-pm06/cqiu/study-180m-joint-v1/180m-joint-v1.ddc1b669/seed42.0438a32c",
+  "anchor": "lr-0.55x"
+}

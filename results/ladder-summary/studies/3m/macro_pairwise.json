@@ -1,0 +1,839 @@
+{
+  "mamba_expand__learning_rate": {
+    "left": "mamba_expand",
+    "right": "learning_rate",
+    "left_levels": [
+      {
+        "label": 1,
+        "value": 1
+      },
+      {
+        "label": 2,
+        "value": 2
+      },
+      {
+        "label": 3,
+        "value": 3
+      }
+    ],
+    "right_levels": [
+      {
+        "label": "[0.001501, 0.002833]",
+        "lo": 0.0015005035892690503,
+        "hi": 0.0028334682558356066,
+        "scale": "linear"
+      },
+      {
+        "label": "[0.002833, 0.004166]",
+        "lo": 0.0028334682558356066,
+        "hi": 0.004166432922402163,
+        "scale": "linear"
+      },
+      {
+        "label": "[0.004166, 0.005499]",
+        "lo": 0.004166432922402163,
+        "hi": 0.005499397588968719,
+        "scale": "linear"
+      }
+    ],
+    "left_binned": false,
+    "right_binned": true,
+    "degenerate": false,
+    "note": "",
+    "rows": [
+      {
+        "level": 1,
+        "cells": [
+          {
+            "n": 20,
+            "mean": 4.641833299398423,
+            "best": 4.481883406639099
+          },
+          {
+            "n": 12,
+            "mean": 4.4440077394247055,
+            "best": 4.388108432292938
+          },
+          {
+            "n": 25,
+            "mean": 4.371252121925354,
+            "best": 4.282830655574799
+          }
+        ]
+      },
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 19,
+            "mean": 4.613181907879679,
+            "best": 4.4624239802360535
+          },
+          {
+            "n": 29,
+            "mean": 4.369013075170846,
+            "best": 4.269075572490692
+          },
+          {
+            "n": 137,
+            "mean": 4.2720348404271755,
+            "best": 4.193158268928528
+          }
+        ]
+      },
+      {
+        "level": 3,
+        "cells": [
+          {
+            "n": 33,
+            "mean": 4.553438995823716,
+            "best": 4.417151868343353
+          },
+          {
+            "n": 60,
+            "mean": 4.332864340146383,
+            "best": 4.22100692987442
+          },
+          {
+            "n": 706,
+            "mean": 4.222256029378253,
+            "best": 4.151790618896484
+          }
+        ]
+      }
+    ],
+    "n_completed": 1041,
+    "n_placed": 1041,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "mamba_expand__ska_rank": {
+    "left": "mamba_expand",
+    "right": "ska_rank",
+    "left_levels": [
+      {
+        "label": 1,
+        "value": 1
+      },
+      {
+        "label": 2,
+        "value": 2
+      },
+      {
+        "label": 3,
+        "value": 3
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 8,
+        "value": 8
+      },
+      {
+        "label": 16,
+        "value": 16
+      },
+      {
+        "label": 24,
+        "value": 24
+      },
+      {
+        "label": 32,
+        "value": 32
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": false,
+    "note": "",
+    "rows": [
+      {
+        "level": 1,
+        "cells": [
+          {
+            "n": 22,
+            "mean": 4.477225487882441,
+            "best": 4.353035569190979
+          },
+          {
+            "n": 10,
+            "mean": 4.49332018494606,
+            "best": 4.356474339962006
+          },
+          {
+            "n": 18,
+            "mean": 4.471412363979551,
+            "best": 4.282830655574799
+          },
+          {
+            "n": 7,
+            "mean": 4.504068110670362,
+            "best": 4.29074901342392
+          }
+        ]
+      },
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 12,
+            "mean": 4.4580332189798355,
+            "best": 4.295991361141205
+          },
+          {
+            "n": 27,
+            "mean": 4.417499771824589,
+            "best": 4.245677351951599
+          },
+          {
+            "n": 29,
+            "mean": 4.33471032463271,
+            "best": 4.214968025684357
+          },
+          {
+            "n": 117,
+            "mean": 4.283291595613854,
+            "best": 4.193158268928528
+          }
+        ]
+      },
+      {
+        "level": 3,
+        "cells": [
+          {
+            "n": 51,
+            "mean": 4.371860604660184,
+            "best": 4.251080274581909
+          },
+          {
+            "n": 50,
+            "mean": 4.346064249277115,
+            "best": 4.213276922702789
+          },
+          {
+            "n": 107,
+            "mean": 4.283584368563144,
+            "best": 4.184505045413971
+          },
+          {
+            "n": 591,
+            "mean": 4.217489802494469,
+            "best": 4.151790618896484
+          }
+        ]
+      }
+    ],
+    "n_completed": 1041,
+    "n_placed": 1041,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "mamba_expand__n_ska_layers": {
+    "left": "mamba_expand",
+    "right": "n_ska_layers",
+    "left_levels": [
+      {
+        "label": 1,
+        "value": 1
+      },
+      {
+        "label": 2,
+        "value": 2
+      },
+      {
+        "label": 3,
+        "value": 3
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 2,
+        "value": 2
+      },
+      {
+        "label": 3,
+        "value": 3
+      },
+      {
+        "label": 4,
+        "value": 4
+      },
+      {
+        "label": 6,
+        "value": 6
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": false,
+    "note": "",
+    "rows": [
+      {
+        "level": 1,
+        "cells": [
+          {
+            "n": 10,
+            "mean": 4.464423137903213,
+            "best": 4.29074901342392
+          },
+          {
+            "n": 21,
+            "mean": 4.4528579371316095,
+            "best": 4.330560505390167
+          },
+          {
+            "n": 14,
+            "mean": 4.47946115902492,
+            "best": 4.282830655574799
+          },
+          {
+            "n": 12,
+            "mean": 4.5482798020044966,
+            "best": 4.317223966121674
+          }
+        ]
+      },
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 35,
+            "mean": 4.395209617274148,
+            "best": 4.227911531925201
+          },
+          {
+            "n": 30,
+            "mean": 4.326199632883072,
+            "best": 4.212736904621124
+          },
+          {
+            "n": 78,
+            "mean": 4.294013832624142,
+            "best": 4.194109737873077
+          },
+          {
+            "n": 42,
+            "mean": 4.3111715245814555,
+            "best": 4.193158268928528
+          }
+        ]
+      },
+      {
+        "level": 3,
+        "cells": [
+          {
+            "n": 72,
+            "mean": 4.28599968387021,
+            "best": 4.190968215465546
+          },
+          {
+            "n": 144,
+            "mean": 4.258241833912002,
+            "best": 4.17033314704895
+          },
+          {
+            "n": 312,
+            "mean": 4.2443353571952915,
+            "best": 4.166462481021881
+          },
+          {
+            "n": 271,
+            "mean": 4.225596572860141,
+            "best": 4.151790618896484
+          }
+        ]
+      }
+    ],
+    "n_completed": 1041,
+    "n_placed": 1041,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "mamba_expand__d_state": {
+    "left": "mamba_expand",
+    "right": "d_state",
+    "left_levels": [
+      {
+        "label": 1,
+        "value": 1
+      },
+      {
+        "label": 2,
+        "value": 2
+      },
+      {
+        "label": 3,
+        "value": 3
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 8,
+        "value": 8
+      },
+      {
+        "label": 16,
+        "value": 16
+      },
+      {
+        "label": 24,
+        "value": 24
+      },
+      {
+        "label": 32,
+        "value": 32
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": false,
+    "note": "",
+    "rows": [
+      {
+        "level": 1,
+        "cells": [
+          {
+            "n": 12,
+            "mean": 4.456076517701149,
+            "best": 4.317223966121674
+          },
+          {
+            "n": 9,
+            "mean": 4.583158890406291,
+            "best": 4.372253179550171
+          },
+          {
+            "n": 22,
+            "mean": 4.437376068397001,
+            "best": 4.282830655574799
+          },
+          {
+            "n": 14,
+            "mean": 4.507317155599594,
+            "best": 4.356474339962006
+          }
+        ]
+      },
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 35,
+            "mean": 4.345211006913867,
+            "best": 4.202965795993805
+          },
+          {
+            "n": 25,
+            "mean": 4.415238878726959,
+            "best": 4.1946834325790405
+          },
+          {
+            "n": 69,
+            "mean": 4.302299708559893,
+            "best": 4.212736904621124
+          },
+          {
+            "n": 56,
+            "mean": 4.291045919060707,
+            "best": 4.193158268928528
+          }
+        ]
+      },
+      {
+        "level": 3,
+        "cells": [
+          {
+            "n": 61,
+            "mean": 4.291914251007017,
+            "best": 4.174862265586853
+          },
+          {
+            "n": 140,
+            "mean": 4.254945136393819,
+            "best": 4.167736828327179
+          },
+          {
+            "n": 366,
+            "mean": 4.242432259633893,
+            "best": 4.15367066860199
+          },
+          {
+            "n": 232,
+            "mean": 4.228098312842435,
+            "best": 4.151790618896484
+          }
+        ]
+      }
+    ],
+    "n_completed": 1041,
+    "n_placed": 1041,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "depth_tier__learning_rate": {
+    "left": "depth_tier",
+    "right": "learning_rate",
+    "left_levels": [
+      {
+        "label": "full",
+        "value": "full"
+      },
+      {
+        "label": "lean",
+        "value": "lean"
+      }
+    ],
+    "right_levels": [
+      {
+        "label": "[0.001501, 0.002833]",
+        "lo": 0.0015005035892690503,
+        "hi": 0.0028334682558356066,
+        "scale": "linear"
+      },
+      {
+        "label": "[0.002833, 0.004166]",
+        "lo": 0.0028334682558356066,
+        "hi": 0.004166432922402163,
+        "scale": "linear"
+      },
+      {
+        "label": "[0.004166, 0.005499]",
+        "lo": 0.004166432922402163,
+        "hi": 0.005499397588968719,
+        "scale": "linear"
+      }
+    ],
+    "left_binned": false,
+    "right_binned": true,
+    "degenerate": false,
+    "note": "",
+    "rows": [
+      {
+        "level": "full",
+        "cells": [
+          {
+            "n": 32,
+            "mean": 4.587660415098071,
+            "best": 4.417151868343353
+          },
+          {
+            "n": 68,
+            "mean": 4.345928489285357,
+            "best": 4.22100692987442
+          },
+          {
+            "n": 709,
+            "mean": 4.22812166881494,
+            "best": 4.151790618896484
+          }
+        ]
+      },
+      {
+        "level": "lean",
+        "cells": [
+          {
+            "n": 40,
+            "mean": 4.598636895418167,
+            "best": 4.440319716930389
+          },
+          {
+            "n": 33,
+            "mean": 4.378127126982718,
+            "best": 4.259679019451141
+          },
+          {
+            "n": 159,
+            "mean": 4.2624186775969255,
+            "best": 4.176839053630829
+          }
+        ]
+      }
+    ],
+    "n_completed": 1041,
+    "n_placed": 1041,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "ska_n_heads__ska_rank": {
+    "left": "ska_n_heads",
+    "right": "ska_rank",
+    "left_levels": [
+      {
+        "label": 1,
+        "value": 1
+      },
+      {
+        "label": 2,
+        "value": 2
+      },
+      {
+        "label": 4,
+        "value": 4
+      },
+      {
+        "label": 8,
+        "value": 8
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 8,
+        "value": 8
+      },
+      {
+        "label": 16,
+        "value": 16
+      },
+      {
+        "label": 24,
+        "value": 24
+      },
+      {
+        "label": 32,
+        "value": 32
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": false,
+    "note": "",
+    "rows": [
+      {
+        "level": 1,
+        "cells": [
+          {
+            "n": 16,
+            "mean": 4.424878820776939,
+            "best": 4.269704341888428
+          },
+          {
+            "n": 19,
+            "mean": 4.398927666639027,
+            "best": 4.24924236536026
+          },
+          {
+            "n": 37,
+            "mean": 4.334575367940439,
+            "best": 4.229189455509186
+          },
+          {
+            "n": 118,
+            "mean": 4.243527327553701,
+            "best": 4.167736828327179
+          }
+        ]
+      },
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 30,
+            "mean": 4.376790229479472,
+            "best": 4.2548423409461975
+          },
+          {
+            "n": 25,
+            "mean": 4.371661508083344,
+            "best": 4.219341516494751
+          },
+          {
+            "n": 46,
+            "mean": 4.310388269631759,
+            "best": 4.193189859390259
+          },
+          {
+            "n": 297,
+            "mean": 4.225779003567165,
+            "best": 4.153550982475281
+          }
+        ]
+      },
+      {
+        "level": 4,
+        "cells": [
+          {
+            "n": 15,
+            "mean": 4.41710322300593,
+            "best": 4.266964673995972
+          },
+          {
+            "n": 35,
+            "mean": 4.373007910592215,
+            "best": 4.213276922702789
+          },
+          {
+            "n": 39,
+            "mean": 4.267742487100454,
+            "best": 4.184505045413971
+          },
+          {
+            "n": 224,
+            "mean": 4.226368738072259,
+            "best": 4.151790618896484
+          }
+        ]
+      },
+      {
+        "level": 8,
+        "cells": [
+          {
+            "n": 24,
+            "mean": 4.441747243205707,
+            "best": 4.251080274581909
+          },
+          {
+            "n": 8,
+            "mean": 4.447808489203453,
+            "best": 4.251484036445618
+          },
+          {
+            "n": 32,
+            "mean": 4.35738885588944,
+            "best": 4.212896645069122
+          },
+          {
+            "n": 76,
+            "mean": 4.246195798641757,
+            "best": 4.173574209213257
+          }
+        ]
+      }
+    ],
+    "n_completed": 1041,
+    "n_placed": 1041,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "d_state__learning_rate": {
+    "left": "d_state",
+    "right": "learning_rate",
+    "left_levels": [
+      {
+        "label": 8,
+        "value": 8
+      },
+      {
+        "label": 16,
+        "value": 16
+      },
+      {
+        "label": 24,
+        "value": 24
+      },
+      {
+        "label": 32,
+        "value": 32
+      }
+    ],
+    "right_levels": [
+      {
+        "label": "[0.001501, 0.002833]",
+        "lo": 0.0015005035892690503,
+        "hi": 0.0028334682558356066,
+        "scale": "linear"
+      },
+      {
+        "label": "[0.002833, 0.004166]",
+        "lo": 0.0028334682558356066,
+        "hi": 0.004166432922402163,
+        "scale": "linear"
+      },
+      {
+        "label": "[0.004166, 0.005499]",
+        "lo": 0.004166432922402163,
+        "hi": 0.005499397588968719,
+        "scale": "linear"
+      }
+    ],
+    "left_binned": false,
+    "right_binned": true,
+    "degenerate": false,
+    "note": "",
+    "rows": [
+      {
+        "level": 8,
+        "cells": [
+          {
+            "n": 15,
+            "mean": 4.572898495197296,
+            "best": 4.437963843345642
+          },
+          {
+            "n": 20,
+            "mean": 4.378086811304092,
+            "best": 4.275337100028992
+          },
+          {
+            "n": 73,
+            "mean": 4.26310765906556,
+            "best": 4.174862265586853
+          }
+        ]
+      },
+      {
+        "level": 16,
+        "cells": [
+          {
+            "n": 21,
+            "mean": 4.626459521906717,
+            "best": 4.464965522289276
+          },
+          {
+            "n": 17,
+            "mean": 4.377634185201981,
+            "best": 4.232100188732147
+          },
+          {
+            "n": 136,
+            "mean": 4.233428602709489,
+            "best": 4.167736828327179
+          }
+        ]
+      },
+      {
+        "level": 24,
+        "cells": [
+          {
+            "n": 16,
+            "mean": 4.612214256078005,
+            "best": 4.481229305267334
+          },
+          {
+            "n": 44,
+            "mean": 4.337791730057109,
+            "best": 4.22100692987442
+          },
+          {
+            "n": 397,
+            "mean": 4.238168504286173,
+            "best": 4.15367066860199
+          }
+        ]
+      },
+      {
+        "level": 32,
+        "cells": [
+          {
+            "n": 20,
+            "mean": 4.560302680730819,
+            "best": 4.417151868343353
+          },
+          {
+            "n": 20,
+            "mean": 4.35784894824028,
+            "best": 4.2246145606040955
+          },
+          {
+            "n": 262,
+            "mean": 4.221209113151972,
+            "best": 4.151790618896484
+          }
+        ]
+      }
+    ],
+    "n_completed": 1041,
+    "n_placed": 1041,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  }
+}

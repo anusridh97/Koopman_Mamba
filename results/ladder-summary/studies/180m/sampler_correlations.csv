@@ -1,0 +1,11 @@
+a,b,r,n
+n_ska_layers,weight_decay,-0.07692307692307694,14
+n_ska_layers,warmup_ratio,-0.07692307692307691,14
+warmup_ratio,weight_decay,-0.0769230769230769,14
+learning_rate,n_ska_layers,-0.04270491571609831,14
+learning_rate,weight_decay,-0.04270491571609831,14
+learning_rate,warmup_ratio,-0.0427049157160983,14
+ska_rank,warmup_ratio,-0.020615270438818365,14
+ska_rank,weight_decay,-0.020615270438818365,14
+n_ska_layers,ska_rank,-0.020615270438818355,14
+learning_rate,ska_rank,-0.011444854025206048,14

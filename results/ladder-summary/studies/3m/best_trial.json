@@ -1,0 +1,27 @@
+{
+  "study_name": "3m-joint-v1",
+  "trial_number": 1794,
+  "objective": 4.151790618896484,
+  "params": {
+    "mamba_expand": 3,
+    "depth_tier": "full",
+    "d_state": 32,
+    "ska_n_heads": 4,
+    "ska_rank": 32,
+    "n_ska_layers": 6,
+    "placement": "late",
+    "ska_ridge": 0.022846843162214723,
+    "ska_layerscale_init": 0.2452382897668451,
+    "norm_clip_multiplier": 0.75,
+    "gamma_value": 1.0,
+    "ska_power_K": 1,
+    "beta_policy": "linear",
+    "learning_rate": 0.005405825902014229,
+    "weight_decay": 0.15,
+    "warmup_ratio": 0.04,
+    "grad_clip": 1.0
+  },
+  "run_id": "ef35825a",
+  "run_dir": "/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.ac93611a/seed42.ef35825a",
+  "anchor": null
+}

@@ -1,0 +1,27 @@
+{
+  "study_name": "10m-joint-v1",
+  "trial_number": 163,
+  "objective": 3.4387412667274475,
+  "params": {
+    "mamba_expand": 3,
+    "depth_tier": "full",
+    "d_state": 24,
+    "ska_n_heads": 2,
+    "ska_rank": 48,
+    "n_ska_layers": 6,
+    "placement": "late",
+    "ska_ridge": 0.011643024025774992,
+    "ska_layerscale_init": 0.06116430016249354,
+    "norm_clip_multiplier": 1.0,
+    "gamma_value": 1.0,
+    "ska_power_K": 1,
+    "beta_policy": "learned",
+    "learning_rate": 0.007521800188783544,
+    "weight_decay": 0.1,
+    "warmup_ratio": 0.06,
+    "grad_clip": 1.0
+  },
+  "run_id": "8f27c0e6",
+  "run_dir": "/scratch/m000151-pm06/cqiu/study-10m-joint-v1/10m-joint-v1.a593ea61/seed42.8f27c0e6",
+  "anchor": null
+}

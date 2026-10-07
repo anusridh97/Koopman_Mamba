@@ -1,0 +1,978 @@
+{
+  "study_name": "3m-joint-v1",
+  "counts": {
+    "COMPLETE": 1041,
+    "FAIL": 156,
+    "PRUNED": 810,
+    "RUNNING": 8,
+    "total": 2015
+  },
+  "failures": {
+    "no objective could be read": 102,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.d99c26a1/seed42.2ff44b5a/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.5c586950'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.7f6e58fb/seed42.180411df'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.7d564579/seed42.70ff6a95'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.7847fcef'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.8a051429'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.62795fbe/seed42.772eb8f2/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.14af183d/seed42.bd843fdc'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.84ad2843/seed42.797c9551'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.4cb436c5/seed42.f0d02a17'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.2ba5bb2b'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.137370fe/seed42.58806062/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.95d28e9c/seed42.df98aeca/attempts.jsonl'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.107338f1/seed42.abe84950'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.cca2feb7/seed42.cea47038'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.34faf85e/seed42.b5488f5d/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.ef219d67/seed42.da5ceef2/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.30bad4be/seed42.b014a8ad/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.8950010d'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.f33ce379/seed42.c9f37dfa/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.4bfdd174'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.f864c272/seed42.1f666137/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.253fcdeb/seed42.054d3de2/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.0b8e1dbb'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.dd5757c9/seed42.e14de54a'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.1825a876/seed42.f4ea0e77'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.6d115445/seed42.f798d115/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.d19f31c6/seed42.b4e83fe1'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.83bd0343/seed42.805778c1'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.765bb0a2'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.8cb320e1/seed42.111e07b9/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.c2cef26b/seed42.001b007c'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.0dc465d3/seed42.9582da6c/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.6419293c/seed42.371df1ba'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.f71f7a1c/seed42.620c8975'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.212c64af/seed42.3addcf82'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.562a2f20'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.bb76a68e'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.2ae78081/seed42.3d147435/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.a600b4db/seed42.f19b98b5'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.44877537/seed42.a74f3c5e/train.log'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.754aeb7c/seed42.e1b4593c'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.5ac8fbaf/seed42.231aaa0f/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.c57be6bd/seed42.923dfc2a'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.4630c6f4'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.e9ae3954/seed42.82dc779b'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.f718d3e2/seed42.cdc51c5b/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.4650026b/seed42.a9ad883b/.running'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.01f0ee02/seed42.afbc16c0'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.bf997d98'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.c3c67c2e/seed42.b11e6f1a'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.46ad2836/seed42.5dea449c/train.log'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.a3751126'": 1,
+    "OSError: [Errno 122] Disk quota exceeded: '/scratch/m000151-pm06/cqiu/study-3m-joint-v1/3m-joint-v1.d353d8a1'": 1
+  },
+  "n_anchors": 0,
+  "n_completed": 1041,
+  "noise_floor": {
+    "available": false,
+    "reason": "no COMPLETED trial carries a `reference_group` attr, so this study measured no replicates and has no noise floor. Every effect below is therefore reported WITHOUT a scale: a difference of 1e-4 and a difference of 1e-1 are presented identically and neither can be called resolvable. Add a `reference_group` of 3-5 designs differing only in `seed` to the study's design file.",
+    "groups": [],
+    "sigma": null,
+    "dof": 0,
+    "sd_of_difference": null,
+    "min_resolvable_effect": null,
+    "criterion": "An effect is called RESOLVED when its magnitude exceeds 2 x sigma x sqrt(2), where sigma is the within-group standard deviation of the reference replicates. The sqrt(2) is there because almost every effect below is a DIFFERENCE of two single-trial measurements, and the difference of two independent draws of sd sigma has sd sigma*sqrt(2) -- comparing a difference against a bare sigma would over-resolve by 41%. This is a CONVENTION and not a p-value: n=5 replicates estimate sigma to about +/-35%, the 14 reported tables are 14 chances for noise to clear any fixed bar, and nothing here corrects for either. Read 'resolved' as 'larger than this study can explain by seed alone', never as 'significant'."
+  },
+  "importances": {
+    "available": true,
+    "evaluator": "PedAnovaImportanceEvaluator(evaluate_on_local=True)",
+    "values": {
+      "learning_rate": 0.5888017181291244,
+      "ska_layerscale_init": 0.15500162686963057,
+      "n_ska_layers": 0.052944465071934795,
+      "ska_ridge": 0.039814086795422435,
+      "depth_tier": 0.03203658557883927,
+      "placement": 0.02343961576035123,
+      "warmup_ratio": 0.021587064465423307,
+      "d_state": 0.01794884111893699,
+      "ska_n_heads": 0.013351276172674781,
+      "ska_rank": 0.012817973955143527,
+      "weight_decay": 0.012579012662329343,
+      "norm_clip_multiplier": 0.008286871186219994,
+      "mamba_expand": 0.0067199423144668185,
+      "beta_policy": 0.006030329380827612,
+      "gamma_value": 0.0046233626489654124,
+      "grad_clip": 0.003042489708981956,
+      "ska_power_K": 0.0009747381807274483
+    },
+    "values_global": {
+      "learning_rate": 0.6861435408226924,
+      "ska_layerscale_init": 0.05369030513140919,
+      "warmup_ratio": 0.04407739665722577,
+      "ska_rank": 0.036917503638575384,
+      "beta_policy": 0.02916829715574566,
+      "weight_decay": 0.024078880833846458,
+      "depth_tier": 0.02199496846437636,
+      "mamba_expand": 0.021992724308834626,
+      "ska_power_K": 0.017181815866277067,
+      "n_ska_layers": 0.013856102028759117,
+      "ska_ridge": 0.012216252739989948,
+      "ska_n_heads": 0.009394900128779252,
+      "d_state": 0.008425203289765372,
+      "placement": 0.007962935582040928,
+      "grad_clip": 0.007291261355041195,
+      "gamma_value": 0.004555483086044883,
+      "norm_clip_multiplier": 0.0010524289105964034
+    },
+    "global_reason": "",
+    "interpretation": "WHAT THIS MEASURES. PED-ANOVA scores each axis by the DIVERGENCE between its distribution among the study's top-quantile trials and its distribution in a reference set. Two reference sets are reported and they answer different questions:\n  * `local` (optuna's default, `evaluate_on_local=True`) compares against the study's OWN remaining trials. Because the sampler was adaptive, that empirical distribution is largely a description of the search path -- so a high local score can mean 'this axis separates good from bad' or 'the sampler moved this axis a lot late on', and the number cannot tell them apart. On this repo's own analysis test fixture a NULL axis outranked a planted main effect under this setting.\n  * `global` (`evaluate_on_local=False`) compares against the DECLARED prior instead, so it is not a function of where the sampler went -- at the cost of being a comparison against a region the study may barely have sampled.\n\nNeither is proof about the model. Treat a large gap between the two columns as a warning that the axis's score is search-path dependent. For claims about the MODEL, read the controlled anchor contrasts first (one factor moved from one reference point, with the noise floor beside it) and the partial-dependence table second. An axis with a low score here may be unimportant, or may simply have been pinned near one value by the sampler after the startup window; its spread in trials.csv is what distinguishes those."
+  },
+  "prespecified_pairs": [
+    [
+      "ska_rank",
+      "ska_ridge"
+    ],
+    [
+      "ska_rank",
+      "norm_clip_multiplier"
+    ],
+    [
+      "ska_rank",
+      "ska_power_K"
+    ],
+    [
+      "n_ska_layers",
+      "ska_layerscale_init"
+    ],
+    [
+      "n_ska_layers",
+      "placement"
+    ],
+    [
+      "ska_ridge",
+      "ska_power_K"
+    ],
+    [
+      "ska_layerscale_init",
+      "learning_rate"
+    ],
+    [
+      "ska_rank",
+      "n_ska_layers"
+    ],
+    [
+      "ska_power_K",
+      "gamma_value"
+    ],
+    [
+      "ska_ridge",
+      "ska_layerscale_init"
+    ],
+    [
+      "gamma_value",
+      "norm_clip_multiplier"
+    ],
+    [
+      "learning_rate",
+      "ska_rank"
+    ],
+    [
+      "learning_rate",
+      "n_ska_layers"
+    ],
+    [
+      "learning_rate",
+      "ska_power_K"
+    ]
+  ],
+  "multiplicity": "14 of 36 possible pairs are reported. All 14 were named before any trial of this study ran -- 7 when this module was written and 7 when the study was commissioned -- so none was chosen after looking at the data. That is the protection prespecification buys and it is the only one: with 14 tables, an uncorrected 'largest observed interaction' is still the largest of 14 draws. Every magnitude below is therefore reported against the measured noise floor rather than against zero.",
+  "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant.",
+  "shortlist": [
+    {
+      "slot": "best_loss",
+      "rationale": "Lowest held-out loss. The obvious candidate and the most likely to be luck: it is the minimum of ~230 draws, so it carries the largest selection bias of any row here. Confirm it, do not believe it.",
+      "note": "",
+      "lead_over_reference": null,
+      "resolved_vs_reference": null,
+      "trial": 1794,
+      "objective": 4.151790618896484,
+      "param_count": 3080356,
+      "tokens_per_sec": 216138.40491662,
+      "peak_memory_gib": 4.494752883911133,
+      "ska_delta": 0.20982342958450317,
+      "anchor": "",
+      "run_id": "ef35825a",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        3,
+        4,
+        6,
+        7,
+        8,
+        9
+      ],
+      "param_mamba_expand": 3,
+      "param_depth_tier": "full",
+      "param_d_state": 32,
+      "param_ska_n_heads": 4,
+      "param_ska_rank": 32,
+      "param_n_ska_layers": 6,
+      "param_placement": "late",
+      "param_ska_ridge": 0.022846843162214723,
+      "param_ska_layerscale_init": 0.2452382897668451,
+      "param_norm_clip_multiplier": 0.75,
+      "param_gamma_value": 1.0,
+      "param_ska_power_K": 1,
+      "param_beta_policy": "linear",
+      "param_learning_rate": 0.005405825902014229,
+      "param_weight_decay": 0.15,
+      "param_warmup_ratio": 0.04,
+      "param_grad_clip": 1.0
+    },
+    {
+      "slot": "best_cost_adjusted",
+      "rationale": "Best loss among trials on the loss/throughput Pareto front, i.e. the best config that is not also the slowest. Kept separate from best_loss because the objective is pure loss on purpose -- a `throughput_penalty` would bake one exchange rate into every later proposal, unrecoverably.",
+      "note": "",
+      "lead_over_reference": null,
+      "resolved_vs_reference": null,
+      "trial": 1794,
+      "objective": 4.151790618896484,
+      "param_count": 3080356,
+      "tokens_per_sec": 216138.40491662,
+      "peak_memory_gib": 4.494752883911133,
+      "ska_delta": 0.20982342958450317,
+      "anchor": "",
+      "run_id": "ef35825a",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        3,
+        4,
+        6,
+        7,
+        8,
+        9
+      ],
+      "param_mamba_expand": 3,
+      "param_depth_tier": "full",
+      "param_d_state": 32,
+      "param_ska_n_heads": 4,
+      "param_ska_rank": 32,
+      "param_n_ska_layers": 6,
+      "param_placement": "late",
+      "param_ska_ridge": 0.022846843162214723,
+      "param_ska_layerscale_init": 0.2452382897668451,
+      "param_norm_clip_multiplier": 0.75,
+      "param_gamma_value": 1.0,
+      "param_ska_power_K": 1,
+      "param_beta_policy": "linear",
+      "param_learning_rate": 0.005405825902014229,
+      "param_weight_decay": 0.15,
+      "param_warmup_ratio": 0.04,
+      "param_grad_clip": 1.0
+    },
+    {
+      "slot": "best_k1",
+      "rationale": "Best config at ska_power_K=1. K is the axis most likely to change the SIGN of another axis's effect, so a confirmation study needs the best candidate at EACH K rather than whichever K happened to win here.",
+      "note": "",
+      "lead_over_reference": null,
+      "resolved_vs_reference": null,
+      "trial": 1794,
+      "objective": 4.151790618896484,
+      "param_count": 3080356,
+      "tokens_per_sec": 216138.40491662,
+      "peak_memory_gib": 4.494752883911133,
+      "ska_delta": 0.20982342958450317,
+      "anchor": "",
+      "run_id": "ef35825a",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        3,
+        4,
+        6,
+        7,
+        8,
+        9
+      ],
+      "param_mamba_expand": 3,
+      "param_depth_tier": "full",
+      "param_d_state": 32,
+      "param_ska_n_heads": 4,
+      "param_ska_rank": 32,
+      "param_n_ska_layers": 6,
+      "param_placement": "late",
+      "param_ska_ridge": 0.022846843162214723,
+      "param_ska_layerscale_init": 0.2452382897668451,
+      "param_norm_clip_multiplier": 0.75,
+      "param_gamma_value": 1.0,
+      "param_ska_power_K": 1,
+      "param_beta_policy": "linear",
+      "param_learning_rate": 0.005405825902014229,
+      "param_weight_decay": 0.15,
+      "param_warmup_ratio": 0.04,
+      "param_grad_clip": 1.0
+    },
+    {
+      "slot": "best_k2",
+      "rationale": "Best config at ska_power_K=2, for the same reason.",
+      "note": "",
+      "lead_over_reference": null,
+      "resolved_vs_reference": null,
+      "trial": 542,
+      "objective": 4.223864018917084,
+      "param_count": 3030428,
+      "tokens_per_sec": 284212.78099829535,
+      "peak_memory_gib": 4.495034217834473,
+      "ska_delta": 0.045810580253601074,
+      "anchor": "",
+      "run_id": "ba55abb1",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        3,
+        5,
+        7,
+        9
+      ],
+      "param_mamba_expand": 3,
+      "param_depth_tier": "full",
+      "param_d_state": 32,
+      "param_ska_n_heads": 4,
+      "param_ska_rank": 32,
+      "param_n_ska_layers": 4,
+      "param_placement": "midlate",
+      "param_ska_ridge": 0.009952213568533173,
+      "param_ska_layerscale_init": 0.08745247840245517,
+      "param_norm_clip_multiplier": 1.25,
+      "param_gamma_value": 1.05,
+      "param_ska_power_K": 2,
+      "param_beta_policy": "linear",
+      "param_learning_rate": 0.005379267683236859,
+      "param_weight_decay": 0.15,
+      "param_warmup_ratio": 0.06,
+      "param_grad_clip": 1.0
+    },
+    {
+      "slot": "best_low_capacity",
+      "rationale": "Best config in the bottom half of the parameter range. If it is within the noise floor of the best overall, the capacity axis did not earn its parameters and the confirmation study should be cheaper.",
+      "note": "",
+      "lead_over_reference": null,
+      "resolved_vs_reference": null,
+      "trial": 849,
+      "objective": 4.167736828327179,
+      "param_count": 2956208,
+      "tokens_per_sec": 393011.73116923595,
+      "peak_memory_gib": 4.493357181549072,
+      "ska_delta": 0.18420428037643433,
+      "anchor": "",
+      "run_id": "18fdce60",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        3,
+        5,
+        7,
+        9
+      ],
+      "param_mamba_expand": 3,
+      "param_depth_tier": "full",
+      "param_d_state": 16,
+      "param_ska_n_heads": 1,
+      "param_ska_rank": 32,
+      "param_n_ska_layers": 4,
+      "param_placement": "midlate",
+      "param_ska_ridge": 0.011870128868475773,
+      "param_ska_layerscale_init": 0.27784766410327355,
+      "param_norm_clip_multiplier": 0.75,
+      "param_gamma_value": 0.9,
+      "param_ska_power_K": 1,
+      "param_beta_policy": "linear",
+      "param_learning_rate": 0.005479359724633474,
+      "param_weight_decay": 0.15,
+      "param_warmup_ratio": 0.06,
+      "param_grad_clip": 1.0,
+      "capacity_cutoff": 2981274.0
+    },
+    {
+      "slot": "interaction_probe",
+      "rationale": "A config chosen to TEST the largest resolved interaction rather than to win: it sits at the corner that interaction predicts is good, which is the only way a confirmation run can falsify it. If the interaction is an artefact of adaptive sampling, this is the row that says so.",
+      "trial": null,
+      "note": "no prespecified interaction is resolvable against the noise floor, so there is nothing to probe. That is itself the study's answer to its own question: at 600 steps on this proxy, no pair of these axes interacts by more than one configuration varies against its own seed."
+    }
+  ],
+  "cannot_establish": [
+    "**Which configuration is best.** 600 steps at 25.35M parameters is a SCREEN. Rankings at 600 steps and at convergence differ systematically, not randomly: a config that warms up fast is rewarded here whether or not it ends better, which is why `prune_after_step` is 450 of 600 rather than something cheaper. The output is a shortlist for confirmation and there is no defensible single winner in it.",
+    "**That anything here transfers to 50m.** The proxy keeps 50m's depth (17) and SKA placement ([3,7,11,15]) and narrows d_model from 384 to 256, so every effect measured here is measured at 2/3 the width. Effects that interact with width -- which includes the norm-clip multiplier and the layerscale, both of which act on per-head quantities -- can change sign between the two. `d_state` is 48 here against 50m's 64, which is a SECOND unresolved difference and is flagged as an open question rather than quietly treated as immaterial.",
+    "**How much SKA earns its place, beyond that it does.** This one is PARTLY settled and the correction is worth recording. An earlier 4m-geometry smoke study measured an ablation delta of 1.17e-4 and raised the worry that this study might be measuring SKA's hyperparameters without establishing that the branch does anything. Job 445689 settles the sign: on THIS base at 600 steps the delta is 1.17e-2 to 7.48e-2 depending on the layerscale, a hundred times larger, and positive throughout -- removing SKA makes the model worse. The 4m number was a scale artefact. What remains unestablished is the MAGNITUDE at any scale that matters: 25.35M parameters and 600 steps is not 50m and it is not convergence, and an ablation delta measured on a model that has barely left its warmup transient is not the delta at convergence. Compare the ska_delta column to the noise floor directly, and do not read its size as a claim about a trained model.",
+    "**Any effect smaller than the measured noise floor.** Not 'probably not real' -- unmeasurable by this study, at any trial count, because it is inside what one configuration does to itself when the seed changes. More trials narrow the sampler's search, not this.",
+    "**Non-determinism, or seed sensitivity at other configurations.** The base spec sets `deterministic: true` and the replicates are all at ONE configuration. So the floor is a deterministic-mode floor at the reference point; a non-deterministic run spreads more, and a badly-conditioned corner of the space (rank 8 with a light ridge, say) plausibly spreads more still. Applying one floor to the whole space is an assumption, and it is the optimistic one.",
+    "**Statistical significance of anything.** Fourteen prespecified pairwise tables, nine axes, one seed per sampled trial, and cell counts that are uneven BY CONSTRUCTION because the sampler was adaptive. 'Resolved' here means 'larger than seed noise', with no multiplicity correction and no model of the sampling process. It is a filter for what to confirm, not a test.",
+    "**Interactions among the fixed axes, or between them and anything.** `weight_decay`, `warmup_ratio` and `grad_clip` are singletons in this study, so their columns are constant and every table over them is degenerate by design, not by accident."
+  ],
+  "throughput_notes": {
+    "n_completed": 1041,
+    "n_with_throughput": 1041,
+    "n_missing_throughput": 0,
+    "n_excluded_warmup": 9,
+    "excluded_warmup_trials": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      1593
+    ],
+    "reason": "A worker process's FIRST trial (`attr_worker_trial_ordinal == 0`) is excluded from the throughput front. Measured, job 445689: four trials on the proxy base at 600 steps reported 17,818 / 111,416 / 104,760 / 112,685 tok/s, and the 6x outlier was trial 0. Those four configs differ only in `ska_layerscale_init` -- one scalar multiply on a gate -- so nothing architectural can produce a 6x throughput gap. It is first-trial CUDA context creation and kernel autotuning, and `tokens_per_sec` is measured during the eval pass, early enough in the process's life to still be inside that. At `concurrent_trials: 8` this is EIGHT poisoned points, not one, because every worker process pays its own warmup. The trials are NOT dropped from anything else -- their loss is a real measurement and only their throughput is suspect -- and `throughput_pareto(exclude_warmup=False)` returns them for anyone who wants to check the claim or who is on hardware where it does not hold. A journal written before this column existed has no ordinals and nothing is excluded, rather than everything."
+  },
+  "sampler_correlations": {
+    "is_evidence": false,
+    "interpretation": "SAMPLER DIAGNOSTIC, NOT EVIDENCE. These are correlations between sampled columns. The sampler was adaptive, so it concentrated its later proposals in a region it believed was good, and any correlation here is primarily a description of that search path. It is not a finding about the model and must not be reported as one. Its legitimate use is to qualify the importance table: an axis the sampler pinned near one value will show low importance whether or not it matters.",
+    "constant_columns": [],
+    "excluded_columns": [
+      "beta_policy",
+      "depth_tier",
+      "placement"
+    ],
+    "pairs": [
+      {
+        "a": "learning_rate",
+        "b": "ska_rank",
+        "r": 0.4388528983325854,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "ska_power_K",
+        "r": -0.37524948042555145,
+        "n": 1041
+      },
+      {
+        "a": "ska_power_K",
+        "b": "ska_rank",
+        "r": -0.3478935553588684,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "mamba_expand",
+        "r": 0.3029714945006815,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "ska_power_K",
+        "r": -0.3008585406674111,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "warmup_ratio",
+        "r": 0.2890950522237276,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "ska_rank",
+        "r": 0.28764730560217,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "weight_decay",
+        "r": 0.23027322194950983,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "mamba_expand",
+        "r": 0.23001008637814746,
+        "n": 1041
+      },
+      {
+        "a": "ska_rank",
+        "b": "warmup_ratio",
+        "r": 0.22599555924416279,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "ska_rank",
+        "r": 0.21871947944051942,
+        "n": 1041
+      },
+      {
+        "a": "ska_power_K",
+        "b": "warmup_ratio",
+        "r": -0.20283098075820385,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "learning_rate",
+        "r": 0.1940786913824481,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "norm_clip_multiplier",
+        "r": 0.1889430825155176,
+        "n": 1041
+      },
+      {
+        "a": "ska_rank",
+        "b": "weight_decay",
+        "r": 0.18616274610214995,
+        "n": 1041
+      },
+      {
+        "a": "ska_power_K",
+        "b": "weight_decay",
+        "r": -0.16533996186779712,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "learning_rate",
+        "r": 0.1627672571850277,
+        "n": 1041
+      },
+      {
+        "a": "warmup_ratio",
+        "b": "weight_decay",
+        "r": 0.16098026012531233,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "weight_decay",
+        "r": 0.15906548783139765,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "ska_rank",
+        "r": 0.15507405188154025,
+        "n": 1041
+      },
+      {
+        "a": "ska_layerscale_init",
+        "b": "ska_rank",
+        "r": 0.14744522202587876,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "n_ska_layers",
+        "r": 0.14333263444592387,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "ska_ridge",
+        "r": -0.14223601322935522,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "ska_ridge",
+        "r": -0.1410972878750125,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "weight_decay",
+        "r": 0.13903670786886682,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "ska_rank",
+        "r": 0.13763914097439928,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "ska_n_heads",
+        "r": -0.1351553691068909,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "warmup_ratio",
+        "r": 0.13345294806474584,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "ska_layerscale_init",
+        "r": 0.13332207122430967,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "ska_n_heads",
+        "r": -0.13095886908941393,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "ska_layerscale_init",
+        "r": 0.12991211270600167,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "warmup_ratio",
+        "r": 0.1263347127126249,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "ska_layerscale_init",
+        "r": 0.12241816959894587,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "n_ska_layers",
+        "r": 0.11937086295416992,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "ska_layerscale_init",
+        "r": 0.11299816004989272,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "grad_clip",
+        "r": 0.11228574481340418,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "learning_rate",
+        "r": -0.11220594852426632,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "ska_power_K",
+        "r": -0.10992323123063863,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "ska_power_K",
+        "r": -0.10751374174144256,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "norm_clip_multiplier",
+        "r": 0.10538296971356133,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "ska_ridge",
+        "r": -0.1000081257622345,
+        "n": 1041
+      },
+      {
+        "a": "ska_n_heads",
+        "b": "ska_power_K",
+        "r": 0.09890030842379327,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "mamba_expand",
+        "r": 0.09529815322576587,
+        "n": 1041
+      },
+      {
+        "a": "ska_rank",
+        "b": "ska_ridge",
+        "r": 0.09186670471017927,
+        "n": 1041
+      },
+      {
+        "a": "norm_clip_multiplier",
+        "b": "ska_layerscale_init",
+        "r": -0.09155391092234472,
+        "n": 1041
+      },
+      {
+        "a": "norm_clip_multiplier",
+        "b": "weight_decay",
+        "r": 0.08866979776558373,
+        "n": 1041
+      },
+      {
+        "a": "ska_n_heads",
+        "b": "ska_rank",
+        "r": -0.0885269383994695,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "warmup_ratio",
+        "r": 0.08819770905799246,
+        "n": 1041
+      },
+      {
+        "a": "ska_layerscale_init",
+        "b": "ska_power_K",
+        "r": -0.08253157201755441,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "ska_power_K",
+        "r": -0.07991828060199443,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "n_ska_layers",
+        "r": 0.07892958811990038,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "grad_clip",
+        "r": 0.07826427056454137,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "ska_power_K",
+        "r": 0.07769413892882998,
+        "n": 1041
+      },
+      {
+        "a": "ska_layerscale_init",
+        "b": "ska_ridge",
+        "r": 0.07016813635201674,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "weight_decay",
+        "r": 0.06870296991339236,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "ska_layerscale_init",
+        "r": 0.0674812113685766,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "ska_n_heads",
+        "r": -0.06516254820649138,
+        "n": 1041
+      },
+      {
+        "a": "norm_clip_multiplier",
+        "b": "ska_rank",
+        "r": -0.06465901474221498,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "n_ska_layers",
+        "r": -0.06340001971246266,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "warmup_ratio",
+        "r": -0.06197181088771077,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "ska_ridge",
+        "r": 0.06186282533431992,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "norm_clip_multiplier",
+        "r": 0.06153976218908435,
+        "n": 1041
+      },
+      {
+        "a": "ska_n_heads",
+        "b": "warmup_ratio",
+        "r": -0.05857906517808688,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "ska_ridge",
+        "r": 0.0572549139268877,
+        "n": 1041
+      },
+      {
+        "a": "ska_layerscale_init",
+        "b": "warmup_ratio",
+        "r": 0.05643137581599386,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "warmup_ratio",
+        "r": 0.04792608481668328,
+        "n": 1041
+      },
+      {
+        "a": "norm_clip_multiplier",
+        "b": "ska_n_heads",
+        "r": -0.04743974444379456,
+        "n": 1041
+      },
+      {
+        "a": "grad_clip",
+        "b": "ska_n_heads",
+        "r": 0.03249658873229099,
+        "n": 1041
+      },
+      {
+        "a": "learning_rate",
+        "b": "norm_clip_multiplier",
+        "r": 0.03162274508768647,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "ska_n_heads",
+        "r": 0.031132683409464245,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "n_ska_layers",
+        "r": 0.029527455723891826,
+        "n": 1041
+      },
+      {
+        "a": "norm_clip_multiplier",
+        "b": "ska_ridge",
+        "r": -0.027565205076788654,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "weight_decay",
+        "r": -0.026793960743167436,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "ska_ridge",
+        "r": 0.026662277352389876,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "norm_clip_multiplier",
+        "r": -0.024514960225222586,
+        "n": 1041
+      },
+      {
+        "a": "norm_clip_multiplier",
+        "b": "warmup_ratio",
+        "r": 0.023934037698604697,
+        "n": 1041
+      },
+      {
+        "a": "ska_layerscale_init",
+        "b": "weight_decay",
+        "r": -0.022544345572611414,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "weight_decay",
+        "r": 0.019224806204997884,
+        "n": 1041
+      },
+      {
+        "a": "ska_n_heads",
+        "b": "weight_decay",
+        "r": -0.018998371437255523,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "ska_rank",
+        "r": 0.015291700384884815,
+        "n": 1041
+      },
+      {
+        "a": "ska_ridge",
+        "b": "warmup_ratio",
+        "r": 0.013631709312310154,
+        "n": 1041
+      },
+      {
+        "a": "norm_clip_multiplier",
+        "b": "ska_power_K",
+        "r": -0.01308000936676519,
+        "n": 1041
+      },
+      {
+        "a": "ska_power_K",
+        "b": "ska_ridge",
+        "r": -0.012051475911394952,
+        "n": 1041
+      },
+      {
+        "a": "d_state",
+        "b": "gamma_value",
+        "r": 0.011997835868655157,
+        "n": 1041
+      },
+      {
+        "a": "ska_n_heads",
+        "b": "ska_ridge",
+        "r": -0.010982424367451392,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "ska_layerscale_init",
+        "r": 0.00670269017916737,
+        "n": 1041
+      },
+      {
+        "a": "ska_layerscale_init",
+        "b": "ska_n_heads",
+        "r": 0.006476870181054428,
+        "n": 1041
+      },
+      {
+        "a": "mamba_expand",
+        "b": "ska_n_heads",
+        "r": -0.003549756536685895,
+        "n": 1041
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "norm_clip_multiplier",
+        "r": -0.0005997157991030945,
+        "n": 1041
+      },
+      {
+        "a": "ska_ridge",
+        "b": "weight_decay",
+        "r": -0.00036107407035901063,
+        "n": 1041
+      },
+      {
+        "a": "gamma_value",
+        "b": "mamba_expand",
+        "r": 0.00033201482754800055,
+        "n": 1041
+      }
+    ]
+  }
+}

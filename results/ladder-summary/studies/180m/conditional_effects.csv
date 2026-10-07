@@ -1,0 +1,15 @@
+left,right,interaction_magnitude,signed_magnitude,sign_change,sigmas,resolved,degenerate,thin_levels,conditionals
+ska_rank,ska_ridge,,,False,,,True,[],0.01=0.007170498371124268/0.001300424337387085 (n=14)
+ska_rank,norm_clip_multiplier,,,False,,,True,[],1.0=0.007170498371124268/0.001300424337387085 (n=14)
+ska_rank,ska_power_K,,,False,,,True,[],1=0.007170498371124268/0.001300424337387085 (n=14)
+n_ska_layers,ska_layerscale_init,,,False,,,True,[],0.01=0.004407903322806828/-0.004407903322806828 (n=14)
+n_ska_layers,placement,,,False,,,True,[],late=0.004407903322806828/-0.004407903322806828 (n=14)
+ska_ridge,ska_power_K,,,False,,,True,['1'],1=None/None (n=14)
+ska_layerscale_init,learning_rate,,,False,,,True,"['[0.001208, 0.002604]', '[0.002604, 0.005609]', '[0.005609, 0.01208]']","[0.001208, 0.002604]=None/None (n=2); [0.002604, 0.005609]=None/None (n=10); [0.005609, 0.01208]=None/None (n=2)"
+ska_rank,n_ska_layers,,,False,,,False,['6'],4=0.007627273147756242/0.001300424337387085 (n=13); 6=None/None (n=1)
+ska_power_K,gamma_value,,,False,,,True,['1.0'],1.0=None/None (n=14)
+ska_ridge,ska_layerscale_init,,,False,,,True,['0.01'],0.01=None/None (n=14)
+gamma_value,norm_clip_multiplier,,,False,,,True,['1.0'],1.0=None/None (n=14)
+learning_rate,ska_rank,,,False,,,False,"['8', '48']",8=None/None (n=1); 24=0.01798616722226143/0.015719041228294373 (n=12); 48=None/None (n=1)
+learning_rate,n_ska_layers,,,False,,,False,['6'],4=0.018501778443654526/0.015719041228294373 (n=13); 6=None/None (n=1)
+learning_rate,ska_power_K,,,False,,,True,[],1=0.018615114688873113/0.015719041228294373 (n=14)

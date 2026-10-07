@@ -1,0 +1,411 @@
+{
+  "study_name": "180m-joint-v1",
+  "counts": {
+    "COMPLETE": 14,
+    "FAIL": 1,
+    "PRUNED": 13,
+    "RUNNING": 11,
+    "total": 39
+  },
+  "failures": {
+    "(no reason recorded)": 1
+  },
+  "n_anchors": 15,
+  "n_completed": 14,
+  "noise_floor": {
+    "available": true,
+    "reason": "",
+    "groups": [
+      {
+        "group": "reference",
+        "n": 5,
+        "seeds": [
+          42,
+          43,
+          44,
+          45,
+          46
+        ],
+        "trials": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "objectives": [
+          2.4056785702705383,
+          2.4064566493034363,
+          2.4068333506584167,
+          2.407114654779434,
+          2.40950870513916
+        ],
+        "mean": 2.4071183860301972,
+        "sd": 0.001440993532721265,
+        "range": 0.003830134868621826
+      }
+    ],
+    "sigma": 0.001440993532721265,
+    "dof": 4,
+    "sd_of_difference": 0.0020378725972663315,
+    "min_resolvable_effect": 0.004075745194532663,
+    "criterion": "An effect is called RESOLVED when its magnitude exceeds 2 x sigma x sqrt(2), where sigma is the within-group standard deviation of the reference replicates. The sqrt(2) is there because almost every effect below is a DIFFERENCE of two single-trial measurements, and the difference of two independent draws of sd sigma has sd sigma*sqrt(2) -- comparing a difference against a bare sigma would over-resolve by 41%. This is a CONVENTION and not a p-value: n=5 replicates estimate sigma to about +/-35%, the 14 reported tables are 14 chances for noise to clear any fixed bar, and nothing here corrects for either. Read 'resolved' as 'larger than this study can explain by seed alone', never as 'significant'.",
+    "interpretation": "sigma = 0.00144099 is what ONE configuration's held-out loss does when only the training seed changes, pooled over 4 degree(s) of freedom. Two single trials therefore have to differ by more than 0.00407575 before the difference is anything but seed. Compare that number to the effect sizes this study is searching for BEFORE reading any ranking below: if the design effects are smaller, the ranking is a ranking of seeds and no sampler can repair it."
+  },
+  "importances": {
+    "available": true,
+    "evaluator": "PedAnovaImportanceEvaluator(evaluate_on_local=True)",
+    "values": {
+      "learning_rate": 0.8334862181047913,
+      "ska_layerscale_init": 0.06868808172936579,
+      "ska_ridge": 0.06844014142903847,
+      "ska_rank": 0.013686745115975141,
+      "warmup_ratio": 0.00312744811917631,
+      "weight_decay": 0.002988391945977061,
+      "n_ska_layers": 0.002988391945977061,
+      "depth_tier": 0.001456630245603431,
+      "ska_n_heads": 0.001332425132895126,
+      "mamba_expand": 0.001332425132895126,
+      "beta_policy": 0.001332425132895126,
+      "d_state": 0.0011406759654104892,
+      "ska_power_K": 0.0,
+      "placement": 0.0,
+      "norm_clip_multiplier": 0.0,
+      "grad_clip": 0.0,
+      "gamma_value": 0.0
+    },
+    "values_global": {
+      "ska_ridge": 0.4802997475545116,
+      "ska_layerscale_init": 0.47963764168693396,
+      "learning_rate": 0.007068656588500516,
+      "warmup_ratio": 0.004032104385876406,
+      "d_state": 0.004032104385876406,
+      "weight_decay": 0.0038708202104413498,
+      "ska_n_heads": 0.0038708202104413498,
+      "n_ska_layers": 0.0038708202104413498,
+      "mamba_expand": 0.0038708202104413498,
+      "beta_policy": 0.0038708202104413498,
+      "depth_tier": 0.0030240782894073036,
+      "ska_rank": 0.0025515660566874086,
+      "ska_power_K": 0.0,
+      "placement": 0.0,
+      "norm_clip_multiplier": 0.0,
+      "grad_clip": 0.0,
+      "gamma_value": 0.0
+    },
+    "global_reason": "",
+    "interpretation": "WHAT THIS MEASURES. PED-ANOVA scores each axis by the DIVERGENCE between its distribution among the study's top-quantile trials and its distribution in a reference set. Two reference sets are reported and they answer different questions:\n  * `local` (optuna's default, `evaluate_on_local=True`) compares against the study's OWN remaining trials. Because the sampler was adaptive, that empirical distribution is largely a description of the search path -- so a high local score can mean 'this axis separates good from bad' or 'the sampler moved this axis a lot late on', and the number cannot tell them apart. On this repo's own analysis test fixture a NULL axis outranked a planted main effect under this setting.\n  * `global` (`evaluate_on_local=False`) compares against the DECLARED prior instead, so it is not a function of where the sampler went -- at the cost of being a comparison against a region the study may barely have sampled.\n\nNeither is proof about the model. Treat a large gap between the two columns as a warning that the axis's score is search-path dependent. For claims about the MODEL, read the controlled anchor contrasts first (one factor moved from one reference point, with the noise floor beside it) and the partial-dependence table second. An axis with a low score here may be unimportant, or may simply have been pinned near one value by the sampler after the startup window; its spread in trials.csv is what distinguishes those."
+  },
+  "prespecified_pairs": [
+    [
+      "ska_rank",
+      "ska_ridge"
+    ],
+    [
+      "ska_rank",
+      "norm_clip_multiplier"
+    ],
+    [
+      "ska_rank",
+      "ska_power_K"
+    ],
+    [
+      "n_ska_layers",
+      "ska_layerscale_init"
+    ],
+    [
+      "n_ska_layers",
+      "placement"
+    ],
+    [
+      "ska_ridge",
+      "ska_power_K"
+    ],
+    [
+      "ska_layerscale_init",
+      "learning_rate"
+    ],
+    [
+      "ska_rank",
+      "n_ska_layers"
+    ],
+    [
+      "ska_power_K",
+      "gamma_value"
+    ],
+    [
+      "ska_ridge",
+      "ska_layerscale_init"
+    ],
+    [
+      "gamma_value",
+      "norm_clip_multiplier"
+    ],
+    [
+      "learning_rate",
+      "ska_rank"
+    ],
+    [
+      "learning_rate",
+      "n_ska_layers"
+    ],
+    [
+      "learning_rate",
+      "ska_power_K"
+    ]
+  ],
+  "multiplicity": "14 of 36 possible pairs are reported. All 14 were named before any trial of this study ran -- 7 when this module was written and 7 when the study was commissioned -- so none was chosen after looking at the data. That is the protection prespecification buys and it is the only one: with 14 tables, an uncorrected 'largest observed interaction' is still the largest of 14 draws. Every magnitude below is therefore reported against the measured noise floor rather than against zero.",
+  "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant.",
+  "shortlist": [
+    {
+      "slot": "best_loss",
+      "rationale": "Lowest held-out loss. The obvious candidate and the most likely to be luck: it is the minimum of ~230 draws, so it carries the largest selection bias of any row here. Confirm it, do not believe it.",
+      "note": "",
+      "lead_over_reference": 0.004933780431747525,
+      "resolved_vs_reference": true,
+      "trial": 6,
+      "objective": 2.4021846055984497,
+      "param_count": 182665776,
+      "tokens_per_sec": 60441.29582950124,
+      "peak_memory_gib": 4.996722221374512,
+      "ska_delta": 0.05394628643989563,
+      "anchor": "lr-0.55x",
+      "run_id": "0438a32c",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        9,
+        15,
+        20,
+        23
+      ],
+      "param_mamba_expand": 2,
+      "param_depth_tier": "full",
+      "param_d_state": 24,
+      "param_ska_n_heads": 4,
+      "param_ska_rank": 24,
+      "param_n_ska_layers": 4,
+      "param_placement": "late",
+      "param_ska_ridge": 0.01,
+      "param_ska_layerscale_init": 0.01,
+      "param_norm_clip_multiplier": 1.0,
+      "param_gamma_value": 1.0,
+      "param_ska_power_K": 1,
+      "param_beta_policy": "learned",
+      "param_learning_rate": 0.0025564000000000003,
+      "param_weight_decay": 0.1,
+      "param_warmup_ratio": 0.02,
+      "param_grad_clip": 1.0
+    },
+    {
+      "slot": "best_cost_adjusted",
+      "rationale": "Best loss among trials on the loss/throughput Pareto front, i.e. the best config that is not also the slowest. Kept separate from best_loss because the objective is pure loss on purpose -- a `throughput_penalty` would bake one exchange rate into every later proposal, unrecoverably.",
+      "trial": null,
+      "note": "no trial carries a throughput measurement, so this slot cannot be filled -- check that quick_eval wrote metrics.full.tokens_per_sec and that driver._stamp_measured_metrics ran"
+    },
+    {
+      "slot": "best_k1",
+      "rationale": "Best config at ska_power_K=1. K is the axis most likely to change the SIGN of another axis's effect, so a confirmation study needs the best candidate at EACH K rather than whichever K happened to win here.",
+      "note": "",
+      "lead_over_reference": 0.004933780431747525,
+      "resolved_vs_reference": true,
+      "trial": 6,
+      "objective": 2.4021846055984497,
+      "param_count": 182665776,
+      "tokens_per_sec": 60441.29582950124,
+      "peak_memory_gib": 4.996722221374512,
+      "ska_delta": 0.05394628643989563,
+      "anchor": "lr-0.55x",
+      "run_id": "0438a32c",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        9,
+        15,
+        20,
+        23
+      ],
+      "param_mamba_expand": 2,
+      "param_depth_tier": "full",
+      "param_d_state": 24,
+      "param_ska_n_heads": 4,
+      "param_ska_rank": 24,
+      "param_n_ska_layers": 4,
+      "param_placement": "late",
+      "param_ska_ridge": 0.01,
+      "param_ska_layerscale_init": 0.01,
+      "param_norm_clip_multiplier": 1.0,
+      "param_gamma_value": 1.0,
+      "param_ska_power_K": 1,
+      "param_beta_policy": "learned",
+      "param_learning_rate": 0.0025564000000000003,
+      "param_weight_decay": 0.1,
+      "param_warmup_ratio": 0.02,
+      "param_grad_clip": 1.0
+    },
+    {
+      "slot": "best_k2",
+      "rationale": "Best config at ska_power_K=2, for the same reason.",
+      "trial": null,
+      "note": "no completed trial ran at ska_power_K=2"
+    },
+    {
+      "slot": "best_low_capacity",
+      "rationale": "Best config in the bottom half of the parameter range. If it is within the noise floor of the best overall, the capacity axis did not earn its parameters and the confirmation study should be cheaper.",
+      "note": "",
+      "lead_over_reference": 0.004933780431747525,
+      "resolved_vs_reference": true,
+      "trial": 6,
+      "objective": 2.4021846055984497,
+      "param_count": 182665776,
+      "tokens_per_sec": 60441.29582950124,
+      "peak_memory_gib": 4.996722221374512,
+      "ska_delta": 0.05394628643989563,
+      "anchor": "lr-0.55x",
+      "run_id": "0438a32c",
+      "model_seed": 42,
+      "ska_layer_indices": [
+        9,
+        15,
+        20,
+        23
+      ],
+      "param_mamba_expand": 2,
+      "param_depth_tier": "full",
+      "param_d_state": 24,
+      "param_ska_n_heads": 4,
+      "param_ska_rank": 24,
+      "param_n_ska_layers": 4,
+      "param_placement": "late",
+      "param_ska_ridge": 0.01,
+      "param_ska_layerscale_init": 0.01,
+      "param_norm_clip_multiplier": 1.0,
+      "param_gamma_value": 1.0,
+      "param_ska_power_K": 1,
+      "param_beta_policy": "learned",
+      "param_learning_rate": 0.0025564000000000003,
+      "param_weight_decay": 0.1,
+      "param_warmup_ratio": 0.02,
+      "param_grad_clip": 1.0,
+      "capacity_cutoff": 183447860.0
+    },
+    {
+      "slot": "interaction_probe",
+      "rationale": "A config chosen to TEST the largest resolved interaction rather than to win: it sits at the corner that interaction predicts is good, which is the only way a confirmation run can falsify it. If the interaction is an artefact of adaptive sampling, this is the row that says so.",
+      "trial": null,
+      "note": "no prespecified interaction is resolvable against the noise floor, so there is nothing to probe. That is itself the study's answer to its own question: at 600 steps on this proxy, no pair of these axes interacts by more than one configuration varies against its own seed."
+    }
+  ],
+  "cannot_establish": [
+    "**Which configuration is best.** 600 steps at 25.35M parameters is a SCREEN. Rankings at 600 steps and at convergence differ systematically, not randomly: a config that warms up fast is rewarded here whether or not it ends better, which is why `prune_after_step` is 450 of 600 rather than something cheaper. The output is a shortlist for confirmation and there is no defensible single winner in it.",
+    "**That anything here transfers to 50m.** The proxy keeps 50m's depth (17) and SKA placement ([3,7,11,15]) and narrows d_model from 384 to 256, so every effect measured here is measured at 2/3 the width. Effects that interact with width -- which includes the norm-clip multiplier and the layerscale, both of which act on per-head quantities -- can change sign between the two. `d_state` is 48 here against 50m's 64, which is a SECOND unresolved difference and is flagged as an open question rather than quietly treated as immaterial.",
+    "**How much SKA earns its place, beyond that it does.** This one is PARTLY settled and the correction is worth recording. An earlier 4m-geometry smoke study measured an ablation delta of 1.17e-4 and raised the worry that this study might be measuring SKA's hyperparameters without establishing that the branch does anything. Job 445689 settles the sign: on THIS base at 600 steps the delta is 1.17e-2 to 7.48e-2 depending on the layerscale, a hundred times larger, and positive throughout -- removing SKA makes the model worse. The 4m number was a scale artefact. What remains unestablished is the MAGNITUDE at any scale that matters: 25.35M parameters and 600 steps is not 50m and it is not convergence, and an ablation delta measured on a model that has barely left its warmup transient is not the delta at convergence. Compare the ska_delta column to the noise floor directly, and do not read its size as a claim about a trained model.",
+    "**Any effect smaller than the measured noise floor.** Not 'probably not real' -- unmeasurable by this study, at any trial count, because it is inside what one configuration does to itself when the seed changes. More trials narrow the sampler's search, not this.",
+    "**Non-determinism, or seed sensitivity at other configurations.** The base spec sets `deterministic: true` and the replicates are all at ONE configuration. So the floor is a deterministic-mode floor at the reference point; a non-deterministic run spreads more, and a badly-conditioned corner of the space (rank 8 with a light ridge, say) plausibly spreads more still. Applying one floor to the whole space is an assumption, and it is the optimistic one.",
+    "**Statistical significance of anything.** Fourteen prespecified pairwise tables, nine axes, one seed per sampled trial, and cell counts that are uneven BY CONSTRUCTION because the sampler was adaptive. 'Resolved' here means 'larger than seed noise', with no multiplicity correction and no model of the sampling process. It is a filter for what to confirm, not a test.",
+    "**Interactions among the fixed axes, or between them and anything.** `weight_decay`, `warmup_ratio` and `grad_clip` are singletons in this study, so their columns are constant and every table over them is degenerate by design, not by accident."
+  ],
+  "throughput_notes": {
+    "n_completed": 14,
+    "n_with_throughput": 14,
+    "n_missing_throughput": 0,
+    "n_excluded_warmup": 14,
+    "excluded_warmup_trials": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reason": "A worker process's FIRST trial (`attr_worker_trial_ordinal == 0`) is excluded from the throughput front. Measured, job 445689: four trials on the proxy base at 600 steps reported 17,818 / 111,416 / 104,760 / 112,685 tok/s, and the 6x outlier was trial 0. Those four configs differ only in `ska_layerscale_init` -- one scalar multiply on a gate -- so nothing architectural can produce a 6x throughput gap. It is first-trial CUDA context creation and kernel autotuning, and `tokens_per_sec` is measured during the eval pass, early enough in the process's life to still be inside that. At `concurrent_trials: 8` this is EIGHT poisoned points, not one, because every worker process pays its own warmup. The trials are NOT dropped from anything else -- their loss is a real measurement and only their throughput is suspect -- and `throughput_pareto(exclude_warmup=False)` returns them for anyone who wants to check the claim or who is on hardware where it does not hold. A journal written before this column existed has no ordinals and nothing is excluded, rather than everything."
+  },
+  "sampler_correlations": {
+    "is_evidence": false,
+    "interpretation": "SAMPLER DIAGNOSTIC, NOT EVIDENCE. These are correlations between sampled columns. The sampler was adaptive, so it concentrated its later proposals in a region it believed was good, and any correlation here is primarily a description of that search path. It is not a finding about the model and must not be reported as one. Its legitimate use is to qualify the importance table: an axis the sampler pinned near one value will show low importance whether or not it matters.",
+    "constant_columns": [
+      "d_state",
+      "gamma_value",
+      "grad_clip",
+      "mamba_expand",
+      "norm_clip_multiplier",
+      "ska_layerscale_init",
+      "ska_n_heads",
+      "ska_power_K",
+      "ska_ridge"
+    ],
+    "excluded_columns": [
+      "beta_policy",
+      "depth_tier",
+      "placement"
+    ],
+    "pairs": [
+      {
+        "a": "n_ska_layers",
+        "b": "weight_decay",
+        "r": -0.07692307692307694,
+        "n": 14
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "warmup_ratio",
+        "r": -0.07692307692307691,
+        "n": 14
+      },
+      {
+        "a": "warmup_ratio",
+        "b": "weight_decay",
+        "r": -0.0769230769230769,
+        "n": 14
+      },
+      {
+        "a": "learning_rate",
+        "b": "n_ska_layers",
+        "r": -0.04270491571609831,
+        "n": 14
+      },
+      {
+        "a": "learning_rate",
+        "b": "weight_decay",
+        "r": -0.04270491571609831,
+        "n": 14
+      },
+      {
+        "a": "learning_rate",
+        "b": "warmup_ratio",
+        "r": -0.0427049157160983,
+        "n": 14
+      },
+      {
+        "a": "ska_rank",
+        "b": "warmup_ratio",
+        "r": -0.020615270438818365,
+        "n": 14
+      },
+      {
+        "a": "ska_rank",
+        "b": "weight_decay",
+        "r": -0.020615270438818365,
+        "n": 14
+      },
+      {
+        "a": "n_ska_layers",
+        "b": "ska_rank",
+        "r": -0.020615270438818355,
+        "n": 14
+      },
+      {
+        "a": "learning_rate",
+        "b": "ska_rank",
+        "r": -0.011444854025206048,
+        "n": 14
+      }
+    ]
+  }
+}

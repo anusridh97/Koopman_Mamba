@@ -1,0 +1,371 @@
+{
+  "mamba_expand__learning_rate": {
+    "left": "mamba_expand",
+    "right": "learning_rate",
+    "left_levels": [
+      {
+        "label": 2,
+        "value": 2
+      }
+    ],
+    "right_levels": [
+      {
+        "label": "[0.001208, 0.002604]",
+        "lo": 0.00120848,
+        "hi": 0.002603591234209732,
+        "scale": "log"
+      },
+      {
+        "label": "[0.002604, 0.005609]",
+        "lo": 0.002603591234209732,
+        "hi": 0.0056092672736443696,
+        "scale": "log"
+      },
+      {
+        "label": "[0.005609, 0.01208]",
+        "lo": 0.0056092672736443696,
+        "hi": 0.012084800000000001,
+        "scale": "log"
+      }
+    ],
+    "left_binned": false,
+    "right_binned": true,
+    "degenerate": true,
+    "note": "DEGENERATE: mamba_expand took fewer than two distinct values across the completed trials, so this table cannot show structure. A fixed axis produces this; so does an axis the sampler never varied.",
+    "rows": [
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 2,
+            "mean": 2.410864993929863,
+            "best": 2.4021846055984497
+          },
+          {
+            "n": 10,
+            "mean": 2.4079689204692842,
+            "best": 2.404802918434143
+          },
+          {
+            "n": 2,
+            "mean": 2.4265840351581573,
+            "best": 2.4175780713558197
+          }
+        ]
+      }
+    ],
+    "n_completed": 14,
+    "n_placed": 14,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "mamba_expand__ska_rank": {
+    "left": "mamba_expand",
+    "right": "ska_rank",
+    "left_levels": [
+      {
+        "label": 2,
+        "value": 2
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 8,
+        "value": 8
+      },
+      {
+        "label": 24,
+        "value": 24
+      },
+      {
+        "label": 48,
+        "value": 48
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": true,
+    "note": "DEGENERATE: mamba_expand took fewer than two distinct values across the completed trials, so this table cannot show structure. A fixed axis produces this; so does an axis the sampler never varied.",
+    "rows": [
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 1,
+            "mean": 2.404802918434143,
+            "best": 2.404802918434143
+          },
+          {
+            "n": 12,
+            "mean": 2.4119734168052673,
+            "best": 2.4021846055984497
+          },
+          {
+            "n": 1,
+            "mean": 2.40610334277153,
+            "best": 2.40610334277153
+          }
+        ]
+      }
+    ],
+    "n_completed": 14,
+    "n_placed": 14,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "mamba_expand__n_ska_layers": {
+    "left": "mamba_expand",
+    "right": "n_ska_layers",
+    "left_levels": [
+      {
+        "label": 2,
+        "value": 2
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 4,
+        "value": 4
+      },
+      {
+        "label": 6,
+        "value": 6
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": true,
+    "note": "DEGENERATE: mamba_expand took fewer than two distinct values across the completed trials, so this table cannot show structure. A fixed axis produces this; so does an axis the sampler never varied.",
+    "rows": [
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 13,
+            "mean": 2.4113567975851207,
+            "best": 2.4021846055984497
+          },
+          {
+            "n": 1,
+            "mean": 2.406948894262314,
+            "best": 2.406948894262314
+          }
+        ]
+      }
+    ],
+    "n_completed": 14,
+    "n_placed": 14,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "mamba_expand__d_state": {
+    "left": "mamba_expand",
+    "right": "d_state",
+    "left_levels": [
+      {
+        "label": 2,
+        "value": 2
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 24,
+        "value": 24
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": true,
+    "note": "DEGENERATE: mamba_expand, d_state took fewer than two distinct values across the completed trials, so this table cannot show structure. A fixed axis produces this; so does an axis the sampler never varied.",
+    "rows": [
+      {
+        "level": 2,
+        "cells": [
+          {
+            "n": 14,
+            "mean": 2.411041947347777,
+            "best": 2.4021846055984497
+          }
+        ]
+      }
+    ],
+    "n_completed": 14,
+    "n_placed": 14,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "depth_tier__learning_rate": {
+    "left": "depth_tier",
+    "right": "learning_rate",
+    "left_levels": [
+      {
+        "label": "full",
+        "value": "full"
+      }
+    ],
+    "right_levels": [
+      {
+        "label": "[0.001208, 0.002604]",
+        "lo": 0.00120848,
+        "hi": 0.002603591234209732,
+        "scale": "log"
+      },
+      {
+        "label": "[0.002604, 0.005609]",
+        "lo": 0.002603591234209732,
+        "hi": 0.0056092672736443696,
+        "scale": "log"
+      },
+      {
+        "label": "[0.005609, 0.01208]",
+        "lo": 0.0056092672736443696,
+        "hi": 0.012084800000000001,
+        "scale": "log"
+      }
+    ],
+    "left_binned": false,
+    "right_binned": true,
+    "degenerate": true,
+    "note": "DEGENERATE: depth_tier took fewer than two distinct values across the completed trials, so this table cannot show structure. A fixed axis produces this; so does an axis the sampler never varied.",
+    "rows": [
+      {
+        "level": "full",
+        "cells": [
+          {
+            "n": 2,
+            "mean": 2.410864993929863,
+            "best": 2.4021846055984497
+          },
+          {
+            "n": 10,
+            "mean": 2.4079689204692842,
+            "best": 2.404802918434143
+          },
+          {
+            "n": 2,
+            "mean": 2.4265840351581573,
+            "best": 2.4175780713558197
+          }
+        ]
+      }
+    ],
+    "n_completed": 14,
+    "n_placed": 14,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "ska_n_heads__ska_rank": {
+    "left": "ska_n_heads",
+    "right": "ska_rank",
+    "left_levels": [
+      {
+        "label": 4,
+        "value": 4
+      }
+    ],
+    "right_levels": [
+      {
+        "label": 8,
+        "value": 8
+      },
+      {
+        "label": 24,
+        "value": 24
+      },
+      {
+        "label": 48,
+        "value": 48
+      }
+    ],
+    "left_binned": false,
+    "right_binned": false,
+    "degenerate": true,
+    "note": "DEGENERATE: ska_n_heads took fewer than two distinct values across the completed trials, so this table cannot show structure. A fixed axis produces this; so does an axis the sampler never varied.",
+    "rows": [
+      {
+        "level": 4,
+        "cells": [
+          {
+            "n": 1,
+            "mean": 2.404802918434143,
+            "best": 2.404802918434143
+          },
+          {
+            "n": 12,
+            "mean": 2.4119734168052673,
+            "best": 2.4021846055984497
+          },
+          {
+            "n": 1,
+            "mean": 2.40610334277153,
+            "best": 2.40610334277153
+          }
+        ]
+      }
+    ],
+    "n_completed": 14,
+    "n_placed": 14,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  },
+  "d_state__learning_rate": {
+    "left": "d_state",
+    "right": "learning_rate",
+    "left_levels": [
+      {
+        "label": 24,
+        "value": 24
+      }
+    ],
+    "right_levels": [
+      {
+        "label": "[0.001208, 0.002604]",
+        "lo": 0.00120848,
+        "hi": 0.002603591234209732,
+        "scale": "log"
+      },
+      {
+        "label": "[0.002604, 0.005609]",
+        "lo": 0.002603591234209732,
+        "hi": 0.0056092672736443696,
+        "scale": "log"
+      },
+      {
+        "label": "[0.005609, 0.01208]",
+        "lo": 0.0056092672736443696,
+        "hi": 0.012084800000000001,
+        "scale": "log"
+      }
+    ],
+    "left_binned": false,
+    "right_binned": true,
+    "degenerate": true,
+    "note": "DEGENERATE: d_state took fewer than two distinct values across the completed trials, so this table cannot show structure. A fixed axis produces this; so does an axis the sampler never varied.",
+    "rows": [
+      {
+        "level": 24,
+        "cells": [
+          {
+            "n": 2,
+            "mean": 2.410864993929863,
+            "best": 2.4021846055984497
+          },
+          {
+            "n": 10,
+            "mean": 2.4079689204692842,
+            "best": 2.404802918434143
+          },
+          {
+            "n": 2,
+            "mean": 2.4265840351581573,
+            "best": 2.4175780713558197
+          }
+        ]
+      }
+    ],
+    "n_completed": 14,
+    "n_placed": 14,
+    "n_dropped": 0,
+    "caveat": "The sampler was ADAPTIVE. Later trials were proposed inside whatever region the sampler believed was good, so cell counts are uneven by construction and the sampled columns are correlated with each other for reasons that have nothing to do with the model. Read cell means WITH their n. These 14 pairs were PRESPECIFIED before any trial ran; nine axes admit 36 pairs, and choosing which to report after looking is how one of 36 comes out looking significant."
+  }
+}
